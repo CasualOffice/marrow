@@ -471,6 +471,7 @@ dependencies = [
  "marrow-core",
  "marrow-index",
  "marrow-ingest",
+ "marrow-mcp",
  "marrow-scan",
  "marrow-store",
  "serde",
@@ -517,6 +518,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "marrow-mcp"
+version = "0.1.0"
+dependencies = [
+ "marrow-core",
+ "marrow-index",
+ "marrow-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "marrow-parse"
 version = "0.1.0"
 dependencies = [
@@ -536,6 +550,18 @@ dependencies = [
  "tree-sitter-sequel",
  "tree-sitter-typescript",
  "yaml-rust2",
+]
+
+[[package]]
+name = "marrow-query"
+version = "0.1.0"
+dependencies = [
+ "marrow-core",
+ "marrow-index",
+ "marrow-store",
+ "serde",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

@@ -129,15 +129,18 @@ find ~ -flags dataless 2>/dev/null | wc -l
 
 **Exit:** you reach for it without thinking. **Keep to 1–2 weeks — cut tools, not time.**
 
-- [ ] MCP server over stdio, stateless
-- [ ] Tool: `search`
-- [ ] Tool: `read` (with `source_span` in results)
-- [ ] Tool: `stat`
-- [ ] Tool: `file_intelligence`
-- [ ] Tool: `list_workspaces`
-- [ ] Results carry provenance class and citation handles
-- [ ] Wire into Claude Code; use for one week
-- [ ] Note which tool you actually used most → informs M3
+- [x] MCP server over stdio, stateless — 28 tests
+- [x] Tool: `search` — filters pushed into the query, not applied to results
+- [x] Tool: `read_file` — refuses unindexed and cloud-only files
+- [x] Tool: `file_info` — identity, hash, path history, tier, index state
+- [x] Tool: `list_workspaces`
+- [x] Tool: `index_status` — cloud-only count always present, never a silent zero
+- [x] Results carry `provenance`, `origin` and a `citable` flag
+- [x] Both `initialize` and `server/discover` handshakes accepted
+- [x] `.mcp.json` written; verified working from an arbitrary cwd
+- [ ] Use it for a week; note which tool you actually reach for → informs M3
+- [ ] `search --literal` over MCP — `marrow-index::literal` exists, the tool does not expose it yet (removed from the schema rather than advertised-and-ignored)
+- [ ] Swap the hand-rolled queries for `marrow-query` once it lands
 
 ---
 

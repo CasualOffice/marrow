@@ -78,6 +78,11 @@ enum Cmd {
     },
     /// Index health
     Status,
+    /// Serve the index over MCP on stdio
+    ///
+    /// Point an agent front-end at this. Protocol traffic uses stdout, so
+    /// nothing else may write there.
+    Mcp,
 }
 
 #[derive(Subcommand, Debug)]
@@ -199,6 +204,14 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
             search::run(&index, &q, *limit, &roots, cli.json, style, out)
         }
         Cmd::Status => status(cli.json, style, out),
+        Cmd::Mcp => {
+            let store = open_store()?;
+            let server = marrow_mcp::Server::new(store)?;
+            let stdin = std::io::stdin().lock();
+            let stdout = std::io::stdout().lock();
+            marrow_mcp::serve(&server, stdin, stdout)?;
+            Ok(())
+        }
     }
 }
 

@@ -7,6 +7,8 @@ members = [
     "crates/parse",
     "crates/index",
     "crates/ingest",
+    "crates/query",
+    "crates/mcp",
     "crates/cli",
 ]
 
@@ -24,6 +26,8 @@ marrow-scan  = { path = "crates/scan" }
 marrow-parse = { path = "crates/parse" }
 marrow-index = { path = "crates/index" }
 marrow-ingest = { path = "crates/ingest" }
+marrow-query = { path = "crates/query" }
+marrow-mcp   = { path = "crates/mcp" }
 
 anyhow     = "1"
 thiserror  = "2"

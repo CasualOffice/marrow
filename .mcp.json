@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "marrow": {
+      "command": "/Users/sachin/Desktop/melp/services/system/target/release/marrow",
+      "args": ["mcp"]
+    }
+  }
+}
