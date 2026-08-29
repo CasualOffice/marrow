@@ -97,7 +97,14 @@ CREATE TABLE workspaces (
     status              TEXT NOT NULL DEFAULT 'ACTIVE'
                           CHECK (status IN ('ACTIVE','PAUSED','UNAVAILABLE','FORGETTING','REMOVED')),
     created_at          INTEGER NOT NULL,
-    updated_at          INTEGER NOT NULL
+    updated_at          INTEGER NOT NULL,
+    -- SYNC-006: which device authored this row. Nullable and unused on a
+    -- single device; present from day one because adding it later means a
+    -- migration across every canonical table plus a backfill that cannot know
+    -- the answer. `origin_principal_id` is deliberately NOT here -- Part 7
+    -- §124 reduced MULTI to three requirements and dropped per-principal
+    -- tracking, so a `principals` table never arrives.
+    origin_device_id    TEXT REFERENCES devices(device_id)
 );
 -- ADDED beyond §106: workspace names are the natural key the CLI and the
 -- upsert path use ("workspace add ~/Desktop"). Two workspaces with one name is
@@ -119,7 +126,8 @@ CREATE TABLE workspace_roots (
     last_reconciled_at  INTEGER,
     reconcile_interval_ms INTEGER NOT NULL DEFAULT 21600000,
     availability        TEXT NOT NULL DEFAULT 'AVAILABLE',
-    created_at          INTEGER NOT NULL
+    created_at          INTEGER NOT NULL,
+    origin_device_id    TEXT REFERENCES devices(device_id)  -- SYNC-006
 );
 CREATE INDEX idx_roots_workspace ON workspace_roots(workspace_id);
 -- ADDED beyond §106: the same canonical path granted twice inside one
@@ -146,7 +154,8 @@ CREATE TABLE files (
     status              TEXT NOT NULL DEFAULT 'ACTIVE'
                           CHECK (status IN ('ACTIVE','DELETED','EXCLUDED','ERROR','FORGOTTEN')),
     created_at          INTEGER NOT NULL,
-    updated_at          INTEGER NOT NULL
+    updated_at          INTEGER NOT NULL,
+    origin_device_id    TEXT REFERENCES devices(device_id)  -- SYNC-006
 );
 CREATE INDEX idx_files_ws_status   ON files(workspace_id, status);
 CREATE INDEX idx_files_path        ON files(workspace_id, current_path);
@@ -178,7 +187,8 @@ CREATE TABLE file_versions (
     observed_at         INTEGER NOT NULL,
     supersedes          TEXT REFERENCES file_versions(version_id),
     status              TEXT NOT NULL DEFAULT 'CURRENT'
-                          CHECK (status IN ('CURRENT','HISTORICAL','TOMBSTONED'))
+                          CHECK (status IN ('CURRENT','HISTORICAL','TOMBSTONED')),
+    origin_device_id    TEXT REFERENCES devices(device_id)  -- SYNC-006
 );
 CREATE INDEX idx_versions_file ON file_versions(file_id, status);
 -- Invariant: exactly one CURRENT version per file (§106.12).
@@ -297,16 +307,18 @@ pub fn apply_writer_pragmas(conn: &Connection) -> Result<()> {
         )
         .with_context(format!("journal_mode = {mode}")));
     }
-    conn.execute_batch(WRITER_PRAGMAS).map_err(|e| {
-        crate::map_sqlite(e, "Could not configure the index database connection.")
-    })?;
+    conn.execute_batch(WRITER_PRAGMAS)
+        .map_err(|e| crate::map_sqlite(e, "Could not configure the index database connection."))?;
     Ok(())
 }
 
 /// Apply the read-connection pragmas. Readers are `query_only`.
 pub fn apply_reader_pragmas(conn: &Connection) -> Result<()> {
     conn.execute_batch(READER_PRAGMAS).map_err(|e| {
-        crate::map_sqlite(e, "Could not configure a read connection to the index database.")
+        crate::map_sqlite(
+            e,
+            "Could not configure a read connection to the index database.",
+        )
     })
 }
 

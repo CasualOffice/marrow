@@ -117,6 +117,19 @@ typed_id!(
     /// A unit of durable background work.
     JobId
 );
+typed_id!(
+    /// One entry in a file's path history (FS-006).
+    PathId
+);
+typed_id!(
+    /// One parse attempt against one file version.
+    ParseId
+);
+typed_id!(
+    /// A machine. Carried on canonical rows as `origin_device_id` (SYNC-006)
+    /// so a future multi-device merge is possible; unused on one device.
+    DeviceId
+);
 
 #[cfg(test)]
 mod tests {

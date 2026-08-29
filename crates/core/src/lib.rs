@@ -19,7 +19,9 @@ pub mod id;
 pub mod model;
 
 pub use error::{Class, Code, Error, Result};
-pub use id::{ChunkId, FileId, JobId, NodeId, RootId, VersionId, WorkspaceId};
+pub use id::{
+    ChunkId, DeviceId, FileId, JobId, NodeId, ParseId, PathId, RootId, VersionId, WorkspaceId,
+};
 pub use model::{
     ContentHash, FileStatus, Origin, ProvenanceClass, SourceSpan, TierState, Timestamp,
     VersionStatus,

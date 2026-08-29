@@ -42,6 +42,9 @@ pub enum Code {
     DbMigrationFailed,
     DbDiskFull,
     DbWriterGone,
+    /// The database was written by a newer build. §107 requires refusing to
+    /// open it rather than guessing at columns we do not know about.
+    DbSchemaTooNew,
     // POL_ — policy (never retryable)
     PolDenied,
     PolApprovalRequired,
@@ -80,6 +83,7 @@ impl Code {
             DbMigrationFailed => "DB_MIGRATION_FAILED",
             DbDiskFull => "DB_DISK_FULL",
             DbWriterGone => "DB_WRITER_GONE",
+            DbSchemaTooNew => "DB_SCHEMA_TOO_NEW",
             PolDenied => "POL_DENIED",
             PolApprovalRequired => "POL_APPROVAL_REQUIRED",
             PolClassificationBlocked => "POL_CLASSIFICATION_BLOCKED",
@@ -114,7 +118,9 @@ impl Code {
             ParUnsupported | ParCorrupt | ParTimeout | ParLowYield | ParTruncated
             | ParBudgetExceeded | ParWorkerCrash => Class::Parse,
             IdxCorrupt | IdxGenerationMismatch | IdxRebuildRequired => Class::Index,
-            DbBusy | DbCorrupt | DbMigrationFailed | DbDiskFull | DbWriterGone => Class::Storage,
+            DbBusy | DbCorrupt | DbMigrationFailed | DbDiskFull | DbWriterGone | DbSchemaTooNew => {
+                Class::Storage
+            }
             PolDenied | PolApprovalRequired | PolClassificationBlocked => Class::Policy,
             CfgInvalid | CfgUnsupportedVersion => Class::Config,
             IntInvariantViolated => Class::Internal,

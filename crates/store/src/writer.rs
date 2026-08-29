@@ -371,30 +371,27 @@ enum Stop {
 }
 
 /// Run one op inside its own savepoint.
-fn apply(
-    txn: &mut rusqlite::Transaction<'_>,
-    op: Op,
-    delivers: &mut Vec<Deliver>,
-    rows: &mut i64,
-) {
+fn apply(txn: &mut rusqlite::Transaction<'_>, op: Op, delivers: &mut Vec<Deliver>, rows: &mut i64) {
     let before = txn.total_changes() as i64;
-    let sp = match txn.savepoint() {
-        Ok(sp) => sp,
-        Err(e) => {
-            let (deliver, _) = op(None);
-            deliver(&BatchOutcome::Failed(e.to_string()));
-            tracing::error!(error = %e, "could not open a savepoint");
-            return;
+    let deliver = {
+        let mut sp = match txn.savepoint() {
+            Ok(sp) => sp,
+            Err(e) => {
+                let (deliver, _) = op(None);
+                deliver(&BatchOutcome::Failed(e.to_string()));
+                tracing::error!(error = %e, "could not open a savepoint");
+                return;
+            }
+        };
+        let (deliver, ok) = op(Some(&sp));
+        let closed = if ok { sp.commit() } else { sp.rollback() };
+        if let Err(e) = closed {
+            // The savepoint could not be released or rolled back. Nothing this
+            // op can do about it; the batch commit decides the rest.
+            tracing::error!(error = %e, "savepoint close failed");
         }
+        deliver
     };
-    let (deliver, ok) = op(Some(&sp));
-    let sp_result = if ok { sp.commit() } else { sp.rollback() };
-    if let Err(e) = sp_result {
-        // The savepoint could not be released or rolled back; the transaction is
-        // no longer trustworthy. Report it against this op and let the batch
-        // commit decide the rest.
-        tracing::error!(error = %e, "savepoint close failed");
-    }
     *rows += (txn.total_changes() as i64 - before).max(0);
     delivers.push(deliver);
 }
@@ -412,12 +409,17 @@ mod tests {
         WriterActor::spawn(conn, cfg)
     }
 
+    /// Queue a read and force the batch shut, so a test with a long batch
+    /// interval does not sit out the interval waiting for its own answer.
     fn count(w: &Writer) -> i64 {
-        w.submit(|c| {
-            c.query_row("SELECT count(*) FROM t", [], |r| r.get(0))
-                .map_err(|e| crate::map_sqlite(e, "count"))
-        })
-        .unwrap()
+        let p = w
+            .send(|c| {
+                c.query_row("SELECT count(*) FROM t", [], |r| r.get(0))
+                    .map_err(|e| crate::map_sqlite(e, "count"))
+            })
+            .unwrap();
+        w.flush().unwrap();
+        p.wait().unwrap()
     }
 
     #[test]

@@ -113,10 +113,7 @@ pub fn backups_for(db: &Path) -> Result<Vec<PathBuf>> {
 fn take_backup(conn: &Connection, db: &Path, from_version: i64) -> Result<PathBuf> {
     let at = Timestamp::now().as_millis();
     let dir = db.parent().unwrap_or(Path::new("."));
-    let target = dir.join(format!(
-        "{}{at}-v{from_version}.sqlite",
-        backup_prefix(db)
-    ));
+    let target = dir.join(format!("{}{at}-v{from_version}.sqlite", backup_prefix(db)));
     let target_str = target.to_str().ok_or_else(|| {
         Error::new(
             Code::FsNotUtf8Path,
@@ -191,7 +188,10 @@ fn apply(conn: &mut Connection, from: i64, migrations: &[Migration]) -> Result<i
         set_meta(&tx, "schema_version", &m.version.to_string())?;
         set_meta(&tx, "migrated_at", &now)?;
         tx.commit().map_err(|e| {
-            crate::map_sqlite(e, "Could not commit a schema migration to the index database.")
+            crate::map_sqlite(
+                e,
+                "Could not commit a schema migration to the index database.",
+            )
         })?;
         tracing::info!("migration applied");
         at = m.version;
@@ -225,7 +225,9 @@ pub(crate) fn open_migrated_with(
             "This index was written by a newer version of Marrow and will not be opened, to \
              avoid corrupting it. Upgrade Marrow, or point it at a different index directory.",
         )
-        .with_context(format!("index schema v{current}, this build writes v{target}")));
+        .with_context(format!(
+            "index schema v{current}, this build writes v{target}"
+        )));
     }
     if current == target {
         tracing::debug!(version = current, "schema up to date");
@@ -372,7 +374,10 @@ mod tests {
         assert_eq!(err.code(), Code::DbMigrationFailed);
 
         let (conn, v) = open_migrated(&loc).unwrap();
-        assert_eq!(v, 1, "restored database is back at the pre-migration version");
+        assert_eq!(
+            v, 1,
+            "restored database is back at the pre-migration version"
+        );
         let n: i64 = conn
             .query_row("SELECT count(*) FROM devices", [], |r| r.get(0))
             .unwrap();

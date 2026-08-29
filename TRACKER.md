@@ -59,9 +59,11 @@ find ~ -flags dataless 2>/dev/null | wc -l
 - [x] Error taxonomy ([Part 6 §108](docs/Part_6_Engineering_Reference.md)) — 28 codes, `POL_*` never retryable
 - [x] Typed ULID IDs; `SourceSpan`, `TierState`, `Origin` encode invariants #1/#5/#13
 - [x] `check.sh` + CI — fmt, clippy -D warnings, test, named invariant tests
-- [~] SQLite: M1 table subset, WAL pragmas, single-writer actor
-- [~] Migration runner + `VACUUM INTO` backup before migrate
-- [~] Job queue: idempotency keys, leases, backoff, resume-after-crash
+- [x] SQLite: M1 table subset, WAL pragmas, single-writer actor (per-op `SAVEPOINT`, so one bad row doesn't discard 499 good ones)
+- [x] Migration runner + `VACUUM INTO` backup before **every** migration, restore-on-failure
+- [x] Job queue: idempotency keys, leases, backoff+jitter, resume-after-crash
+- [x] `origin_device_id` on canonical tables ([D49](DECISIONS.md)) — retrofit-expensive, done now
+- [x] Readers are `query_only=ON` — "never open a second write connection" enforced by SQLite
 - [ ] `tracing` subscriber wiring in the CLI
 
 ### Discovery
@@ -71,7 +73,7 @@ find ~ -flags dataless 2>/dev/null | wc -l
 - [x] **Cloud placeholder detection — never hydrate** ⚠️ — `SF_DATALESS` + `.icloud` stubs, metadata-only
 - [x] Path canonicalization + symlink escape + NFC/NFD identity — component-wise, not string-prefix
 - [x] Lazy walk with per-entry error isolation (FS-011)
-- [ ] Stable `file_id` + path history (**path ≠ identity**) — needs store wiring
+- [ ] Stable `file_id` + path history (**path ≠ identity**) — store + scan both ready, needs the ingest pipeline to join them
 - [ ] `notify` watcher with coalescing/debounce
 - [ ] Reconciliation loop; watcher-health reporting (`Live`/`Degraded`/`Poll-only`)
 - [ ] Unicode NFC/NFD normalization so macOS doesn't create duplicate identities
@@ -222,7 +224,10 @@ Build these as fixtures. The set only grows — every security bug found adds a 
 
 Ideas that came up but aren't scheduled. Move to a milestone or delete — don't let this grow.
 
-- _(empty)_
+- **Hydration path** ([D51](DECISIONS.md)) — opt-in, size shown, rate-limited, cancellable, battery/metered aware. Not M1; the indexer never hydrates regardless.
+- Wire `PathId`/`ParseId`/`DeviceId` through `marrow-store` (currently raw `Ulid` at two call sites).
+- `integrity_check` on unclean shutdown — belongs with the CLI `status` work.
+- `chunks.provenance_class` CHECK constraint — when M4 first writes chunks.
 
 ---
 
@@ -235,6 +240,7 @@ Short entries. What shipped, what surprised you, what changed.
 | 2026-08-30 | Spec complete (7 parts). Re-scoped for solo/open-source in Part 7. Repo initialised. M0 started. |
 | 2026-08-30 | Named **Marrow** (D45). Docs renamed `Part_N_*.md`. Crate namespace left open as D46. |
 | 2026-08-30 | Reclaimed **64 GB** of Rust `target/` output (14→78 GB free). Build artifacts were 6.6× the entire knowledge corpus. M0 F11 superseded. |
+| 2026-08-30 | **`marrow-store` done.** 36 tests. Found 6 spec defects ([D50](DECISIONS.md)); the load-bearing one: §106.1 mandates `origin_device_id`/`origin_principal_id` on every mutable row and the DDL declares neither. Settled as [D49](DECISIONS.md) and applied now — a column across 11 tables is not something to retrofit. |
 | 2026-08-30 | **`marrow-scan` done.** 42 tests. Resolved M0's blocked item: 58 iCloud placeholders, 1.35 GB, 9–36 ms. Two traps found — `hidden(true)` would have hidden every placeholder (TIER-008 would read zero); APFS is normalization-*insensitive*, so NFC/NFD must be handled in our path key. D47 quantified: **34,459 files with gitignore off vs 9,435 with it on** — size M1 for ~34k. |
 | 2026-08-30 | **Design pass.** GUI.md / UX.md / LLD.md written before more code. Five desktop screens mocked. D42 reversed — the desktop app is the product. |
 | 2026-08-30 | **M1 started.** Workspace + `marrow-core` committed: 17 tests, clippy clean. Found ULID ordering is ms-granular not total — doc corrected, limitation pinned by a test. `store` and `scan` building in parallel. |

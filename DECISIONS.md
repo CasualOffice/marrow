@@ -8,6 +8,23 @@ Only decisions that are still live under the solo scope. The full historical log
 
 ## Open
 
+### D50 — Spec defects found while implementing M1
+
+Recorded, not yet fixed in the spec text. Each was found by building against Part 6 §106.
+
+| # | Defect | Disposition |
+|---|---|---|
+| 1 | §106.1's conventions table mandates `origin_device_id` + `origin_principal_id` on every mutable row, but **no table in the DDL below it declares either** | **Fixed in code** — see [D49](#d49--sync-006-columns--origin_device_id-only-canonical-tables-only). Spec text still contradicts itself |
+| 2 | §107 requires refusing a database newer than this build, but §108 has **no error code for it** | **Fixed** — added `DB_SCHEMA_TOO_NEW` to core |
+| 3 | `jobs.status` defines both `FAILED` and `DEAD`, but §111.1's state machine only uses `DEAD` | M1 never writes `FAILED`. Leave the column, document the unused variant |
+| 4 | `chunks.provenance_class` has no CHECK constraint while `parse_results.provenance_class` does, for the same value set | Fix when M4 writes chunks |
+| 5 | No typed IDs for `file_paths.path_id`, `parse_results.parse_id`, `devices.device_id` | **Fixed** — added `PathId`, `ParseId`, `DeviceId` to core |
+| 6 | A lone write blocks up to 100 ms because §50 fixes the batch at "500 rows or 100 ms" | Accepted. An adaptive early commit on an empty inbox would be faster and is exactly the "clever batching" the design warned against. Callers wanting it use `send` + `flush` |
+
+- [ ] Amend Part 6 §106.1 to match reality (defect 1) and drop `origin_principal_id` from the convention
+
+---
+
 ### D48 — Does MCP (M2) still come before the desktop shell (M3)?
 
 **Needed by:** end of M1.
@@ -100,6 +117,26 @@ Hardware is T-mid (16 GB unified): 7–8B @ Q4 comfortable, 13–14B tight, 30B+
 ---
 
 ## Settled
+
+### D49 — SYNC-006 columns → **`origin_device_id` only, canonical tables only**
+
+Part 6 §106.1 mandates `origin_device_id` **and** `origin_principal_id` on every mutable row. The DDL declares neither on any M1 table. Settled during M1 rather than deferred, because adding a column to eleven tables later means a migration plus a backfill that cannot know the answer.
+
+**Keep `origin_device_id`.** Part 7 §132 explicitly retains it in the reduced SYNC set as cheap future-proofing — it is what makes a future multi-device merge possible at all. Nullable, unused on one machine, free.
+
+**Drop `origin_principal_id`.** Part 7 §124 reduced MULTI to three requirements and dropped per-principal tracking, so a `principals` table never arrives. A foreign key to a table that will not exist is not future-proofing, it is clutter.
+
+Applied to the four **canonical, non-rebuildable** tables: `workspaces`, `workspace_roots`, `files`, `file_versions`. Derived tables (`parse_results`, `ir_nodes`, `chunks`, `jobs`, `file_paths`) are regenerated per device and carry no origin.
+
+### D51 — Cloud placeholder hydration → **Marrow triggers the system's own hydration**
+
+Decided 2026-08-30. Marrow calls the macOS API Finder uses, so the user stays in one app. Still explicit, still shows the size first, never automatic.
+
+Consequence: TIER-006 (per-workspace opt-in with size shown), TIER-007 (rate-limited and cancellable), TIER-010 (suspend on metered connection) and TIER-011 (never on battery without override) all become real M1+ work rather than being satisfied by "we never hydrate".
+
+**TIER-005 still holds absolutely for the indexer** — the scan path never hydrates. Hydration is a separate, user-initiated action with its own progress and cancel. The two are not allowed to touch.
+
+Measured cost for this machine: 58 files, 1.35 GB (M0 §9).
 
 ### D1 — Vector store → **brute-force cosine, indefinitely** *(settled by M0)*
 
