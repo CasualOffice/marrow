@@ -1,0 +1,136 @@
+/* The overlay lives in-window until the global hotkey exists in Rust, so it
+   needs a scrim the real borderless window would not. */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 14vh;
+  background: var(--scrim);
+}
+
+.panel {
+  width: 640px;
+  max-width: calc(100vw - 48px);
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  overflow: hidden;
+  color: var(--text);
+  /* The one shadow in the app. A floating lens is genuinely above the window;
+     everything inside the window separates with borders instead (GUI §6). */
+  box-shadow: 0 24px 60px rgb(0 0 0 / 28%);
+}
+
+.queryRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  min-height: 52px;
+  border-bottom: 1px solid var(--border);
+}
+
+.queryIcon {
+  color: var(--text-faint);
+}
+
+.input {
+  flex-grow: 1;
+  min-width: 0;
+  font-size: var(--fs-xl);
+  color: var(--text);
+  caret-color: var(--accent);
+}
+
+.input::placeholder {
+  color: var(--text-faint);
+}
+
+.hits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 52vh;
+  overflow-y: auto;
+}
+
+.hit {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 10px 16px;
+  border-left: 2px solid transparent;
+}
+
+.hit:hover {
+  background: var(--bg-hover);
+}
+
+.selected,
+.selected:hover {
+  background: var(--bg-sel);
+  border-left-color: var(--accent);
+}
+
+.jump {
+  flex-shrink: 0;
+  width: 26px;
+  text-align: center;
+  margin-top: 1px;
+}
+
+.hitBody {
+  flex-grow: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hitHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.hitName {
+  font-weight: 590;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.grow {
+  flex-grow: 1;
+}
+
+.age {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.hitDir,
+.hitSnippet {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 32px;
+  padding: 0 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}

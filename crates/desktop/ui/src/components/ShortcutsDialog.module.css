@@ -1,0 +1,113 @@
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: var(--scrim);
+}
+
+.panel {
+  width: 560px;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgb(0 0 0 / 28%);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.title {
+  margin: 0;
+  flex-grow: 1;
+  font-size: var(--fs-lg);
+  font-weight: 620;
+}
+
+.close {
+  color: var(--text-dim);
+  padding: 3px;
+  border-radius: var(--radius-sm);
+}
+
+.close:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.body {
+  padding: 14px 16px 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.groupTitle {
+  margin: 0;
+  font-size: var(--fs-xs);
+  font-weight: 640;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rowItem {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.keys {
+  width: 72px;
+  flex-shrink: 0;
+}
+
+.action {
+  margin: 0;
+  font-size: var(--fs-md);
+  color: var(--text);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Bound, but nothing behind it yet. Dim, and it says why. */
+.pending {
+  color: var(--text-dim);
+}
+
+.missing {
+  font-size: var(--fs-xs);
+  color: var(--warn);
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 0 4px;
+}

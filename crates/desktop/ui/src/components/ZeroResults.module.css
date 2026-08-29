@@ -1,0 +1,130 @@
+.wrap {
+  flex-grow: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 40px;
+}
+
+.panel {
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.headline {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: 600;
+}
+
+.sub {
+  margin: 0;
+  font-size: var(--fs-base);
+  color: var(--text-dim);
+}
+
+.rule {
+  height: 1px;
+  background: var(--border);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.heading {
+  margin: 0;
+  font-size: var(--fs-xs);
+  font-weight: 640;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* A gap: a number, what it is, and the button that closes it. */
+.gap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-raised);
+}
+
+.gapCount {
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  min-width: 44px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.warn {
+  color: var(--warn);
+}
+
+.gapBody {
+  flex-grow: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.gapTitle {
+  font-size: var(--fs-md);
+  color: var(--text);
+}
+
+.gapDetail {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+/* Buttons, not instructions (GUI §5.3). */
+.gapAction {
+  flex-shrink: 0;
+  font-size: var(--fs-sm);
+  font-weight: 560;
+  color: var(--bg);
+  background: var(--accent);
+  border-radius: 5px;
+  padding: 5px 11px;
+}
+
+.gapAction:hover {
+  filter: brightness(1.08);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.chip {
+  font-size: var(--fs-md);
+  color: var(--text-dim);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  padding: 3px 9px;
+}
+
+.chip:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}

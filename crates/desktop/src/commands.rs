@@ -73,7 +73,14 @@ pub struct SearchHit {
 #[serde(rename_all = "camelCase")]
 pub struct SearchResponse {
     pub query: String,
+    /// Hits on this page — i.e. `hits.len()`.
     pub total: usize,
+    /// Documents that matched, before the limit.
+    ///
+    /// Separate from `total` because a footer reading "20 results" when the
+    /// corpus holds 900 is a lie the user cannot detect. `total` saturates at
+    /// the limit; this does not.
+    pub matched: usize,
     pub elapsed_ms: u64,
     pub hits: Vec<SearchHit>,
     /// Which retrieval branches ran. The UI shows this in the footer so a
@@ -97,6 +104,17 @@ pub struct WorkspaceRow {
     pub name: String,
     pub path: String,
     pub files: i64,
+    /// Per-workspace, not global. GUI §11 requires every degraded state to be
+    /// visible from the sidebar without navigating, and a single global number
+    /// cannot say which workspace is the problem.
+    pub chunks: i64,
+    pub content_bytes: i64,
+    /// Files whose contents were deliberately not read. Never omitted, even at
+    /// zero — a silent zero reads as "no cloud files" (TIER-008).
+    pub cloud_only: i64,
+    /// Files recorded from metadata alone because their contents could not be
+    /// indexed. This is what makes a partly-broken workspace visible.
+    pub unindexed: i64,
 }
 
 #[tauri::command]
@@ -150,15 +168,52 @@ pub async fn file_detail(core: State<'_, Arc<Core>>, path: String) -> Res<FileDe
     blocking(move || core.file_detail(&path)).await
 }
 
+/// A slice of a file, and where in the file it starts.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Region {
+    /// 1-based line number of `lines[0]`.
+    ///
+    /// Returned rather than left to the caller: without it the UI has to
+    /// duplicate this crate's private context constant to guess, and the two
+    /// drift the first time one changes.
+    pub first_line: u32,
+    pub lines: Vec<String>,
+    /// True when the region was cut short by the cap rather than by the file
+    /// ending — the UI cannot otherwise tell those apart.
+    pub truncated: bool,
+}
+
 /// Read a bounded region of an indexed file, for the preview pane.
 #[tauri::command]
 pub async fn read_region(
     core: State<'_, Arc<Core>>,
     path: String,
     around_line: Option<u32>,
-) -> Res<Vec<String>> {
+) -> Res<Region> {
     let core = Arc::clone(&core);
     blocking(move || core.read_region(&path, around_line)).await
+}
+
+/// Open a file in whatever the system uses for it.
+///
+/// **Only indexed files.** This is not a general "open anything" affordance:
+/// the workspace grant is what says which files Marrow may touch, and that
+/// applies to handing one to another application too.
+///
+/// The path is passed as a single argv element to `open`, never through a
+/// shell (SEC-011), so a filename cannot become a command.
+#[tauri::command]
+pub async fn open_path(core: State<'_, Arc<Core>>, path: String) -> Res<()> {
+    let core = Arc::clone(&core);
+    blocking(move || core.open_path(&path, false)).await
+}
+
+/// Reveal a file in the system file manager.
+#[tauri::command]
+pub async fn reveal_path(core: State<'_, Arc<Core>>, path: String) -> Res<()> {
+    let core = Arc::clone(&core);
+    blocking(move || core.open_path(&path, true)).await
 }
 
 /// Run work on the blocking pool and map the error for the WebView.
@@ -234,6 +289,8 @@ const COMMAND_NAMES: &[&str] = &[
     "index_health",
     "file_detail",
     "read_region",
+    "open_path",
+    "reveal_path",
 ];
 
 #[cfg(test)]
@@ -257,12 +314,16 @@ mod tests {
     fn the_command_surface_is_small_and_read_only() {
         // Every name here is a hole in the WebView sandbox. M1 exposes no
         // mutation at all; when one arrives it needs a deliberate addition.
-        assert_eq!(COMMAND_NAMES.len(), 5);
+        assert_eq!(COMMAND_NAMES.len(), 7);
         for n in COMMAND_NAMES {
             assert!(
                 !n.contains("write") && !n.contains("delete") && !n.contains("exec"),
                 "{n} looks like a mutation; M1 exposes none"
             );
         }
+        // `open_path` hands a file to another application, which is the closest
+        // thing here to leaving the sandbox. It is guarded by the index, and
+        // that guard is the reason it is allowed at all.
+        assert!(COMMAND_NAMES.contains(&"open_path"));
     }
 }

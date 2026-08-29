@@ -1,0 +1,133 @@
+.row {
+  height: var(--result-row-h);
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  /* The 2px left edge is always present so selecting a row never shifts its
+     content sideways by 2px. Only its colour changes. */
+  border-left: 2px solid transparent;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow: hidden;
+  background: transparent;
+}
+
+.row:hover {
+  background: var(--bg-hover);
+}
+
+.selected,
+.selected:hover {
+  background: var(--bg-sel);
+  border-left-color: var(--accent);
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 1 — path:line. Bold, first, its own line. */
+.location {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  font-size: var(--fs-base);
+  font-weight: 590;
+  color: var(--text);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/*
+ * A citation degrades in a fixed order: the directory truncates first (and is
+ * middle-collapsed in JS before it gets here — see `squeezeDir`), then the
+ * filename, and the line number never truncates at all. A path you cannot open
+ * is a screenshot of an answer.
+ *
+ * The dir does not flex-shrink; it is capped instead. A shrinking flex item can
+ * be squeezed narrower than its own ellipsis and render half a glyph.
+ */
+.dir {
+  flex: 0 0 auto;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-dim);
+}
+
+.base {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lineNo {
+  flex: 0 0 auto;
+}
+
+/* 2 — reason and age, right-aligned and dim. */
+.meta {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.age {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.jump {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  padding: 0 3px;
+  opacity: 0;
+}
+
+.row:hover .jump,
+.selected .jump {
+  opacity: 1;
+}
+
+/* 3 — the excerpt, on a raised background. Always two lines tall so that a
+   re-rank moves rows without resizing them. */
+.excerpt {
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--text-dim);
+  background: var(--bg-raised);
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+  height: calc(var(--fs-sm) * 1.5 * 2 + 8px);
+  overflow: hidden;
+}
+
+.selected .excerpt {
+  background: var(--bg);
+}
+
+.excerptLine {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 4 — breadcrumb, dimmed, last. */
+.crumb {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-height: 1em;
+}

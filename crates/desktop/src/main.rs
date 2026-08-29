@@ -58,6 +58,8 @@ fn main() {
             commands::index_health,
             commands::file_detail,
             commands::read_region,
+            commands::open_path,
+            commands::reveal_path,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the Marrow window");

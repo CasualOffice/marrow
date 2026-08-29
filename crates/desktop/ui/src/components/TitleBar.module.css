@@ -1,0 +1,28 @@
+.bar {
+  height: var(--titlebar-h);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Reserves the corner macOS paints the traffic lights into. */
+.lights {
+  width: 64px;
+  flex-shrink: 0;
+}
+
+.title {
+  flex-grow: 1;
+  text-align: center;
+  font-size: var(--fs-md);
+  font-weight: 590;
+  color: var(--text-dim);
+  letter-spacing: 0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

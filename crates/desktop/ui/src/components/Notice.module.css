@@ -1,0 +1,34 @@
+.strip {
+  position: fixed;
+  left: 50%;
+  bottom: 34px;
+  transform: translateX(-50%);
+  z-index: 30;
+  max-width: min(640px, calc(100vw - 48px));
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  font-size: var(--fs-md);
+  color: var(--text);
+}
+
+.text {
+  min-width: 0;
+}
+
+.dismiss {
+  flex-shrink: 0;
+  display: flex;
+  color: var(--text-faint);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+}
+
+.dismiss:hover {
+  color: var(--text);
+}

@@ -1,0 +1,17 @@
+.kbd {
+  display: inline-block;
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+  color: var(--text-faint);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  padding: 1px 4px;
+  white-space: nowrap;
+}
+
+.hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}

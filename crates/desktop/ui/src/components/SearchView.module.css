@@ -1,0 +1,76 @@
+/* The results pane: 360px, per GUI §3.2 and design/Main.dc.html. */
+.results {
+  width: var(--pane-results);
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.results:focus {
+  outline: none;
+}
+
+.results:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Zero results takes the width the two panes had. */
+.wideArea {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.fieldRow {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.wideArea .fieldRow {
+  padding: 10px 16px;
+}
+
+.fieldWide {
+  max-width: 420px;
+}
+
+.errorRow {
+  padding: 8px 12px 0;
+  flex-shrink: 0;
+}
+
+/* Footer: count, time, branches (UX principle 10 — latency is shown, not
+   hidden. It is how you notice a regression before a benchmark does). */
+.footer {
+  min-height: 26px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+
+.wideArea .footer {
+  padding: 0 16px;
+}
+
+.grow {
+  flex-grow: 1;
+}
+
+/* A slow branch is an inline word in the footer, never a modal and never a
+   spinner over results that are already known (GUI §5.2). */
+.slow {
+  color: var(--text-dim);
+}

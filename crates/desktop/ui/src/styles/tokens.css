@@ -1,0 +1,143 @@
+/*
+ * Design tokens — GUI §6.
+ *
+ * Values are lifted from design/*.dc.html rather than re-derived. Four of them
+ * are deliberately darkened/brightened from the mockup because the mockup value
+ * missed WCAG AA at the size it is used, and GUI §8 makes AA non-negotiable:
+ *
+ *   light --text-dim    #6b6b73 -> #57575f   (5.1:1 -> 6.5:1 on --bg-raised)
+ *   light --text-faint  #9b9ba3 -> #6e6e78   (2.7:1 -> 4.6:1, was a fail)
+ *   light --accent      #2f6feb -> #2864d8   (4.4:1 -> 5.3:1, was a fail)
+ *   light --warn        #a16207 -> #96590a   (4.5:1 -> 5.1:1 on --warn-bg)
+ *   dark  --text-faint  #6b6b74 -> #85858e   (3.5:1 -> 5.0:1, was a fail)
+ *   dark  --accent      #4d8bff -> #5c95ff   (4.3:1 -> 4.8:1 on --bg-sel)
+ *
+ * Everything else is the mockup value verbatim. Theme follows the system; there
+ * is no toggle, because GUI §9 rules out theming as a feature.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* surfaces */
+  --bg: #fdfdfd;
+  --bg-raised: #f6f6f7;
+  --bg-hover: #eeeef0;
+  --bg-sel: #e8effc;
+  --panel: #fbfbfc;
+  --chrome: #ececed;
+
+  /* separation — borders and background steps, not shadows (GUI §6) */
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+
+  /* text */
+  --text: #18181b;
+  --text-dim: #57575f;
+  --text-faint: #6e6e78;
+
+  /* one accent, used for selection and focus only */
+  --accent: #2864d8;
+  /* Written out rather than colour-mixed: `color-mix()` needs a WebKit newer
+     than the minimum macOS this app supports, and an unsupported value here
+     drops the whole focus-ring declaration. */
+  --accent-wash: rgb(40 100 216 / 16%);
+  --scrim: rgb(0 0 0 / 34%);
+
+  /* state */
+  --ok: #2f7d4f;
+  --warn: #96590a;
+  --warn-bg: #fbf3e0;
+  --warn-bd: #e8d9a8;
+  --error: #b91c1c;
+  --error-bg: #fdf0f0;
+
+  /* match reason / provenance — always paired with the word, never alone */
+  --exact: var(--accent);
+  --semantic: #7c4dcc;
+  --recent: var(--warn);
+  --det: var(--ok);
+
+  /* type */
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui,
+    sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* rem, so the scale follows the system text size (GUI §8). The mockup's px
+     values divided by the 16px root: 10.5, 11, 11.5, 12, 13, 14, 17, 19. */
+  --fs-xs: 0.65625rem;
+  --fs-sm: 0.6875rem;
+  --fs-mono: 0.71875rem;
+  --fs-md: 0.75rem;
+  --fs-base: 0.8125rem;
+  --fs-lg: 0.875rem;
+  --fs-xl: 1.0625rem;
+  --fs-2xl: 1.1875rem;
+
+  /* density — 28px rows, 13px base (GUI §6). The row floor is em-relative so a
+     larger system text size grows the row instead of clipping it. */
+  --row-h: max(28px, 2.16em);
+  --radius: 6px;
+  --radius-lg: 10px;
+  --radius-sm: 4px;
+
+  --pane-sidebar: 180px;
+  --pane-results: 360px;
+  --titlebar-h: 38px;
+
+  /* motion: only re-rank and pane transitions, both <= 150ms (GUI §6) */
+  --motion-rerank: 120ms;
+  --motion-pane: 150ms;
+  --ease: cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161619;
+    --bg-raised: #1c1c20;
+    --bg-hover: #26262b;
+    --bg-sel: #1e2c48;
+    --panel: #1e1e23;
+    --chrome: #1f1f23;
+
+    --border: #2a2a30;
+    --border-strong: #3a3a42;
+
+    --text: #e9e9ec;
+    --text-dim: #9a9aa2;
+    --text-faint: #85858e;
+
+    --accent: #5c95ff;
+    --accent-wash: rgb(92 149 255 / 22%);
+    --scrim: rgb(0 0 0 / 50%);
+
+    --ok: #5fb37f;
+    --warn: #d4a017;
+    --warn-bg: #241f11;
+    --warn-bd: #3d3419;
+    --error: #f87171;
+    --error-bg: #2a1717;
+
+    --semantic: #a78bfa;
+  }
+}
+
+/* prefers-contrast: more — drop the mid-greys toward the primary text step. */
+@media (prefers-contrast: more) {
+  :root {
+    --text-dim: var(--text);
+    --text-faint: var(--text);
+    --border: var(--border-strong);
+  }
+}
+
+/*
+ * GUI §8: re-rank becomes instant, not animated. Nothing else in this app
+ * animates, so zeroing these two removes all motion.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-rerank: 0ms;
+    --motion-pane: 0ms;
+  }
+}

@@ -1,0 +1,32 @@
+.scroller {
+  flex-grow: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* The list owns its own scroll context so a re-rank cannot reflow the panes
+     around it. */
+  overscroll-behavior: contain;
+  contain: layout paint;
+}
+
+.canvas {
+  position: relative;
+  width: 100%;
+}
+
+/*
+ * One row slot. Absolutely positioned and moved with `transform` — never `top`
+ * — so a re-rank is a composited move, not a layout pass (GUI §7).
+ *
+ * The transition is the ~120 ms re-rank animation from GUI §5.2 and is the only
+ * animation in the results pane. `prefers-reduced-motion` zeroes the token, so
+ * the merge becomes instant rather than fast.
+ */
+.slot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  will-change: transform;
+  transition: transform var(--motion-rerank) var(--ease);
+}

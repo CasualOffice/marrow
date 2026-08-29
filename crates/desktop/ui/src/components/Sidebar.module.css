@@ -1,0 +1,144 @@
+.sidebar {
+  width: var(--pane-sidebar);
+  flex-shrink: 0;
+  background: var(--bg-raised);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 10px 0;
+  overflow: hidden;
+  /* Pane transition — one of the two things allowed to move (GUI §6). */
+  transition: width var(--motion-pane) var(--ease);
+}
+
+.sidebar:focus {
+  outline: none;
+}
+
+.collapsed {
+  width: 45px;
+}
+
+.group {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: var(--row-h);
+  padding: 0 8px;
+  border-radius: var(--radius);
+  color: var(--text);
+  text-align: left;
+}
+
+.item:hover {
+  background: var(--bg-hover);
+}
+
+.active {
+  background: var(--bg-sel);
+  color: var(--accent);
+  font-weight: 590;
+}
+
+.active:hover {
+  background: var(--bg-sel);
+}
+
+.label {
+  flex-grow: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collapsed .label,
+.collapsed .metric,
+.collapsed .heading,
+.collapsed .none,
+.collapsed .problem span {
+  display: none;
+}
+
+.collapsed .item {
+  justify-content: center;
+  padding: 0;
+}
+
+.rule {
+  height: 1px;
+  background: var(--border);
+  margin: 12px 16px;
+}
+
+.heading {
+  margin: 0;
+  padding: 0 16px 6px;
+  font-size: var(--fs-xs);
+  font-weight: 640;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin: 0 2px;
+}
+
+.ok {
+  background: var(--ok);
+}
+
+.warnIcon {
+  color: var(--warn);
+}
+
+.metric {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.warnText {
+  color: var(--warn);
+}
+
+.degraded {
+  color: var(--warn);
+  margin: 0 8px 4px;
+  width: auto;
+}
+
+.none {
+  padding: 0 10px;
+  font-size: var(--fs-md);
+  color: var(--text-faint);
+}
+
+.problem {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0 0 6px;
+  padding: 0 12px;
+  font-size: var(--fs-sm);
+  color: var(--warn);
+}
+
+.spacer {
+  flex-grow: 1;
+  min-height: 8px;
+}

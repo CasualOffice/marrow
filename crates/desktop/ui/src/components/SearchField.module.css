@@ -1,0 +1,53 @@
+.field {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 0 9px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+
+/* Focus is the accent's other job. A ring, not a colour change. */
+.field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash);
+}
+
+.icon {
+  color: var(--text-faint);
+}
+
+.input {
+  flex-grow: 1;
+  min-width: 0;
+  color: var(--text);
+  background: none;
+}
+
+.input::placeholder {
+  color: var(--text-faint);
+}
+
+.input:focus-visible {
+  outline: none;
+}
+
+.wide {
+  min-height: 52px;
+  padding: 0 16px;
+  gap: 10px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+
+.wide:focus-within {
+  border: none;
+  box-shadow: none;
+}
+
+.wide .input {
+  font-size: var(--fs-xl);
+}

@@ -1,0 +1,66 @@
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid;
+  border-radius: 7px;
+}
+
+.warn {
+  color: var(--warn);
+  border-color: var(--warn-bd);
+  background: var(--warn-bg);
+}
+
+.error {
+  color: var(--error);
+  border-color: var(--error);
+  background: var(--error-bg);
+}
+
+.compact {
+  padding: 6px 9px;
+}
+
+.icon {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.body {
+  flex-grow: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Verbatim from the core. It already names a cause and an action. */
+.message {
+  margin: 0;
+  font-size: var(--fs-md);
+  color: var(--text);
+}
+
+/* The stable code, shown so a bug report can quote it. */
+.code {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+
+.action {
+  flex-shrink: 0;
+  font-size: var(--fs-sm);
+  font-weight: 560;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  padding: 3px 9px;
+}
+
+.action:hover {
+  background: var(--bg-hover);
+}
