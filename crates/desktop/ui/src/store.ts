@@ -8,8 +8,9 @@
 
 import { create } from "zustand";
 import type { SearchHit } from "./api";
+import { applyTheme, loadTheme, saveTheme, type ThemeChoice } from "./theme";
 
-export type View = "search" | "files" | "status";
+export type View = "search" | "files" | "status" | "settings";
 export type Pane = "sidebar" | "results" | "detail";
 
 /**
@@ -53,6 +54,17 @@ interface UiState {
   sidebarCollapsed: boolean;
   focusedPane: Pane;
 
+  /**
+   * Which workspace the Files view is scoped to, by name. `null` is "all".
+   *
+   * UI state, not core state: it is a question this window is asking, and the
+   * answer comes back from `list_files` each time it changes.
+   */
+  workspaceFilter: string | null;
+
+  /** Appearance. Local to this window; persisted to localStorage. */
+  theme: ThemeChoice;
+
   /** Anchored to result identity, never to an index. */
   anchor: Anchor | null;
 
@@ -67,6 +79,8 @@ interface UiState {
 
   setView: (v: View) => void;
   setQuery: (q: string) => void;
+  setWorkspaceFilter: (name: string | null) => void;
+  setTheme: (t: ThemeChoice) => void;
   toggleSidebar: () => void;
   focusPane: (p: Pane) => void;
   cyclePane: (back: boolean) => void;
@@ -89,6 +103,8 @@ const PANES: Pane[] = ["sidebar", "results", "detail"];
 export const useUi = create<UiState>((set, get) => ({
   view: "search",
   query: "",
+  workspaceFilter: null,
+  theme: loadTheme(),
   sidebarCollapsed: false,
   focusedPane: "results",
   anchor: null,
@@ -100,6 +116,12 @@ export const useUi = create<UiState>((set, get) => ({
 
   setView: (view) => set({ view }),
   setQuery: (query) => set({ query }),
+  setWorkspaceFilter: (workspaceFilter) => set({ workspaceFilter }),
+  setTheme: (theme) => {
+    saveTheme(theme);
+    applyTheme(theme);
+    set({ theme });
+  },
   toggleSidebar: () =>
     set((s) => ({
       sidebarCollapsed: !s.sidebarCollapsed,

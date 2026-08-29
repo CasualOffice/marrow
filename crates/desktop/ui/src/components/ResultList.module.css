@@ -1,10 +1,21 @@
+/*
+ * `flex: 1 1 0`, not `flex-grow: 1`.
+ *
+ * With a basis of `auto` a flex item is sized from its content first and only
+ * then shrunk, and a virtualized canvas reports the height of the *whole*
+ * ranking — 200 rows at 100px is 20,000px of demand. The column then grows past
+ * the window and the footer goes with it. A zero basis makes the free space the
+ * only input, which is what "exactly the height between the field and the
+ * footer" means.
+ */
 .scroller {
-  flex-grow: 1;
+  flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   /* The list owns its own scroll context so a re-rank cannot reflow the panes
-     around it. */
+     around it, and paint containment means an overscrolling row cannot draw
+     over the footer. */
   overscroll-behavior: contain;
   contain: layout paint;
 }
@@ -29,4 +40,18 @@
   width: 100%;
   will-change: transform;
   transition: transform var(--motion-rerank) var(--ease);
+}
+
+/* Nothing selected and nothing typed. Quiet: this is not an empty state with
+   tips (GUI §4). */
+.idle {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-12);
+  text-align: center;
+  font-size: var(--fs-body);
+  color: var(--fg3);
 }

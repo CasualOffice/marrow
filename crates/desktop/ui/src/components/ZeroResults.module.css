@@ -1,80 +1,82 @@
 .wrap {
-  flex-grow: 1;
+  flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  padding: 24px 40px;
+  padding: var(--sp-16) var(--sp-10);
 }
 
 .panel {
   width: 100%;
-  max-width: 560px;
+  max-width: var(--card-measure);
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: var(--sp-10);
 }
 
 .headline {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--sp-2);
 }
 
 .title {
   margin: 0;
-  font-size: var(--fs-xl);
-  font-weight: 600;
+  font-family: var(--tight);
+  font-size: var(--fs-display);
+  line-height: var(--lh-tight);
+  font-weight: 500;
+  letter-spacing: var(--ls-tight);
 }
 
 .sub {
   margin: 0;
-  font-size: var(--fs-base);
-  color: var(--text-dim);
+  font-size: var(--fs-body);
+  color: var(--fg3);
 }
 
 .rule {
   height: 1px;
-  background: var(--border);
+  background: var(--line);
 }
 
 .section {
   display: flex;
   flex-direction: column;
-  gap: 11px;
+  gap: var(--sp-5);
 }
 
 .heading {
   margin: 0;
-  font-size: var(--fs-xs);
-  font-weight: 640;
+  font-size: var(--fs-sm);
+  font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text-faint);
+  color: var(--fg3);
 }
 
 /* A gap: a number, what it is, and the button that closes it. */
 .gap {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 11px 13px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--bg-raised);
+  gap: var(--sp-6);
+  padding: var(--sp-5) var(--sp-6);
+  border-radius: var(--r-surf);
+  box-shadow: var(--hairline);
 }
 
 .gapCount {
-  font-size: var(--fs-xl);
-  font-weight: 600;
+  font-size: var(--fs-head);
+  font-weight: 500;
   min-width: 44px;
-  color: var(--text-dim);
+  color: var(--fg3);
   font-variant-numeric: tabular-nums;
 }
 
 .warn {
-  color: var(--warn);
+  color: var(--warn-text);
 }
 
 .gapBody {
@@ -86,24 +88,28 @@
 }
 
 .gapTitle {
-  font-size: var(--fs-md);
-  color: var(--text);
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--fg);
 }
 
 .gapDetail {
-  font-size: var(--fs-sm);
-  color: var(--text-dim);
+  font-size: var(--fs-body);
+  color: var(--fg3);
 }
 
-/* Buttons, not instructions (GUI §5.3). */
+/* Buttons, not instructions (GUI §5.3). `--on-accent`, not `#fff`: the dark
+   accent is light and white on it fails contrast. */
 .gapAction {
   flex-shrink: 0;
-  font-size: var(--fs-sm);
-  font-weight: 560;
-  color: var(--bg);
+  height: var(--ctl-h-sm);
+  padding: 0 var(--ctl-pad);
+  font-size: var(--fs-ctl);
+  font-weight: 500;
+  color: var(--on-accent);
   background: var(--accent);
-  border-radius: 5px;
-  padding: 5px 11px;
+  border-radius: var(--r-ctrl);
+  white-space: nowrap;
 }
 
 .gapAction:hover {
@@ -113,18 +119,20 @@
 .chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
+  gap: var(--sp-3);
 }
 
 .chip {
-  font-size: var(--fs-md);
-  color: var(--text-dim);
-  border: 1px solid var(--border-strong);
-  border-radius: 5px;
-  padding: 3px 9px;
+  height: var(--ctl-h-sm);
+  padding: 0 var(--ctl-pad-sm);
+  font-size: var(--fs-ctl);
+  font-weight: 500;
+  color: var(--fg2);
+  border-radius: var(--r-pill);
+  box-shadow: var(--hairline);
 }
 
 .chip:hover {
-  color: var(--text);
-  background: var(--bg-hover);
+  color: var(--fg);
+  background: var(--hover);
 }

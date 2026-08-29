@@ -4,6 +4,7 @@
  * keyboard equivalent" — enforced by there being nothing else to call).
  */
 
+import { asUiError, openPath, revealPath } from "./api";
 import type { Anchor } from "./store";
 import { useUi } from "./store";
 
@@ -42,28 +43,60 @@ export async function copyCitation(anchor: Anchor): Promise<void> {
 }
 
 /**
- * Things the desktop shell cannot do yet.
+ * Hand the file to whatever the system opens it with (`⌘↵`).
  *
- * `commands.rs` exposes five read-only commands and a test asserts the surface
- * stays that way in M1, so "open in $EDITOR", "reveal in Finder", "index these
- * files" and "include this folder" have no command to call. They are still
- * bound to their keys and still rendered as buttons — a shortcut that silently
- * does nothing is worse than one that says why — and each names the command
- * that has to exist. See the report accompanying this UI.
+ * The core guards this by the index: only an indexed file can be opened, and
+ * the path goes to `open` as a single argv element rather than through a shell
+ * (SEC-011). A failure is the core's message, verbatim — it names a cause, and
+ * "could not open" invented here would name nothing.
+ */
+export async function openInSystem(path: string, label: string): Promise<void> {
+  const { notify } = useUi.getState();
+  try {
+    await openPath(path);
+    notify(`Opened ${label}`);
+  } catch (e) {
+    notify(asUiError(e).message);
+  }
+}
+
+/** Show the file in the system file manager (`⇧↵`). */
+export async function revealInFileManager(
+  path: string,
+  label: string,
+): Promise<void> {
+  const { notify } = useUi.getState();
+  try {
+    await revealPath(path);
+    notify(`Revealed ${label}`);
+  } catch (e) {
+    notify(asUiError(e).message);
+  }
+}
+
+/**
+ * Things the desktop shell still cannot do.
+ *
+ * `open_path` and `reveal_path` used to be on this list and are not any more —
+ * they exist, they are wired to `⌘↵` and `⇧↵`, and the notices that used to
+ * apologise for them are gone. What is left is genuinely absent from
+ * `commands.rs`, which exposes eight read-only commands and no mutation at all.
+ *
+ * These are still bound to their controls rather than hidden, because a
+ * shortcut that silently does nothing is worse than one that says why, and each
+ * one names the command that would have to exist.
  */
 export const MISSING: Record<string, string> = {
-  open:
-    'Opening in the default app needs a desktop command that does not exist yet ("open_path").',
   editor:
-    'Opening at a line in $EDITOR needs a desktop command that does not exist yet ("open_in_editor").',
-  reveal:
-    'Reveal in Finder needs a desktop command that does not exist yet ("reveal_in_file_manager").',
+    'Opening at a line in $EDITOR needs a desktop command that does not exist yet ("open_in_editor"). ⌘↵ opens the file in the system default instead.',
   hydrate:
     'Downloading cloud-only files needs a desktop command that does not exist yet ("workspace_hydrate").',
   policy:
     'Changing what a workspace indexes needs a desktop command that does not exist yet ("workspace_set_policy").',
   retry:
     'Retrying failed parses needs a desktop command that does not exist yet ("job_retry").',
+  reindex:
+    'Starting an index run needs a desktop command that does not exist yet ("index_run").',
 };
 
 export function unavailable(what: keyof typeof MISSING | string): void {

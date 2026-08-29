@@ -122,6 +122,25 @@ Milestones, not phases. Each one ends at something used daily. Derived from [Par
 
 ---
 
+## The core, and why it is not optional
+
+The product's premise is answering questions with citations over your own
+files. Lexical search is not that. Three things stand between here and the
+premise, and they share one dependency:
+
+```
+        model runtime  (Part 8)
+         │      │      │
+   embeddings  gen   structured output
+         │      │      │
+    semantic   Ask    graph extraction
+```
+
+So the runtime is built first — not as a detour, but because the other three
+cannot start without it. Part 8 §150 stages it S1–S6, and S1 (a Models page
+that correctly says what this machine can run, before anything downloads) is
+the part that must be right before a single byte is fetched.
+
 ## M7+ — Optional
 
 Build only what you miss. In rough order of likely value:

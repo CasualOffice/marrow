@@ -1,66 +1,109 @@
-.reason {
-  font-size: var(--fs-xs);
-  font-weight: 560;
+/* Marrow's badge vocabulary, in Enclave's pill geometry.
+ *
+ * The reference's pill is 20px tall, `--r-pill`, 11px/500, with a 12–14% tint
+ * of its own tone as the plate. What it says is different here — Enclave's
+ * pills classify a document's sensitivity, Marrow's say why a row is on screen
+ * and how far its location can be trusted — so the shape is borrowed and the
+ * palette is not. `--c-pub … --c-restr` are nowhere in this file.
+ *
+ * A11Y-003, non-negotiable: colour never carries meaning alone. Every rule
+ * below tints a *word*. Remove all the colour and the row still reads
+ * `exact`, `path`, `~approx`, `[self]`.
+ */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 18px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-pill);
+  font-size: var(--fs-sm);
+  font-weight: 500;
   white-space: nowrap;
-  letter-spacing: 0.01em;
+  flex-shrink: 0;
 }
+
+/* ── why it matched ──────────────────────────────────────────────────────── */
 
 .exact {
-  color: var(--exact);
+  color: var(--accent-text);
+  background: var(--accent-soft);
 }
+
 .semantic {
-  color: var(--semantic);
+  color: var(--reason-semantic);
+  background: var(--tint-semantic);
 }
+
+/*
+ * `path` is the row whose excerpt cannot contain the query, because the query
+ * is in the filename. It is the one reason that changes how the rest of the row
+ * should be read, so it is the one drawn as an outline rather than a fill —
+ * different in shape, not only in hue.
+ */
 .path {
-  color: var(--text-dim);
+  color: var(--fg2);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
 }
+
 .recent {
-  color: var(--recent);
+  color: var(--warn-text);
+  background: var(--tint-warn);
 }
 
-.badge {
-  font-size: var(--fs-xs);
-  font-weight: 560;
-  white-space: nowrap;
-  border-radius: 3px;
-  padding: 0 4px;
-  border: 1px solid currentColor;
-  line-height: 1.5;
-}
+/* ── how far the location can be trusted ─────────────────────────────────── */
 
-/* Tinted, but the word `~approx` is what carries the meaning. */
 .approx {
-  color: var(--warn);
+  color: var(--warn-text);
+  background: var(--tint-warn);
 }
+
+/* ── origin: invariant #13, an agent wrote it and it cannot be cited ─────── */
 
 .self {
-  color: var(--text-dim);
-  font-family: var(--font-mono);
+  color: var(--danger);
+  background: var(--tint-danger);
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
 }
+
+/* ── workspace / index state ─────────────────────────────────────────────── */
 
 .state {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--sp-3);
+  height: 20px;
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-pill);
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: 500;
   white-space: nowrap;
 }
 
 .dot {
   width: 6px;
   height: 6px;
-  border-radius: 50%;
+  border-radius: var(--r-dot);
   background: currentColor;
   flex-shrink: 0;
 }
 
 .ok {
   color: var(--ok);
+  background: var(--tint-ok);
 }
 .warn {
-  color: var(--warn);
+  color: var(--warn-text);
+  background: var(--tint-warn);
 }
 .error {
-  color: var(--error);
+  color: var(--danger);
+  background: var(--tint-danger);
+}
+.plain {
+  color: var(--fg2);
+  background: var(--sunken);
 }

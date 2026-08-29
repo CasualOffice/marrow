@@ -126,6 +126,12 @@ typed_id!(
     ParseId
 );
 typed_id!(
+    /// One request to the model supervisor (Part 8 §143). Names the scratch
+    /// directory, the queue entry and the cancellation token, so a request that
+    /// is cancelled mid-flight can be found in all three.
+    RequestId
+);
+typed_id!(
     /// A machine. Carried on canonical rows as `origin_device_id` (SYNC-006)
     /// so a future multi-device merge is possible; unused on one device.
     DeviceId

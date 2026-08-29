@@ -1,53 +1,69 @@
+/* The field. Sunken plate, hairline, no CSS border — shadow is the border in
+   this system, which is what keeps a control from gaining a 1px of layout the
+   moment it is focused. */
 .field {
   display: flex;
   align-items: center;
-  gap: 7px;
-  min-height: 30px;
-  padding: 0 9px;
-  background: var(--bg-raised);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
+  gap: var(--sp-3);
+  min-height: var(--ctl-h-lg);
+  padding: 0 var(--sp-4);
+  background: var(--sunken);
+  border-radius: var(--r-ctrl);
+  box-shadow: var(--hairline);
 }
 
-/* Focus is the accent's other job. A ring, not a colour change. */
+/*
+ * Focus: the opaque accent as a ring, with `--accent-ring` as the glow behind
+ * it. The wash alone measures under 2.5:1 and would fail WCAG 1.4.11; it is
+ * good at being a glow and bad at being a line. Both, in that order.
+ */
 .field:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-wash);
+  box-shadow:
+    0 0 0 var(--focus-ring-w) var(--accent),
+    0 0 0 5px var(--accent-ring);
+  background: var(--sheet);
 }
 
 .icon {
-  color: var(--text-faint);
+  color: var(--fg3);
+  flex-shrink: 0;
+}
+
+.field:focus-within .icon {
+  color: var(--fg2);
 }
 
 .input {
   flex-grow: 1;
   min-width: 0;
-  color: var(--text);
+  font-size: var(--fs-body);
+  color: var(--fg);
   background: none;
 }
 
 .input::placeholder {
-  color: var(--text-faint);
+  color: var(--fg3);
 }
 
 .input:focus-visible {
   outline: none;
 }
 
+/* The quick-find lens: no plate at all, the panel is the field. */
 .wide {
-  min-height: 52px;
-  padding: 0 16px;
-  gap: 10px;
+  min-height: 50px;
+  padding: 0 var(--sp-8);
+  gap: var(--sp-5);
   background: transparent;
-  border: none;
   border-radius: 0;
+  box-shadow: none;
 }
 
 .wide:focus-within {
-  border: none;
+  background: transparent;
   box-shadow: none;
 }
 
 .wide .input {
-  font-size: var(--fs-xl);
+  font-size: var(--fs-head);
 }

@@ -13,6 +13,7 @@ import type { JSX, SVGProps } from "react";
 export type IconName =
   | "search"
   | "file"
+  | "fileDim"
   | "folder"
   | "ask"
   | "activity"
@@ -34,6 +35,14 @@ const PATHS: Record<IconName, JSX.Element> = {
   file: (
     <>
       <path d="M9 1.5H4a1.5 1.5 0 0 0-1.5 1.5v10A1.5 1.5 0 0 0 4 14.5h8a1.5 1.5 0 0 0 1.5-1.5V6z" />
+      <path d="M9 1.5V6h4.5" />
+    </>
+  ),
+  /* A file the index holds by name and date only: the page corner is there,
+     the ruled lines that stand for readable content are not. */
+  fileDim: (
+    <>
+      <path d="M9 1.5H4a1.5 1.5 0 0 0-1.5 1.5v10A1.5 1.5 0 0 0 4 14.5h8a1.5 1.5 0 0 0 1.5-1.5V6z" strokeDasharray="2.4 2" />
       <path d="M9 1.5V6h4.5" />
     </>
   ),
@@ -81,7 +90,7 @@ export interface IconProps extends Omit<SVGProps<SVGSVGElement>, "children"> {
   size?: number;
 }
 
-export function Icon({ name, size = 15, ...rest }: IconProps) {
+export function Icon({ name, size = 14, ...rest }: IconProps) {
   return (
     <svg
       width={size}
@@ -89,7 +98,7 @@ export function Icon({ name, size = 15, ...rest }: IconProps) {
       viewBox="0 0 16 16"
       fill="none"
       stroke="currentColor"
-      strokeWidth={1.5}
+      strokeWidth={1.8}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"

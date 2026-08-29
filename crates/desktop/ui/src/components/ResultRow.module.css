@@ -1,43 +1,57 @@
 .row {
   height: var(--result-row-h);
-  padding: 9px 12px;
-  border-bottom: 1px solid var(--border);
-  /* The 2px left edge is always present so selecting a row never shifts its
-     content sideways by 2px. Only its colour changes. */
-  border-left: 2px solid transparent;
+  padding: var(--sp-4) var(--sp-6) var(--sp-4) var(--sp-5);
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--sp-1);
   overflow: hidden;
   background: transparent;
+  position: relative;
+  box-shadow: inset 0 -1px 0 var(--line);
 }
 
 .row:hover {
-  background: var(--bg-hover);
+  background: var(--hover);
 }
 
 .selected,
 .selected:hover {
-  background: var(--bg-sel);
-  border-left-color: var(--accent);
+  background: var(--selected);
+}
+
+/*
+ * The cursor is a 2px accent bar inset from the row edges — the reference's
+ * selected-row marker. Absolutely positioned, so selecting a row never shifts
+ * its content sideways.
+ */
+.selected::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: var(--sp-3);
+  bottom: var(--sp-3);
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  z-index: var(--z-accent);
 }
 
 .head {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  align-items: center;
+  gap: var(--sp-4);
   min-width: 0;
 }
 
-/* 1 — path:line. Bold, first, its own line. */
+/* 1 — path:line. First, its own line. */
 .location {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   align-items: baseline;
-  font-size: var(--fs-base);
-  font-weight: 590;
-  color: var(--text);
+  font-size: var(--fs-row);
+  font-weight: 450;
+  color: var(--fg);
   overflow: hidden;
   white-space: nowrap;
 }
@@ -56,7 +70,8 @@
   max-width: 45%;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--text-dim);
+  color: var(--fg3);
+  font-weight: 400;
 }
 
 .base {
@@ -64,33 +79,50 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-weight: 500;
 }
 
 .lineNo {
   flex: 0 0 auto;
+  color: var(--fg3);
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  padding-left: 1px;
+}
+
+/* Where the query actually is. A wash, not a block fill: the term has to be
+   findable at a glance without the row turning into a highlighter test. */
+.mark {
+  background: var(--accent-soft);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
 }
 
 /* 2 — reason and age, right-aligned and dim. */
 .meta {
   flex: 0 0 auto;
   display: flex;
-  align-items: baseline;
-  gap: 7px;
+  align-items: center;
+  gap: var(--sp-3);
 }
 
 .age {
+  font-family: var(--mono);
   font-size: var(--fs-xs);
-  color: var(--text-faint);
+  color: var(--fg3);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
 .jump {
-  font-size: var(--fs-xs);
-  color: var(--text-faint);
-  border: 1px solid var(--border-strong);
-  border-radius: 3px;
-  padding: 0 3px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg3);
+  background: var(--sunken);
+  box-shadow: inset 0 -1px 0 var(--line-strong);
+  border-radius: var(--r-chip);
+  padding: 1px var(--sp-2);
   opacity: 0;
 }
 
@@ -99,21 +131,39 @@
   opacity: 1;
 }
 
-/* 3 — the excerpt, on a raised background. Always two lines tall so that a
+/* 3 — the excerpt, on a sunken plate. Always the same height so that a
    re-rank moves rows without resizing them. */
 .excerpt {
   font-size: var(--fs-sm);
   line-height: 1.5;
-  color: var(--text-dim);
-  background: var(--bg-raised);
-  border-radius: var(--radius-sm);
-  padding: 4px 6px;
-  height: calc(var(--fs-sm) * 1.5 * 2 + 8px);
+  color: var(--fg2);
+  background: var(--sunken);
+  border-radius: var(--r-chip);
+  padding: var(--sp-2) var(--sp-3);
+  height: calc(var(--fs-sm) * 1.5 * 2 + var(--sp-4));
   overflow: hidden;
 }
 
 .selected .excerpt {
-  background: var(--bg);
+  background: var(--sheet);
+  box-shadow: var(--hairline);
+}
+
+/* A path match: what is on the plate is context, not the hit. Left rule and
+   dimmer text, so it reads as an aside at a glance and never as an excerpt
+   that mysteriously lacks the search term. */
+.excerptAside {
+  color: var(--fg3);
+  box-shadow: inset 2px 0 0 var(--line-strong);
+}
+
+.pathNote {
+  font-family: var(--sans);
+  font-size: var(--fs-xs);
+  color: var(--fg3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .excerptLine {
@@ -125,7 +175,7 @@
 /* 4 — breadcrumb, dimmed, last. */
 .crumb {
   font-size: var(--fs-xs);
-  color: var(--text-faint);
+  color: var(--fg3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

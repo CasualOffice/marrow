@@ -30,7 +30,7 @@ import { Kbd, KeyHint } from "./Kbd";
 import { ProvenanceBadge, ReasonBadge, SelfBadge } from "./Badges";
 import { useDebounced, useSearch } from "../queries";
 import { anchorOf, hitKey, useUi } from "../store";
-import { copyCitation, unavailable } from "../actions";
+import { copyCitation, openInSystem, revealInFileManager } from "../actions";
 import type { SearchHit } from "../api";
 
 /**
@@ -119,7 +119,10 @@ export function QuickFind() {
       e.preventDefault();
       const hit = hits[index];
       if (!hit) return;
-      if (e.shiftKey) unavailable("reveal");
+      const label = baseOf(hit.relativePath);
+      // Both verbs are real now; neither says "no such command".
+      if (e.shiftKey) void revealInFileManager(hit.path, label);
+      else if (meta) void openInSystem(hit.path, label);
       else openInMarrow(hit);
       return;
     }
@@ -199,6 +202,7 @@ export function QuickFind() {
 
         <div className={styles.footer}>
           <KeyHint keys="↵" label="Return" action="open in Marrow" />
+          <KeyHint keys="⌘↵" label="Command Return" action="open in the system" />
           <KeyHint
             keys={`⌘1–${Math.max(1, Math.min(hits.length, 9))}`}
             label="Command number"

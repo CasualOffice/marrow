@@ -5,6 +5,17 @@
  * of them calls the same function the mouse calls. That is what makes "every
  * action reachable by mouse is reachable by keyboard" true by construction
  * rather than by review.
+ *
+ * The open verbs, after `open_path` / `reveal_path` arrived — Enclave's
+ * *peek before open*, which is the pattern this layout already implies:
+ *
+ *   ↓ ↑ j k   move the cursor; the detail pane follows it. This is the peek,
+ *             and it costs nothing, so it happens continuously.
+ *   ↵         read it here: focus the preview pane.
+ *   ⌘↵        hand the file to the system's default application.
+ *   ⇧↵        reveal it in the file manager.
+ *
+ * None of the three says "that command does not exist" any more.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -15,10 +26,12 @@ import { Sidebar } from "./components/Sidebar";
 import { SearchView } from "./components/SearchView";
 import { FilesView } from "./components/FilesView";
 import { StatusView } from "./components/StatusView";
+import { SettingsView } from "./components/SettingsView";
 import { QuickFind } from "./components/QuickFind";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { Notice } from "./components/Notice";
-import { count } from "./lib/format";
+import { cx } from "./lib/cx";
+import { baseOf, count } from "./lib/format";
 import {
   useDebounced,
   useIndexHealth,
@@ -26,8 +39,8 @@ import {
   useSettledFlag,
   useWorkspaces,
 } from "./queries";
-import { anchorOf, hitKey, useUi } from "./store";
-import { copyCitation, unavailable } from "./actions";
+import { anchorOf, hitKey, useUi, type View } from "./store";
+import { copyCitation, openInSystem, revealInFileManager } from "./actions";
 import type { SearchHit } from "./api";
 
 /** How long a fetch may run before the footer admits it is running (GUI §5.2). */
@@ -35,6 +48,13 @@ const SLOW_AFTER_MS = 150;
 
 /** A stable empty ranking, so "no results" is not a new array every render. */
 const NO_HITS: readonly SearchHit[] = [];
+
+const TITLES: Record<View, string> = {
+  search: "Marrow",
+  files: "Files",
+  status: "Status",
+  settings: "Settings",
+};
 
 export function App() {
   const view = useUi((s) => s.view);
@@ -46,6 +66,7 @@ export function App() {
   const focusPane = useUi((s) => s.focusPane);
   const cyclePane = useUi((s) => s.cyclePane);
   const toggleSidebar = useUi((s) => s.toggleSidebar);
+  const collapsed = useUi((s) => s.sidebarCollapsed);
 
   const debounced = useDebounced(query);
   const searchQ = useSearch(debounced);
@@ -94,7 +115,7 @@ export function App() {
     const r = searchQ.data;
     if (!r || r.query === "") return;
     announce(
-      `${count(r.total)} ${r.total === 1 ? "result" : "results"} for ${r.query}`,
+      `${count(r.matched)} ${r.matched === 1 ? "result" : "results"} for ${r.query}`,
     );
   }, [searchQ.data, announce]);
 
@@ -105,13 +126,8 @@ export function App() {
     [setAnchor],
   );
 
-  /**
-   * `↵`. The only "open" the command surface supports is in-window: reading a
-   * bounded region and showing it beside the citation. Opening in the default
-   * app or in `$EDITOR` needs a Rust command that does not exist (see
-   * actions.ts), so `⌘↵` says so instead of doing nothing.
-   */
-  const open = useCallback(
+  /** `↵` — read it here. The pane is already showing it; this hands it focus. */
+  const peek = useCallback(
     (hit: SearchHit) => {
       setAnchor(anchorOf(hit));
       focusPane("detail");
@@ -135,8 +151,8 @@ export function App() {
   /* ── keyboard ──────────────────────────────────────────────────────────── */
 
   // The handler reads live values through a ref so it can be bound once.
-  const live = useRef({ hits, anchor, move, open, select, query });
-  live.current = { hits, anchor, move, open, select, query };
+  const live = useRef({ hits, anchor, move, peek, select, query });
+  live.current = { hits, anchor, move, peek, select, query };
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -176,7 +192,7 @@ export function App() {
         e.preventDefault();
         const hit = s.hits[Number(e.key) - 1];
         if (hit) {
-          s.open(hit);
+          s.peek(hit);
           setScrollNonce((n) => n + 1);
         }
         return;
@@ -222,12 +238,21 @@ export function App() {
         return;
       }
       if (e.key === "Enter") {
-        const hit = s.hits.find((h) => hitKey(h) === s.anchor?.key);
-        if (!hit) return;
+        // The anchor, not the hit: `⌘↵` and `⇧↵` must keep working when the
+        // selected file has dropped out of the current ranking.
+        const a = s.anchor;
+        if (!a) return;
         e.preventDefault();
-        if (e.shiftKey) unavailable("reveal");
-        else if (meta) unavailable("editor");
-        else s.open(hit);
+        const label = baseOf(a.relativePath);
+        if (e.shiftKey) {
+          void revealInFileManager(a.path, label);
+        } else if (meta) {
+          void openInSystem(a.path, label);
+        } else {
+          const hit = s.hits.find((h) => hitKey(h) === a.key);
+          if (hit) s.peek(hit);
+          else useUi.getState().focusPane("detail");
+        }
       }
     };
 
@@ -270,31 +295,39 @@ export function App() {
 
   return (
     <div className={styles.app}>
-      <TitleBar title={view === "search" ? "Marrow" : titleFor(view)} />
+      <TitleBar title={TITLES[view]} />
 
-      <div className={styles.body}>
+      <div className={cx(styles.body, collapsed && styles.collapsed)}>
         <Sidebar ref={sidebarRef} />
 
-        {view === "search" && (
-          <SearchView
-            query={query}
-            onQueryChange={setQuery}
-            response={searchQ.data}
-            error={searchQ.error ?? null}
-            slow={slow}
-            anchor={anchor}
-            selectedHit={selectedHit}
-            scrollNonce={scrollNonce}
-            onSelect={select}
-            onOpen={open}
-            searchRef={searchRef}
-            resultsRef={resultsRef}
-            detailRef={detailRef}
-            idle={idle}
-          />
-        )}
-        {view === "files" && <FilesView detailRef={detailRef} />}
-        {view === "status" && <StatusView />}
+        {/*
+          One sheet, and every view is a flex row inside it. The sheet clips,
+          so a pane that miscalculates its own height can no longer paint over
+          the window edge — the failure the user saw as "lower part is hidden".
+        */}
+        <div className={styles.sheet}>
+          {view === "search" && (
+            <SearchView
+              query={query}
+              onQueryChange={setQuery}
+              response={searchQ.data}
+              error={searchQ.error ?? null}
+              slow={slow}
+              anchor={anchor}
+              selectedHit={selectedHit}
+              scrollNonce={scrollNonce}
+              onSelect={select}
+              onOpen={peek}
+              searchRef={searchRef}
+              resultsRef={resultsRef}
+              detailRef={detailRef}
+              idle={idle}
+            />
+          )}
+          {view === "files" && <FilesView detailRef={detailRef} />}
+          {view === "status" && <StatusView />}
+          {view === "settings" && <SettingsView />}
+        </div>
       </div>
 
       <QuickFind />
@@ -302,8 +335,4 @@ export function App() {
       <Notice />
     </div>
   );
-}
-
-function titleFor(view: string): string {
-  return view === "files" ? "Files" : "Status";
 }

@@ -41,6 +41,8 @@ Written after the spec, and they win over it for the surfaces they cover.
 | [UX.md](UX.md) | **Terminal + MCP** — command surface, result rendering, errors, machine output |
 | [LLD.md](LLD.md) | **Internals** — layering, patterns used *and rejected*, concurrency, error strategy, seams, testing |
 
+| **8** | [Part 8 — Model Runtime](Part_8_Model_Runtime.md) | §136–146. Hardware probe and live sampling, model registry and recommendation, dynamic loading, **the supervisor** (admission, circuit breaker, queues, model workspace), cloud providers, loading states | **Core.** This is the foundation for semantic search, Ask, and graph extraction alike |
+
 **Conflict rule:** later parts supersede earlier ones, and the design docs supersede the spec for their surface. Part 7 wins over Parts 1–6.
 
 ---

@@ -21,10 +21,12 @@ import {
   asUiError,
   fileDetail,
   indexHealth,
+  listFiles,
   listWorkspaces,
   readRegion,
   search,
   type FileDetail,
+  type FileRow,
   type IndexHealth,
   type SearchResponse,
   type UiError,
@@ -82,6 +84,44 @@ export function useWorkspaces(): UseQueryResult<WorkspaceRow[], UiError> {
     // A degraded workspace must become visible in the sidebar without
     // navigating (GUI §11), so this polls rather than waiting for a visit.
     refetchInterval: 30_000,
+    retry: false,
+  });
+}
+
+/** How many files the browser lists at once. Newest first, so this is a window
+ *  onto the top of the index rather than a page through all of it. */
+export const FILES_LIMIT = 500;
+
+/**
+ * The Files browser.
+ *
+ * Unconditional: no query, no `enabled` gate. That is the whole point — the
+ * previous version was built on `search`, which returns nothing without a
+ * query, so a 35,000-file index rendered an empty column.
+ *
+ * The prefix is debounced like the search field and for the same reason, but a
+ * cleared box is not debounced at all: there is nothing to coalesce and the
+ * full list should come back immediately.
+ */
+export function useFiles(
+  workspace: string | null,
+  prefix: string,
+  limit = FILES_LIMIT,
+): UseQueryResult<FileRow[], UiError> {
+  const p = prefix.trim();
+  return useQuery<FileRow[], UiError>({
+    queryKey: ["files", workspace, p, limit],
+    queryFn: () =>
+      listFiles({
+        workspace: workspace ?? undefined,
+        prefix: p === "" ? undefined : p,
+        limit,
+      }).catch((e) => Promise.reject(asUiError(e))),
+    // A known list is never replaced by a loading state while a narrower one
+    // is in flight (GUI §5.2, "no spinner ever gates a result already known").
+    placeholderData: keepPreviousData,
+    staleTime: 15_000,
+    gcTime: 5 * 60_000,
     retry: false,
   });
 }

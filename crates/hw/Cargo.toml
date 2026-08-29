@@ -1,0 +1,15 @@
+[package]
+name = "marrow-hw"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+marrow-core.workspace = true
+serde.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"

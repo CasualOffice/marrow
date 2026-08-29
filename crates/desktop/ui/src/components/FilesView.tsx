@@ -1,39 +1,34 @@
 /**
  * Files — "browse by workspace/folder; the index as a filesystem you can trust"
- * (GUI §4), laid out like design/FileDetail.dc.html: a 280px file column beside
- * the intelligence panel.
+ * (GUI §4).
  *
- * There is no `list_files` command, so this browses the index through the one
- * command that returns files: `search`, deduplicated by `fileId`. That is why
- * the column is headed by a filter field rather than a folder tree — the shape
- * of the command surface is visible in the shape of the UI, which is the honest
- * outcome. The missing command is named in the accompanying report.
+ * **Built on `list_files`, not on `search`.** It used to be built on `search`,
+ * which needs a query, so with no query it rendered "Type to filter the index."
+ * over an index holding 35,000 files — a browser that browses nothing. Browsing
+ * is not searching, and it now has its own command:
+ *
+ *   • rows appear immediately, newest first, with no query at all
+ *   • the box filters by path prefix/substring, server-side
+ *   • the sidebar scopes it to one workspace
+ *   • `metadataOnly` rows are marked, because a file you can find by name but
+ *     not by what is inside it is a different thing from an indexed one, and a
+ *     list that draws them identically is lying by omission
+ *
+ * Layout is Enclave's list-beside-peek: pick a row on the left, read it on the
+ * right, without leaving the list.
  */
 
 import { useMemo, useRef, useState, type RefObject } from "react";
 
 import styles from "./FilesView.module.css";
 import { cx } from "../lib/cx";
-import { baseOf, count, dirOf } from "../lib/format";
+import { age, baseOf, bytes, count, dirOf, squeezeDir } from "../lib/format";
 import { Icon } from "./Icon";
 import { SearchField } from "./SearchField";
 import { DetailPane } from "./DetailPane";
 import { ErrorNotice } from "./ErrorNotice";
-import { useDebounced, useSearch } from "../queries";
+import { useDebounced, useFiles, FILES_LIMIT } from "../queries";
 import { useUi, type Anchor } from "../store";
-import type { SearchHit } from "../api";
-
-/** One row per file, not per chunk. The first hit wins the excerpt. */
-function uniqueFiles(hits: readonly SearchHit[]): SearchHit[] {
-  const seen = new Set<string>();
-  const out: SearchHit[] = [];
-  for (const h of hits) {
-    if (seen.has(h.fileId)) continue;
-    seen.add(h.fileId);
-    out.push(h);
-  }
-  return out;
-}
 
 export function FilesView({
   detailRef,
@@ -41,101 +36,168 @@ export function FilesView({
   detailRef: RefObject<HTMLDivElement>;
 }) {
   const [filter, setFilter] = useState("");
-  const [anchor, setAnchor] = useState<Anchor | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
   const fieldRef = useRef<HTMLInputElement>(null);
 
+  const workspace = useUi((s) => s.workspaceFilter);
+  const setWorkspace = useUi((s) => s.setWorkspaceFilter);
+
   const debounced = useDebounced(filter);
-  const q = useSearch(debounced, 200);
-  const files = useMemo(() => uniqueFiles(q.data?.hits ?? []), [q.data]);
-  const selectedHit = files.find((f) => f.path === anchor?.path) ?? null;
-  const notify = useUi((s) => s.notify);
+  const q = useFiles(workspace, debounced);
+  const rows = useMemo(() => q.data ?? [], [q.data]);
+
+  const row = rows.find((f) => f.path === selected) ?? null;
+  const anchor: Anchor | null =
+    row === null
+      ? null
+      : {
+          key: row.path,
+          path: row.path,
+          relativePath: row.relativePath,
+          // The file, not a match inside it: the preview starts at line 1
+          // rather than at somebody else's hit.
+          line: null,
+          location: row.relativePath,
+        };
+
+  const metadataOnly = rows.filter((f) => f.metadataOnly).length;
+  const capped = rows.length >= FILES_LIMIT;
 
   return (
     <>
       <div className={styles.column}>
         <div className={styles.head}>
-          <h2 className={styles.heading}>Files</h2>
-          <span className={styles.headCount}>
-            {q.data ? count(files.length) : "—"}
+          <h2 className={styles.heading}>
+            {workspace ?? "All workspaces"}
+          </h2>
+          {workspace !== null && (
+            <button
+              type="button"
+              className={styles.clear}
+              onClick={() => setWorkspace(null)}
+            >
+              <Icon name="close" size={10} />
+              <span className="srOnly">Show all workspaces</span>
+            </button>
+          )}
+          <span className={cx("mono", styles.headCount)}>
+            {q.data === undefined ? "—" : count(rows.length)}
           </span>
         </div>
+
+        {/* Outside every conditional below, so the input is never remounted by
+            a branch swap while it is being typed into. */}
         <div className={styles.filterRow}>
           <SearchField
             ref={fieldRef}
             value={filter}
             onChange={setFilter}
-            placeholder="Filter by name or content"
-            label="Filter files"
+            placeholder="Filter by path"
+            label="Filter files by path"
           />
         </div>
 
-        {q.isError ? (
+        {q.isError && (
           <div className={styles.pad}>
             <ErrorNotice error={q.error} action={null} compact />
           </div>
-        ) : (
-          <ul className={styles.list}>
-            {files.map((f) => {
-              const selected = f.path === anchor?.path;
-              return (
-                <li key={f.fileId}>
-                  <button
-                    type="button"
-                    className={cx(styles.row, selected && styles.selected)}
-                    onClick={() =>
-                      setAnchor({
-                        key: f.fileId,
-                        path: f.path,
-                        relativePath: f.relativePath,
-                        // The file, not a match inside it: the preview starts
-                        // at line 1 rather than at somebody else's hit.
-                        line: null,
-                        location: f.relativePath,
-                      })
-                    }
-                  >
-                    <Icon name="file" size={13} className={styles.rowIcon} />
-                    <span className={styles.rowName}>
-                      {baseOf(f.relativePath)}
-                    </span>
-                    <span className={cx("mono", styles.rowDir)}>
-                      {dirOf(f.relativePath)}
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-            {files.length === 0 && (
-              <li className={styles.none}>
-                {filter.trim() === ""
-                  ? "Type to filter the index."
-                  : q.data === undefined
-                    ? "—"
-                    : "Nothing in the index matches that."}
-              </li>
-            )}
-          </ul>
         )}
 
+        <ul className={styles.list}>
+          {rows.map((f) => {
+            const dir = dirOf(f.relativePath);
+            return (
+              <li key={f.path}>
+                <button
+                  type="button"
+                  aria-current={f.path === selected ? "true" : undefined}
+                  className={cx(
+                    styles.row,
+                    f.path === selected && styles.selected,
+                  )}
+                  onClick={() => setSelected(f.path)}
+                >
+                  <Icon
+                    name={f.metadataOnly ? "fileDim" : "file"}
+                    size={14}
+                    className={cx(
+                      styles.rowIcon,
+                      f.metadataOnly && styles.rowIconDim,
+                    )}
+                  />
+                  <span className={styles.rowMain}>
+                    <span className={styles.rowName}>
+                      {dir !== "" && (
+                        <span className={styles.rowDir}>{squeezeDir(dir)}</span>
+                      )}
+                      <span className={styles.rowBase}>
+                        {baseOf(f.relativePath)}
+                      </span>
+                    </span>
+                    {/*
+                      The whole reason this row is different. `metadataOnly`
+                      means the file is in the index by name and date only —
+                      searching its contents will never find it — so it says
+                      so in words, and the tint is only reinforcement.
+                    */}
+                    {f.metadataOnly ? (
+                      <span className={styles.rowNote}>
+                        name and date only · contents not searchable
+                      </span>
+                    ) : (
+                      <span className={cx("mono", styles.rowMeta)}>
+                        {count(f.chunks)} chunks · {bytes(f.sizeBytes)}
+                      </span>
+                    )}
+                  </span>
+                  <span className={cx("mono", styles.rowAge)}>
+                    {f.modifiedMs === null ? "—" : age(f.modifiedMs)}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+
+          {!q.isError && rows.length === 0 && (
+            <li className={styles.none}>
+              {q.data === undefined
+                ? "—"
+                : filter.trim() === ""
+                  ? workspace === null
+                    ? "The index is empty. Nothing has been indexed yet."
+                    : `Nothing is indexed in ${workspace}.`
+                  : "No indexed path contains that."}
+            </li>
+          )}
+        </ul>
+
+        {/* Honest about the window: the list is the newest N, not all of them,
+            and it says which. */}
         <div className={styles.foot}>
-          <button
-            type="button"
-            className={styles.footNote}
-            onClick={() =>
-              notify(
-                'Browsing folders needs a desktop command that does not exist yet ("list_files"). This column filters the index instead.',
-              )
-            }
-          >
-            Filtered from the index
-          </button>
+          <span>
+            {q.data === undefined
+              ? "—"
+              : capped
+                ? `newest ${count(rows.length)}`
+                : `${count(rows.length)} ${rows.length === 1 ? "file" : "files"}`}
+          </span>
+          {metadataOnly > 0 && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span className={styles.footWarn}>
+                {count(metadataOnly)} not searchable
+              </span>
+            </>
+          )}
+          <span className={styles.grow} />
+          <span>newest first</span>
         </div>
       </div>
 
       <DetailPane
         ref={detailRef}
         anchor={anchor}
-        hit={selectedHit}
+        hit={null}
         idle="Pick a file to see everything the index knows about it."
       />
     </>

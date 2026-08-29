@@ -2204,6 +2204,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "marrow-hw"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "marrow-core",
+ "serde",
+ "tracing",
+]
+
+[[package]]
 name = "marrow-index"
 version = "0.1.0"
 dependencies = [
@@ -2240,6 +2250,18 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "marrow-model"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "marrow-core",
+ "marrow-hw",
+ "serde",
+ "serde_json",
  "tracing",
 ]
 

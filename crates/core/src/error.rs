@@ -13,118 +13,122 @@
 
 use std::fmt;
 
-/// Stable, machine-readable error identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Code {
+/// Declares the whole code table in one place.
+///
+/// The enum, its wire strings, its class and its retryability are generated
+/// from a single list, and so is [`Code::ALL`]. That last one is the point:
+/// the hand-maintained list this replaced had already gone stale —
+/// `DB_SCHEMA_TOO_NEW` existed for weeks with no test covering it, because
+/// adding a variant and forgetting the test list is silent.
+macro_rules! codes {
+    ($( $(#[$meta:meta])* $variant:ident => $wire:literal, $class:ident, $retryable:literal; )*) => {
+        /// Stable, machine-readable error identity.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum Code {
+            $( $(#[$meta])* $variant, )*
+        }
+
+        impl Code {
+            /// Every code. Generated, so it cannot fall behind the enum.
+            pub const ALL: &'static [Code] = &[ $( Code::$variant, )* ];
+
+            /// Stable wire form. Never change these strings.
+            pub const fn as_str(self) -> &'static str {
+                match self { $( Code::$variant => $wire, )* }
+            }
+
+            /// Whether retrying the identical operation could plausibly succeed.
+            ///
+            /// Policy denials are always `false` — see the module note.
+            pub const fn retryable(self) -> bool {
+                match self { $( Code::$variant => $retryable, )* }
+            }
+
+            pub const fn class(self) -> Class {
+                match self { $( Code::$variant => Class::$class, )* }
+            }
+        }
+    };
+}
+
+codes! {
     // FS_ — filesystem
-    FsPermissionDenied,
-    FsNotFound,
-    FsLocked,
-    FsPlaceholderSkipped,
-    FsVolumeUnavailable,
-    FsPathEscapeBlocked,
-    FsNotUtf8Path,
+    FsPermissionDenied      => "FS_PERMISSION_DENIED",       Filesystem, false;
+    FsNotFound              => "FS_NOT_FOUND",               Filesystem, false;
+    FsLocked                => "FS_LOCKED",                  Filesystem, true;
+    FsPlaceholderSkipped    => "FS_PLACEHOLDER_SKIPPED",     Filesystem, false;
+    FsVolumeUnavailable     => "FS_VOLUME_UNAVAILABLE",      Filesystem, true;
+    FsPathEscapeBlocked     => "FS_PATH_ESCAPE_BLOCKED",     Filesystem, false;
+    FsNotUtf8Path           => "FS_NOT_UTF8_PATH",           Filesystem, false;
+
     // PAR_ — parsing
-    ParUnsupported,
-    ParCorrupt,
-    ParTimeout,
-    ParLowYield,
-    ParTruncated,
-    ParBudgetExceeded,
-    ParWorkerCrash,
+    ParUnsupported          => "PAR_UNSUPPORTED",            Parse, false;
+    ParCorrupt              => "PAR_CORRUPT",                Parse, false;
+    ParTimeout              => "PAR_TIMEOUT",                Parse, true;
+    ParLowYield             => "PAR_LOW_YIELD",              Parse, false;
+    ParTruncated            => "PAR_TRUNCATED",              Parse, false;
+    ParBudgetExceeded       => "PAR_BUDGET_EXCEEDED",        Parse, false;
+    ParWorkerCrash          => "PAR_WORKER_CRASH",           Parse, true;
+
     // IDX_ — derived indexes
-    IdxCorrupt,
-    IdxGenerationMismatch,
-    IdxRebuildRequired,
+    IdxCorrupt              => "IDX_CORRUPT",                Index, false;
+    IdxGenerationMismatch   => "IDX_GENERATION_MISMATCH",    Index, false;
+    IdxRebuildRequired      => "IDX_REBUILD_REQUIRED",       Index, false;
+
     // DB_ — canonical storage
-    DbBusy,
-    DbCorrupt,
-    DbMigrationFailed,
-    DbDiskFull,
-    DbWriterGone,
+    DbBusy                  => "DB_BUSY",                    Storage, true;
+    DbCorrupt               => "DB_CORRUPT",                 Storage, false;
+    DbMigrationFailed       => "DB_MIGRATION_FAILED",        Storage, false;
+    DbDiskFull              => "DB_DISK_FULL",               Storage, false;
+    DbWriterGone            => "DB_WRITER_GONE",             Storage, false;
     /// The database was written by a newer build. §107 requires refusing to
     /// open it rather than guessing at columns we do not know about.
-    DbSchemaTooNew,
+    DbSchemaTooNew          => "DB_SCHEMA_TOO_NEW",          Storage, false;
+
+    // MOD_ — the model runtime (Part 8 §142).
+    //
+    // The resource refusals are retryable because they describe a moment, not
+    // a fact: memory frees, the fans catch up, the queue drains. The rest are
+    // facts about this model on this machine, and retrying changes nothing.
+    /// Downloading it is a different operation, so retrying this one is a loop.
+    ModNotInstalled         => "MOD_NOT_INSTALLED",          Model, false;
+    /// The circuit breaker is open (§142.4). Retryable, but the supervisor —
+    /// not the caller — decides when the cooldown has elapsed.
+    ModSuspended            => "MOD_SUSPENDED",              Model, true;
+    ModInsufficientMemory   => "MOD_INSUFFICIENT_MEMORY",    Model, true;
+    ModThermalThrottled     => "MOD_THERMAL_THROTTLED",      Model, true;
+    ModOnBattery            => "MOD_ON_BATTERY",             Model, true;
+    ModQueueFull            => "MOD_QUEUE_FULL",             Model, true;
+    /// The asker went away before the request ran (SUP-006).
+    ModDeadlineExpired      => "MOD_DEADLINE_EXPIRED",       Model, false;
+    ModCancelled            => "MOD_CANCELLED",              Model, false;
+    ModWorkerCrash          => "MOD_WORKER_CRASH",           Model, true;
+    /// A download's SHA-256 did not match (SUP-014). The bytes on disk are
+    /// wrong and must be discarded before anything is retried.
+    ModIntegrityFailed      => "MOD_INTEGRITY_FAILED",       Model, false;
+    ModScratchExceeded      => "MOD_SCRATCH_EXCEEDED",       Model, false;
+    /// The model cannot do what was asked — no tool support, no thinking
+    /// budget (GEN-013).
+    ModUnsupportedCapability => "MOD_UNSUPPORTED_CAPABILITY", Model, false;
+
     // POL_ — policy (never retryable)
-    PolDenied,
-    PolApprovalRequired,
-    PolClassificationBlocked,
+    PolDenied               => "POL_DENIED",                 Policy, false;
+    PolApprovalRequired     => "POL_APPROVAL_REQUIRED",      Policy, false;
+    PolClassificationBlocked => "POL_CLASSIFICATION_BLOCKED", Policy, false;
+
     // CFG_ — configuration
-    CfgInvalid,
-    CfgUnsupportedVersion,
+    CfgInvalid              => "CFG_INVALID",                Config, false;
+    CfgUnsupportedVersion   => "CFG_UNSUPPORTED_VERSION",    Config, false;
+
     // INT_ — internal invariant violation; always a bug here, never the user's
-    IntInvariantViolated,
+    IntInvariantViolated    => "INT_INVARIANT_VIOLATED",     Internal, false;
 }
 
 impl Code {
-    /// Stable wire form. Never change these strings.
-    pub const fn as_str(self) -> &'static str {
-        use Code::*;
-        match self {
-            FsPermissionDenied => "FS_PERMISSION_DENIED",
-            FsNotFound => "FS_NOT_FOUND",
-            FsLocked => "FS_LOCKED",
-            FsPlaceholderSkipped => "FS_PLACEHOLDER_SKIPPED",
-            FsVolumeUnavailable => "FS_VOLUME_UNAVAILABLE",
-            FsPathEscapeBlocked => "FS_PATH_ESCAPE_BLOCKED",
-            FsNotUtf8Path => "FS_NOT_UTF8_PATH",
-            ParUnsupported => "PAR_UNSUPPORTED",
-            ParCorrupt => "PAR_CORRUPT",
-            ParTimeout => "PAR_TIMEOUT",
-            ParLowYield => "PAR_LOW_YIELD",
-            ParTruncated => "PAR_TRUNCATED",
-            ParBudgetExceeded => "PAR_BUDGET_EXCEEDED",
-            ParWorkerCrash => "PAR_WORKER_CRASH",
-            IdxCorrupt => "IDX_CORRUPT",
-            IdxGenerationMismatch => "IDX_GENERATION_MISMATCH",
-            IdxRebuildRequired => "IDX_REBUILD_REQUIRED",
-            DbBusy => "DB_BUSY",
-            DbCorrupt => "DB_CORRUPT",
-            DbMigrationFailed => "DB_MIGRATION_FAILED",
-            DbDiskFull => "DB_DISK_FULL",
-            DbWriterGone => "DB_WRITER_GONE",
-            DbSchemaTooNew => "DB_SCHEMA_TOO_NEW",
-            PolDenied => "POL_DENIED",
-            PolApprovalRequired => "POL_APPROVAL_REQUIRED",
-            PolClassificationBlocked => "POL_CLASSIFICATION_BLOCKED",
-            CfgInvalid => "CFG_INVALID",
-            CfgUnsupportedVersion => "CFG_UNSUPPORTED_VERSION",
-            IntInvariantViolated => "INT_INVARIANT_VIOLATED",
-        }
-    }
-
-    /// Whether retrying the identical operation could plausibly succeed.
-    ///
-    /// Policy denials are always `false` — see the module note.
-    pub const fn retryable(self) -> bool {
-        use Code::*;
-        matches!(
-            self,
-            FsLocked | FsVolumeUnavailable | ParTimeout | ParWorkerCrash | DbBusy
-        )
-    }
-
     /// Whether a failure isolates to one file, leaving the workspace running
     /// (FS-011). Storage and policy failures do not.
     pub const fn isolates_to_one_file(self) -> bool {
         matches!(self.class(), Class::Filesystem | Class::Parse)
-    }
-
-    pub const fn class(self) -> Class {
-        use Code::*;
-        match self {
-            FsPermissionDenied | FsNotFound | FsLocked | FsPlaceholderSkipped
-            | FsVolumeUnavailable | FsPathEscapeBlocked | FsNotUtf8Path => Class::Filesystem,
-            ParUnsupported | ParCorrupt | ParTimeout | ParLowYield | ParTruncated
-            | ParBudgetExceeded | ParWorkerCrash => Class::Parse,
-            IdxCorrupt | IdxGenerationMismatch | IdxRebuildRequired => Class::Index,
-            DbBusy | DbCorrupt | DbMigrationFailed | DbDiskFull | DbWriterGone | DbSchemaTooNew => {
-                Class::Storage
-            }
-            PolDenied | PolApprovalRequired | PolClassificationBlocked => Class::Policy,
-            CfgInvalid | CfgUnsupportedVersion => Class::Config,
-            IntInvariantViolated => Class::Internal,
-        }
     }
 }
 
@@ -134,6 +138,7 @@ pub enum Class {
     Parse,
     Index,
     Storage,
+    Model,
     Policy,
     Config,
     Internal,
@@ -263,40 +268,12 @@ mod tests {
     }
 
     #[test]
-    fn codes_are_unique_and_screaming_snake() {
-        let all = [
-            Code::FsPermissionDenied,
-            Code::FsNotFound,
-            Code::FsLocked,
-            Code::FsPlaceholderSkipped,
-            Code::FsVolumeUnavailable,
-            Code::FsPathEscapeBlocked,
-            Code::FsNotUtf8Path,
-            Code::ParUnsupported,
-            Code::ParCorrupt,
-            Code::ParTimeout,
-            Code::ParLowYield,
-            Code::ParTruncated,
-            Code::ParBudgetExceeded,
-            Code::ParWorkerCrash,
-            Code::IdxCorrupt,
-            Code::IdxGenerationMismatch,
-            Code::IdxRebuildRequired,
-            Code::DbBusy,
-            Code::DbCorrupt,
-            Code::DbMigrationFailed,
-            Code::DbDiskFull,
-            Code::DbWriterGone,
-            Code::PolDenied,
-            Code::PolApprovalRequired,
-            Code::PolClassificationBlocked,
-            Code::CfgInvalid,
-            Code::CfgUnsupportedVersion,
-            Code::IntInvariantViolated,
-        ];
-        let set: std::collections::HashSet<&str> = all.iter().map(|c| c.as_str()).collect();
-        assert_eq!(set.len(), all.len(), "duplicate error code string");
-        for c in all {
+    fn every_code_is_unique_and_screaming_snake() {
+        // Over `Code::ALL`, which is generated — so a code added tomorrow is
+        // covered by this test today.
+        let set: std::collections::HashSet<&str> = Code::ALL.iter().map(|c| c.as_str()).collect();
+        assert_eq!(set.len(), Code::ALL.len(), "duplicate error code string");
+        for c in Code::ALL {
             let s = c.as_str();
             assert!(s.contains('_'), "{s} must be PREFIX_NAME");
             assert!(
@@ -304,6 +281,55 @@ mod tests {
                     .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_'),
                 "{s} must be SCREAMING_SNAKE_CASE"
             );
+        }
+    }
+
+    #[test]
+    fn a_codes_prefix_matches_its_class() {
+        // The prefix is how a code is read in a log; a `MOD_` code in the
+        // storage class would make that reading wrong.
+        for c in Code::ALL {
+            let prefix = c.as_str().split('_').next().unwrap();
+            let expected = match c.class() {
+                Class::Filesystem => "FS",
+                Class::Parse => "PAR",
+                Class::Index => "IDX",
+                Class::Storage => "DB",
+                Class::Model => "MOD",
+                Class::Policy => "POL",
+                Class::Config => "CFG",
+                Class::Internal => "INT",
+            };
+            assert_eq!(
+                prefix,
+                expected,
+                "{} is in class {:?}",
+                c.as_str(),
+                c.class()
+            );
+        }
+    }
+
+    #[test]
+    fn a_model_resource_refusal_is_retryable_but_a_model_fact_is_not() {
+        // §142.3: resource refusals describe a moment and are overridable;
+        // the rest are facts about this model on this machine.
+        for c in [
+            Code::ModInsufficientMemory,
+            Code::ModThermalThrottled,
+            Code::ModOnBattery,
+            Code::ModQueueFull,
+        ] {
+            assert!(c.retryable(), "{c} describes a moment, not a fact");
+        }
+        for c in [
+            Code::ModNotInstalled,
+            Code::ModIntegrityFailed,
+            Code::ModUnsupportedCapability,
+            Code::ModCancelled,
+            Code::ModDeadlineExpired,
+        ] {
+            assert!(!c.retryable(), "{c} will not become true by waiting");
         }
     }
 

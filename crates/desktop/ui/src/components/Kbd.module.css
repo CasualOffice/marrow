@@ -1,17 +1,23 @@
+/* A key cap, as the reference draws one: mono, sunken, with a single inset
+   line at the bottom edge standing in for the key's lip. */
 .kbd {
   display: inline-block;
-  font-size: var(--fs-xs);
-  line-height: 1.35;
-  color: var(--text-faint);
-  border: 1px solid var(--border-strong);
-  border-radius: 3px;
-  padding: 1px 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 1px var(--sp-2);
+  border-radius: var(--r-chip);
+  background: var(--sunken);
+  color: var(--fg3);
+  box-shadow: inset 0 -1px 0 var(--line-strong);
   white-space: nowrap;
 }
 
 .hint {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--sp-3);
   white-space: nowrap;
+  font-size: var(--fs-body);
+  color: var(--fg3);
 }

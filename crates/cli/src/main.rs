@@ -34,6 +34,10 @@ mod exit {
     pub const USAGE: i32 = 1;
     pub const NOT_FOUND: i32 = 2;
     pub const INDEX_UNAVAILABLE: i32 = 4;
+    /// The model could not run: not installed, suspended, or out of memory.
+    /// Distinct from `INDEX_UNAVAILABLE` because search still works — a script
+    /// that falls back to `marrow search` needs to tell the two apart.
+    pub const MODEL_UNAVAILABLE: i32 = 5;
     pub const INTERRUPTED: i32 = super::EXIT_INTERRUPTED;
     pub const INTERNAL: i32 = 70;
 }
@@ -137,6 +141,7 @@ fn exit_code_for(e: &Error) -> i32 {
         Filesystem => exit::NOT_FOUND,
         Storage | Index => exit::INDEX_UNAVAILABLE,
         Policy => 3,
+        Model => exit::MODEL_UNAVAILABLE,
         Internal => exit::INTERNAL,
         Parse => exit::OK,
     }

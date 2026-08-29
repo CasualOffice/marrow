@@ -2,9 +2,14 @@
  * Navigation + workspaces + health (GUI §3.2).
  *
  * "Every degraded state is visible from the sidebar without navigating"
- * (GUI §11) — so the workspace rows carry live state, and the index summary
- * below them shows the cloud-only count whether or not it is zero (TIER-008: a
- * silent zero is indistinguishable from "no cloud files").
+ * (GUI §11). `list_workspaces` now returns `unindexed` and `cloudOnly` per
+ * workspace, so this can say *which* workspace is the problem instead of
+ * showing one global number that names nobody — and it says it in words on the
+ * row, not only as a tinted count you would have to open Status to decode.
+ *
+ * Clicking a workspace scopes the Files browser to it. That is the only thing
+ * a workspace row can do that is not a lie: there is no per-workspace search
+ * filter in the command surface.
  */
 
 import { forwardRef } from "react";
@@ -13,7 +18,7 @@ import styles from "./Sidebar.module.css";
 import { cx } from "../lib/cx";
 import { count } from "../lib/format";
 import { Icon, type IconName } from "./Icon";
-import { useIndexHealth, useWorkspaces } from "../queries";
+import { useWorkspaces } from "../queries";
 import { useUi, type View } from "../store";
 import type { WorkspaceRow } from "../api";
 
@@ -21,18 +26,35 @@ const NAV: ReadonlyArray<{ view: View; label: string; icon: IconName }> = [
   { view: "search", label: "Search", icon: "search" },
   { view: "files", label: "Files", icon: "file" },
   { view: "status", label: "Status", icon: "activity" },
+  { view: "settings", label: "Settings", icon: "settings" },
 ];
 
-type Tone = "ok" | "warn" | "error";
+interface Degradation {
+  degraded: boolean;
+  word: string;
+  /** Short phrases shown under the row. Empty when nothing is wrong. */
+  issues: string[];
+}
 
 /**
- * The only per-workspace signal the command surface exposes is the active file
- * count, so that is what the dot means, and the row says the word too. Nothing
- * here is inferred: an unreachable workspace list is an error, not a guess.
+ * What is wrong with this workspace, from the fields the command returns.
+ *
+ * Nothing here is inferred. `unindexed > 0` means files were recorded from
+ * metadata alone; `cloudOnly > 0` means contents were deliberately not read
+ * (TIER-008). Both are degraded states and both are shown as counts, because a
+ * warning without a magnitude cannot be triaged.
  */
-function workspaceState(w: WorkspaceRow): { tone: Tone; word: string } {
-  if (w.files === 0) return { tone: "warn", word: "nothing indexed" };
-  return { tone: "ok", word: "live" };
+function workspaceState(w: WorkspaceRow): Degradation {
+  const issues: string[] = [];
+  if (w.unindexed > 0) issues.push(`${count(w.unindexed)} unindexed`);
+  if (w.cloudOnly > 0) issues.push(`${count(w.cloudOnly)} cloud-only`);
+  if (w.files === 0) {
+    return { degraded: true, word: "nothing indexed", issues };
+  }
+  if (issues.length > 0) {
+    return { degraded: true, word: issues.join(" · "), issues };
+  }
+  return { degraded: false, word: "live", issues };
 }
 
 export const Sidebar = forwardRef<HTMLElement>(function Sidebar(_props, ref) {
@@ -40,20 +62,19 @@ export const Sidebar = forwardRef<HTMLElement>(function Sidebar(_props, ref) {
   const setView = useUi((s) => s.setView);
   const collapsed = useUi((s) => s.sidebarCollapsed);
   const focusPane = useUi((s) => s.focusPane);
-  const notify = useUi((s) => s.notify);
+  const filter = useUi((s) => s.workspaceFilter);
+  const setFilter = useUi((s) => s.setWorkspaceFilter);
 
   const workspaces = useWorkspaces();
-  const health = useIndexHealth();
-
   const rows = workspaces.data ?? [];
-  const cloudOnly = health.data?.cloudOnly;
 
   return (
     <nav
       ref={ref}
       tabIndex={-1}
-      className={cx(styles.sidebar, collapsed && styles.collapsed)}
+      className={cx(styles.sidebar, collapsed && styles.collapsedRail)}
       aria-label="Sections and workspaces"
+      aria-hidden={collapsed || undefined}
       onFocus={() => focusPane("sidebar")}
     >
       <ul className={styles.group}>
@@ -63,10 +84,9 @@ export const Sidebar = forwardRef<HTMLElement>(function Sidebar(_props, ref) {
               type="button"
               className={cx(styles.item, view === item.view && styles.active)}
               aria-current={view === item.view ? "page" : undefined}
-              title={collapsed ? item.label : undefined}
               onClick={() => setView(item.view)}
             >
-              <Icon name={item.icon} />
+              <Icon name={item.icon} size={14} className={styles.icon} />
               <span className={styles.label}>{item.label}</span>
             </button>
           </li>
@@ -84,24 +104,49 @@ export const Sidebar = forwardRef<HTMLElement>(function Sidebar(_props, ref) {
         </p>
       )}
 
-      <ul className={styles.group}>
+      <ul className={cx(styles.group, styles.scroll)}>
+        <li>
+          <button
+            type="button"
+            className={cx(
+              styles.wsRow,
+              filter === null && view === "files" && styles.wsActive,
+            )}
+            onClick={() => {
+              setFilter(null);
+              setView("files");
+            }}
+          >
+            <span />
+            <span className={styles.label}>All workspaces</span>
+            <span className={cx("mono", styles.metric)}>
+              {count(rows.length)}
+            </span>
+          </button>
+        </li>
+
         {rows.map((w) => {
           const state = workspaceState(w);
+          const selected = filter === w.name && view === "files";
           return (
             <li key={w.name}>
               <button
                 type="button"
-                className={styles.item}
+                className={cx(
+                  styles.wsRow,
+                  selected && styles.wsActive,
+                  state.issues.length > 0 && styles.wsRowDegraded,
+                )}
                 title={`${w.path} — ${state.word}`}
                 onClick={() => {
+                  setFilter(w.name);
                   setView("files");
-                  notify(`${w.name}: ${count(w.files)} files indexed`);
                 }}
               >
-                {state.tone === "ok" ? (
-                  <span className={cx(styles.dot, styles.ok)} aria-hidden="true" />
-                ) : (
+                {state.degraded ? (
                   <Icon name="warning" size={11} className={styles.warnIcon} />
+                ) : (
+                  <span className={styles.dot} aria-hidden="true" />
                 )}
                 <span className={styles.label}>{w.name}</span>
                 <span className="srOnly">{state.word}</span>
@@ -109,55 +154,29 @@ export const Sidebar = forwardRef<HTMLElement>(function Sidebar(_props, ref) {
                   className={cx(
                     "mono",
                     styles.metric,
-                    state.tone === "warn" && styles.warnText,
+                    w.files === 0 && styles.warnText,
                   )}
                 >
                   {count(w.files)}
                 </span>
+                {state.issues.length > 0 && (
+                  <span className={cx("mono", styles.wsIssues)}>
+                    {state.issues.map((i) => (
+                      <span key={i}>{i}</span>
+                    ))}
+                  </span>
+                )}
               </button>
             </li>
           );
         })}
+
         {!workspaces.isError && rows.length === 0 && (
           <li className={styles.none}>No workspaces yet</li>
         )}
       </ul>
 
       <div className={styles.spacer} />
-
-      {/* Degraded index state, visible without navigating to Status. */}
-      {cloudOnly !== undefined && cloudOnly > 0 && (
-        <button
-          type="button"
-          className={cx(styles.item, styles.degraded)}
-          onClick={() => setView("status")}
-          title="Cloud-only files were not read. Open Status."
-        >
-          <Icon name="warning" size={12} />
-          <span className={styles.label}>cloud-only</span>
-          <span className={cx("mono", styles.metric, styles.warnText)}>
-            {count(cloudOnly)}
-          </span>
-        </button>
-      )}
-
-      <ul className={styles.group}>
-        <li>
-          <button
-            type="button"
-            className={styles.item}
-            title="Settings"
-            onClick={() =>
-              notify(
-                "Settings has no desktop command yet: M1 exposes five read-only commands and no configuration surface.",
-              )
-            }
-          >
-            <Icon name="settings" />
-            <span className={styles.label}>Settings</span>
-          </button>
-        </li>
-      </ul>
     </nav>
   );
 });

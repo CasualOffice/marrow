@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import "./styles/global.css";
 import { App } from "./App";
+import { applyTheme, loadTheme, watchSystemTheme } from "./theme";
+import { useUi } from "./store";
 
 /**
  * One client, no devtools, no retries. Every query in this app is a local IPC
@@ -20,6 +22,14 @@ const client = new QueryClient({
     },
   },
 });
+
+/*
+ * Resolve the theme before the first paint, so a dark-mode launch never flashes
+ * the light palette. `tokens.css` keys dark off `[data-theme]` alone, and this
+ * is the only place that attribute is written.
+ */
+applyTheme(loadTheme());
+watchSystemTheme(() => useUi.getState().theme);
 
 const root = document.getElementById("root");
 if (!root) throw new Error("index.html is missing #root");

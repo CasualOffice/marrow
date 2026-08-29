@@ -1,0 +1,113 @@
+/* Geometry — space, type, control sizes, motion.
+ *
+ * Split from `tokens.css` for the reason Enclave splits them: that file is
+ * copied from the design reference in one block and re-copied when the
+ * reference changes, and mixing copied values with derived ones is how a
+ * re-copy silently deletes half of them (`ENC-678`).
+ *
+ * The values are Enclave's, from `services/vault/web/src/styles/scale.css`,
+ * with the handful of *fixed measures* re-derived for this window: Marrow has a
+ * results column and a detail pane where Enclave has a file list and a peek
+ * panel, and its window minimum is 720×480 rather than a browser's.
+ */
+
+:root {
+  /* ── space: the 8pt grid, with the half-steps the reference actually uses ── */
+  --sp-1: 2px;
+  --sp-2: 4px;
+  --sp-3: 6px;
+  --sp-4: 8px;
+  --sp-5: 10px;
+  --sp-6: 12px;
+  --sp-7: 14px;
+  --sp-8: 16px;
+  --sp-10: 20px;
+  --sp-12: 24px;
+  --sp-16: 32px;
+
+  /* ── type ramp ──────────────────────────────────────────────────────────
+   * Named for the role, because `--fs-1…--fs-8` tells a reader nothing about
+   * which step a count belongs on. Values are the reference's. */
+  --fs-micro: 9.5px;
+  --fs-xs: 10.5px; /* counts, key caps, mono timestamps */
+  --fs-sm: 11px; /* column headers, pills, eyebrow labels */
+  --fs-meta: 11.5px; /* group headers, breadcrumbs */
+  --fs-ctl: 12px; /* button labels */
+  --fs-body: 12.5px; /* meta text and most controls — the commonest size */
+  --fs-row: 13px; /* row titles; the document's own size */
+  --fs-title: 14px; /* panel and dialog titles */
+  --fs-head: 15px; /* a state block's heading */
+  --fs-display: 22px; /* stat tiles */
+
+  --lh-tight: 1.35;
+  --lh-body: 1.45;
+  --ls-tight: -0.02em;
+  --ls-body: -0.006em;
+
+  /* ── control sizes: three heights and no more ──────────────────────────── */
+  --ctl-h-sm: 24px;
+  --ctl-h: 26px;
+  --ctl-h-lg: 28px;
+  --ctl-pad-sm: 8px;
+  --ctl-pad: 9px;
+  --ctl-pad-lg: 10px;
+
+  /* ── rows and bars ─────────────────────────────────────────────────────── */
+  --row-h: 36px;
+  --row-h-head: 30px;
+  --row-h-group: 28px;
+  --bar-h: 38px;
+
+  /* ── icons: 14px at 1.8 stroke is the product's icon ───────────────────── */
+  --icon-xs: 10px;
+  --icon-sm: 11px;
+  --icon: 14px;
+  --icon-md: 16px;
+  --icon-lg: 18px;
+  --icon-stroke: 1.8;
+
+  /* ── radii that no brand may change ────────────────────────────────────── */
+  --r-pill: 999px;
+  --r-chip: 4px;
+  --r-dot: 50%;
+
+  /* ── fixed measures, re-derived for this window ────────────────────────────
+   * Enclave's shell is 232px of sidebar beside one sheet. Marrow's is narrower
+   * because its sidebar carries nav plus a workspace list and nothing else, and
+   * because the window minimum is 720px wide: 232 + 360 + a detail pane does
+   * not fit, 168 + 340 does.
+   *
+   * `--results-w` is a *preferred* width, not a fixed one — the column shrinks
+   * to `--results-w-min` before the detail pane gives up any more. */
+  --shell-nav-w: 176px;
+  --results-w: 344px;
+  --results-w-min: 268px;
+  --detail-w-min: 260px;
+  --prose-measure: 62ch;
+  --card-measure: 560px;
+  --titlebar-h: 38px;
+
+  /* ── layers, named ─────────────────────────────────────────────────────────
+   * A z-index written inline is a number whose only meaning is "bigger than the
+   * one I saw last". Nothing may invent a value outside this list. */
+  --z-accent: 1;
+  --z-sticky: 3;
+  --z-popover: 20;
+  --z-dialog: 30;
+  --z-toast: 50;
+
+  /* ── motion: two durations, both ≤ 180ms ───────────────────────────────── */
+  --motion-rerank: 120ms;
+  --motion-pane: 180ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+/* GUI §8: re-rank becomes instant rather than fast, and the pane stops
+ * sliding. Nothing else in this app animates, so zeroing these two removes all
+ * motion. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-rerank: 0ms;
+    --motion-pane: 0ms;
+  }
+}

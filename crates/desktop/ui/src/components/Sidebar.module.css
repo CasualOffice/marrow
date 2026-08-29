@@ -1,28 +1,23 @@
+/* Navigation, on the canvas. No sheet, no border, no fill — Enclave's shell
+   puts the nav *behind* the content rather than beside it in its own box. */
+
 .sidebar {
-  width: var(--pane-sidebar);
-  flex-shrink: 0;
-  background: var(--bg-raised);
-  border-right: 1px solid var(--border);
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 10px 0;
+  padding: var(--sp-2) 0 var(--sp-4);
   overflow: hidden;
-  /* Pane transition — one of the two things allowed to move (GUI §6). */
-  transition: width var(--motion-pane) var(--ease);
 }
 
 .sidebar:focus {
   outline: none;
 }
 
-.collapsed {
-  width: 45px;
-}
-
 .group {
   list-style: none;
   margin: 0;
-  padding: 0 8px;
+  padding: 0 var(--sp-4) 0 var(--sp-6);
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -31,27 +26,39 @@
 .item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-4);
   width: 100%;
-  min-height: var(--row-h);
-  padding: 0 8px;
-  border-radius: var(--radius);
-  color: var(--text);
+  min-height: var(--ctl-h-lg);
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-ctrl);
+  font-size: var(--fs-body);
+  font-weight: 450;
+  color: var(--fg2);
   text-align: left;
 }
 
 .item:hover {
-  background: var(--bg-hover);
+  background: var(--hover);
+  color: var(--fg);
 }
 
-.active {
-  background: var(--bg-sel);
-  color: var(--accent);
-  font-weight: 590;
-}
-
+/* The selected section, as the reference marks a selected saved view: a sunken
+   plate and full-strength text. Not an accent fill — the accent is reserved for
+   focus and for the cursor, and a nav that shouts competes with the results. */
+.active,
 .active:hover {
-  background: var(--bg-sel);
+  background: var(--sunken);
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.icon {
+  color: var(--fg3);
+  flex-shrink: 0;
+}
+
+.active .icon {
+  color: var(--fg);
 }
 
 .label {
@@ -61,44 +68,60 @@
   white-space: nowrap;
 }
 
-.collapsed .label,
-.collapsed .metric,
-.collapsed .heading,
-.collapsed .none,
-.collapsed .problem span {
-  display: none;
-}
-
-.collapsed .item {
-  justify-content: center;
-  padding: 0;
-}
-
 .rule {
   height: 1px;
-  background: var(--border);
-  margin: 12px 16px;
+  background: var(--line);
+  margin: var(--sp-5) var(--sp-8) var(--sp-4);
 }
 
 .heading {
   margin: 0;
-  padding: 0 16px 6px;
-  font-size: var(--fs-xs);
-  font-weight: 640;
+  padding: 0 var(--sp-8) var(--sp-3);
+  font-size: var(--fs-sm);
+  font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text-faint);
+  color: var(--fg3);
+}
+
+/* ── workspace rows ───────────────────────────────────────────────────────
+ *
+ * GUI §11: every degraded state visible here without navigating. The dot is
+ * decorative; `.state` is the word a screen reader gets, and the count column
+ * carries the tone so the number itself is the warning. */
+
+.wsRow {
+  display: grid;
+  grid-template-columns: var(--icon-sm) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: var(--ctl-h-lg);
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-ctrl);
+  font-size: var(--fs-body);
+  color: var(--fg2);
+  text-align: left;
+}
+
+.wsRow:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.wsActive,
+.wsActive:hover {
+  background: var(--sunken);
+  color: var(--fg);
+  font-weight: 500;
 }
 
 .dot {
   width: 6px;
   height: 6px;
-  border-radius: 50%;
+  border-radius: var(--r-dot);
+  justify-self: center;
   flex-shrink: 0;
-  margin: 0 2px;
-}
-
-.ok {
   background: var(--ok);
 }
 
@@ -108,37 +131,64 @@
 
 .metric {
   font-size: var(--fs-xs);
-  color: var(--text-faint);
-  flex-shrink: 0;
+  color: var(--fg3);
+  font-variant-numeric: tabular-nums;
 }
 
 .warnText {
-  color: var(--warn);
+  color: var(--warn-text);
 }
 
-.degraded {
-  color: var(--warn);
-  margin: 0 8px 4px;
-  width: auto;
+/* The second line of a degraded workspace: `1,207 unindexed · 412 cloud-only`.
+   A number in the sidebar that you have to open Status to understand is a
+   number that gets ignored. */
+.wsIssues {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--warn-text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  padding-bottom: 2px;
+}
+
+.wsRowDegraded {
+  padding-top: var(--sp-2);
+  padding-bottom: var(--sp-1);
+}
+
+.scroll {
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .none {
-  padding: 0 10px;
-  font-size: var(--fs-md);
-  color: var(--text-faint);
+  padding: 0 var(--sp-8);
+  font-size: var(--fs-body);
+  color: var(--fg3);
 }
 
 .problem {
   display: flex;
   align-items: flex-start;
-  gap: 7px;
-  margin: 0 0 6px;
-  padding: 0 12px;
+  gap: var(--sp-3);
+  margin: 0 0 var(--sp-3);
+  padding: 0 var(--sp-8);
   font-size: var(--fs-sm);
-  color: var(--warn);
+  color: var(--warn-text);
 }
 
 .spacer {
   flex-grow: 1;
-  min-height: 8px;
+  min-height: var(--sp-4);
+}
+
+/* ── collapsed ────────────────────────────────────────────────────────────
+ * The grid column goes to 0, so this only has to stop the contents painting
+ * outside it. Nothing is `display:none` that a keyboard could otherwise reach:
+ * the whole rail is out of the layout, not selectively hidden. */
+.collapsedRail {
+  visibility: hidden;
 }

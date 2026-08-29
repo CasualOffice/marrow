@@ -1,26 +1,27 @@
+/* Denied/failed, explained inline — the reference's policy-notice box: a tinted
+   plate, an icon, the server's own sentence, and no invented prose. */
 .notice {
   display: flex;
   align-items: flex-start;
-  gap: 9px;
-  padding: 10px 12px;
-  border: 1px solid;
-  border-radius: 7px;
+  gap: var(--sp-5);
+  padding: var(--sp-5) var(--sp-6);
+  border-radius: var(--r-ctrl);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
 }
 
 .warn {
-  color: var(--warn);
-  border-color: var(--warn-bd);
-  background: var(--warn-bg);
+  color: var(--warn-text);
+  background: var(--tint-warn);
 }
 
 .error {
-  color: var(--error);
-  border-color: var(--error);
-  background: var(--error-bg);
+  color: var(--danger);
+  background: var(--tint-danger);
 }
 
 .compact {
-  padding: 6px 9px;
+  padding: var(--sp-3) var(--sp-5);
 }
 
 .icon {
@@ -33,34 +34,36 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
 /* Verbatim from the core. It already names a cause and an action. */
 .message {
   margin: 0;
-  font-size: var(--fs-md);
-  color: var(--text);
+  font-size: var(--fs-body);
+  color: var(--fg);
 }
 
 /* The stable code, shown so a bug report can quote it. */
 .code {
   margin: 0;
   font-size: var(--fs-xs);
-  color: var(--text-faint);
+  color: var(--fg3);
 }
 
 .action {
   flex-shrink: 0;
-  font-size: var(--fs-sm);
-  font-weight: 560;
-  color: var(--text);
-  background: var(--bg);
-  border: 1px solid var(--border-strong);
-  border-radius: 5px;
-  padding: 3px 9px;
+  height: var(--ctl-h-sm);
+  padding: 0 var(--ctl-pad-sm);
+  font-size: var(--fs-ctl);
+  font-weight: 500;
+  color: var(--fg);
+  background: var(--sheet);
+  box-shadow: var(--hairline);
+  border-radius: var(--r-ctrl);
+  white-space: nowrap;
 }
 
 .action:hover {
-  background: var(--bg-hover);
+  background: var(--sunken);
 }

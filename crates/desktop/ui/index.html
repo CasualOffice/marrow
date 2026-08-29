@@ -4,6 +4,16 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
+    <!--
+      The three Latin faces an English window actually renders, preloaded. The
+      other seventeen are declared in src/styles/fonts.css behind a
+      `unicode-range` and are never fetched unless a glyph reaches into them.
+      All twenty ship inside the bundle: the CSP is `default-src 'self'` and a
+      local-first app has no business calling a font CDN.
+    -->
+    <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/inter-tight-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/jetbrains-mono-latin.woff2" as="font" type="font/woff2" crossorigin />
     <title>Marrow</title>
   </head>
   <body>

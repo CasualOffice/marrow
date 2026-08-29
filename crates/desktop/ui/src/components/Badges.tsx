@@ -3,7 +3,10 @@
  *
  * A11Y-003, non-negotiable: colour never carries meaning alone. Every badge
  * here is a *word* that happens to be tinted. Remove the colour and the row
- * still says `exact`, `~approx`, `[self]`.
+ * still says `exact`, `path`, `~approx`, `[self]`.
+ *
+ * The shapes are Enclave's StatusPill; the vocabulary is Marrow's own. Their
+ * classification ladder is deliberately not borrowed — see `tokens.css`.
  */
 
 import styles from "./Badges.module.css";
@@ -19,10 +22,24 @@ const REASON_CLASS: Record<string, string> = {
   recent: styles.recent ?? "",
 };
 
-/** Why it matched — UX principle 3. Without it, hybrid ranking is a black box. */
+/**
+ * Why it matched — UX principle 3. Without it, hybrid ranking is a black box.
+ *
+ * `path` gets a title as well as a tint, because it is the one reason that
+ * changes what the excerpt below it means: the query is in the filename, so the
+ * excerpt is the top of the file and will not contain it.
+ */
 export function ReasonBadge({ reason }: { reason: string }) {
   return (
-    <span className={cx(styles.reason, REASON_CLASS[reason] ?? styles.path)}>
+    <span
+      className={cx(styles.pill, REASON_CLASS[reason] ?? styles.path)}
+      {...(reason === "path"
+        ? {
+            title:
+              "Matched on the file path, not on its contents — so the excerpt below is the start of the file and does not contain your search term.",
+          }
+        : {})}
+    >
       {reason}
     </span>
   );
@@ -51,7 +68,7 @@ export function ProvenanceBadge({ provenance }: { provenance: string }) {
     PROVENANCE_MEANING[provenance] ??
     `Provenance is "${provenance}", which is not exact.`;
   return (
-    <span className={cx(styles.badge, styles.approx)} title={meaning}>
+    <span className={cx(styles.pill, styles.approx)} title={meaning}>
       <span aria-hidden="true">~approx</span>
       <span className="srOnly">{meaning}</span>
     </span>
@@ -67,7 +84,7 @@ const SELF_MEANING =
 export function SelfBadge({ citable }: { citable: boolean }) {
   if (citable) return null;
   return (
-    <span className={cx(styles.badge, styles.self)} title={SELF_MEANING}>
+    <span className={cx(styles.pill, styles.self)} title={SELF_MEANING}>
       <span aria-hidden="true">[self]</span>
       <span className="srOnly">{SELF_MEANING}</span>
     </span>
@@ -76,11 +93,11 @@ export function SelfBadge({ citable }: { citable: boolean }) {
 
 /* ── workspace / index state ─────────────────────────────────────────────── */
 
-export type StateTone = "ok" | "warn" | "error";
+export type StateTone = "ok" | "warn" | "error" | "plain";
 
 /**
  * A state pill. The dot is decorative; the word is the meaning. A degraded
- * watcher has to be legible in greyscale from across the room.
+ * workspace has to be legible in greyscale from across the room.
  */
 export function StateBadge({
   tone,
@@ -91,7 +108,7 @@ export function StateBadge({
 }) {
   return (
     <span className={cx(styles.state, styles[tone])}>
-      {tone === "ok" ? (
+      {tone === "ok" || tone === "plain" ? (
         <span className={styles.dot} aria-hidden="true" />
       ) : (
         <Icon name="warning" size={11} aria-hidden="true" />

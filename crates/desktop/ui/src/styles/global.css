@@ -1,4 +1,9 @@
+/* Document-level defaults. Deliberately thin: everything visual lives in
+ * `tokens.css`, which is copied from the Enclave design reference. */
+
+@import "./fonts.css";
 @import "./tokens.css";
+@import "./scale.css";
 
 *,
 *::before,
@@ -6,7 +11,13 @@
   box-sizing: border-box;
 }
 
-html,
+html {
+  /* Restated, not locked: a browser or system text-size setting must still be
+     able to scale this (GUI §8). Every size below is derived from it. */
+  font-size: 16px;
+  height: 100%;
+}
+
 body,
 #root {
   height: 100%;
@@ -14,17 +25,28 @@ body,
 
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--font-ui);
-  font-size: var(--fs-base);
-  line-height: 1.45;
+  background: var(--canvas);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: var(--fs-row);
+  line-height: var(--lh-body);
+  letter-spacing: var(--ls-body);
   -webkit-font-smoothing: antialiased;
-  /* A native window is not a document: nothing here is a text selection target
-     by default, and a stray drag-select over a result list reads as a bug. */
+  font-feature-settings: "cv11", "ss01";
+  /* A native window is not a document: nothing here is a selection target by
+     default, and a stray drag-select across a result list reads as a bug. */
   -webkit-user-select: none;
   user-select: none;
   overflow: hidden;
+}
+
+/* `color-scheme` follows the resolved theme so form controls, scrollbars and
+   the window's own backdrop match the palette rather than the system. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
 }
 
 /* Text that exists to be copied is selectable. */
@@ -52,15 +74,19 @@ input {
   outline: none;
 }
 
-/* One visible focus treatment everywhere. Never removed — GUI §8. */
+/* One focus indicator, everywhere focus can land.
+ *
+ * `--focus-ring` (opaque `--accent`) and never `--accent-ring`: the wash
+ * measures under 2.5:1 against a 3:1 floor, and axe does not check outline
+ * contrast, so nothing would have told us. See `tokens.css`. */
 :focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-  border-radius: var(--radius-sm);
+  outline: var(--focus-ring-w) solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+  border-radius: var(--r-ctrl);
 }
 
 ::selection {
-  background: var(--accent-wash);
+  background: var(--accent-soft);
 }
 
 /* Thin, native-feeling scrollbars. */
@@ -69,7 +95,7 @@ input {
   height: 9px;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
+  background: var(--line-strong);
   border-radius: 5px;
   border: 2px solid transparent;
   background-clip: content-box;
@@ -79,7 +105,7 @@ input {
 }
 
 .mono {
-  font-family: var(--font-mono);
+  font-family: var(--mono);
   font-variant-ligatures: none;
 }
 

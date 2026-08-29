@@ -14,12 +14,13 @@
  *     is still on the same result, which is the promise being kept.
  */
 
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import styles from "./ResultList.module.css";
 import { ResultRow, ROW_HEIGHT } from "./ResultRow";
-import { hitKey } from "../store";
+import { terms } from "../lib/highlight";
+import { hitKey, useUi } from "../store";
 import type { SearchHit } from "../api";
 
 export interface ResultListProps {
@@ -39,6 +40,9 @@ export function ResultList({
   onOpen,
 }: ResultListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const query = useUi((s) => s.query);
+  // Once per query, not once per row.
+  const marks = useMemo(() => terms(query), [query]);
 
   const virtualizer = useVirtualizer({
     count: hits.length,
@@ -66,6 +70,26 @@ export function ResultList({
   }, [scrollNonce, selectedIndex, virtualizer]);
 
   const items = virtualizer.getVirtualItems();
+
+  /*
+   * Nothing typed yet.
+   *
+   * Rendered here rather than by swapping the whole subtree in `SearchView`,
+   * because the scroller has to keep its position in the tree: everything
+   * around the search field must stay structurally identical in every state or
+   * the input remounts and typing loses the caret.
+   */
+  if (hits.length === 0) {
+    return (
+      <div ref={parentRef} className={styles.idle}>
+        <span>
+          {query.trim() === ""
+            ? "Type to search everything indexed."
+            : " "}
+        </span>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -98,6 +122,7 @@ export function ResultList({
                 hit={hit}
                 ordinal={item.index + 1}
                 selected={key === selectedKey}
+                terms={marks}
                 onSelect={onSelect}
                 onOpen={onOpen}
               />

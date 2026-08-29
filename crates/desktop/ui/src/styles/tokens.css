@@ -1,143 +1,302 @@
-/*
- * Design tokens — GUI §6.
+/* Design tokens — the Enclave design system, adopted wholesale.
  *
- * Values are lifted from design/*.dc.html rather than re-derived. Four of them
- * are deliberately darkened/brightened from the mockup because the mockup value
- * missed WCAG AA at the size it is used, and GUI §8 makes AA non-negotiable:
+ * ─────────────────────────────────────────────────────────────────────────────
+ * SOURCE OF TRUTH: `services/vault/web/design-system/design-system-v2.html`,
+ * with `services/vault/web/src/styles/tokens.css` as the extracted form. That
+ * prototype is authoritative for every colour, radius and family below.
+ * **Change a value there first, then re-copy it here.** A token edited only in
+ * this file drifts from the reference nobody re-reads afterwards, which is the
+ * exact failure Enclave's own `ENC-678` records.
+ * ─────────────────────────────────────────────────────────────────────────────
  *
- *   light --text-dim    #6b6b73 -> #57575f   (5.1:1 -> 6.5:1 on --bg-raised)
- *   light --text-faint  #9b9ba3 -> #6e6e78   (2.7:1 -> 4.6:1, was a fail)
- *   light --accent      #2f6feb -> #2864d8   (4.4:1 -> 5.3:1, was a fail)
- *   light --warn        #a16207 -> #96590a   (4.5:1 -> 5.1:1 on --warn-bg)
- *   dark  --text-faint  #6b6b74 -> #85858e   (3.5:1 -> 5.0:1, was a fail)
- *   dark  --accent      #4d8bff -> #5c95ff   (4.3:1 -> 4.8:1 on --bg-sel)
+ * What was taken, and why each group is here:
  *
- * Everything else is the mockup value verbatim. Theme follows the system; there
- * is no toggle, because GUI §9 rules out theming as a feature.
+ *   Warm neutrals `--g0…--ink`   The scale is warm (#FCFCFB, #141412), not the
+ *                                cold greys this window used to ship. On a
+ *                                screen full of monospaced text the difference
+ *                                is the difference between a document and a
+ *                                terminal, and Marrow is showing you documents.
+ *   Semantic surfaces            `--canvas` / `--sheet` / `--sunken`. Chrome
+ *                                sits on the canvas; content sits on a sheet
+ *                                that floats above it. Marrow's sidebar is
+ *                                canvas, its panes are one sheet.
+ *   Elevation `--el1…--el3`      Shadow *is* the border: `--el1` opens with a
+ *                                1px inset ring, so no surface in this app
+ *                                draws a CSS border of its own.
+ *   `--line` / `--line-strong`   Alpha hairlines, so a rule reads the same on
+ *                                every surface it crosses.
+ *   Text ramp `--fg…--fg4`       Four steps, not five greys chosen per file.
+ *   Radii                        `--r-ctrl` 6 / `--r-surf` 10 / `--r-sheet` 14.
+ *   Type                         Inter · Inter Tight · JetBrains Mono, all
+ *                                self-hosted (see `fonts.css`).
+ *
+ * Two of Enclave's values are hard-won and are reproduced here with their
+ * reasoning intact, because both were bugs that shipped once:
+ *
+ *   • `--on-accent` is DERIVED PER THEME, never a constant `#fff`. The dark
+ *     accent is light (#8B85FF); white on it measures 3.04:1 and fails.
+ *   • The focus indicator is the OPAQUE `--accent`, never `--accent-ring`. The
+ *     ring is a 30–40% alpha wash for the glow *behind* a filled control; used
+ *     as a focus outline it measures 1.7–2.4:1 against a 3:1 floor. axe does
+ *     not check focus-indicator contrast, so nothing catches this for you.
+ *
+ * DELIBERATELY NOT TAKEN:
+ *
+ *   • The classification ladder `--c-pub…--c-restr`. That is Enclave's
+ *     document-sensitivity vocabulary; it means nothing in a search index and
+ *     borrowing its colours would imply a sensitivity model Marrow does not
+ *     have. Marrow's badges are match reason, provenance and citability, and
+ *     they get their own treatment below out of the neutral and status tokens.
+ *   • `--av-*` (avatar pairs) and `--selbar-*` (selection bar): Marrow is
+ *     single-user and has no multi-select bar.
+ *   • `[data-brand]`: there is no tenant here to brand.
+ *
+ * Theme follows the system unless the user chose otherwise. `main.tsx` resolves
+ * the choice to `data-theme` on `<html>` — the dark palette keys off that
+ * attribute and nothing else, so there is exactly one copy of it.
  */
 
 :root {
-  color-scheme: light dark;
+  /* ── warm neutral scale ────────────────────────────────────────────────── */
+  --g0: #fff;
+  --g25: #fcfcfb;
+  --g50: #f7f7f5;
+  --g100: #f0f0ed;
+  --g150: #e8e8e4;
+  --g200: #dedeDa;
+  --g300: #c8c8c3;
+  --g400: #8a8a84;
+  --g500: #72726c;
+  --g600: #5b5b56;
+  --g700: #3f3f3b;
+  --g800: #2a2a27;
+  --g900: #1a1a18;
+  --ink: #141412;
 
-  /* surfaces */
-  --bg: #fdfdfd;
-  --bg-raised: #f6f6f7;
-  --bg-hover: #eeeef0;
-  --bg-sel: #e8effc;
-  --panel: #fbfbfc;
-  --chrome: #ececed;
+  /* ── status ────────────────────────────────────────────────────────────── */
+  --ok: #1d8a55;
+  --warn: #b7791f;
+  --danger: #c0392b;
+  --info: #2f6fdb;
 
-  /* separation — borders and background steps, not shadows (GUI §6) */
-  --border: #e4e4e7;
-  --border-strong: #d4d4d8;
+  /* ── accent and radii ──────────────────────────────────────────────────── */
+  --accent: #4f46e5;
+  --accent-soft: rgba(79, 70, 229, 0.1);
+  --accent-ring: rgba(79, 70, 229, 0.35);
+  --r-ctrl: 6px;
+  --r-surf: 10px;
+  --r-sheet: 14px;
 
-  /* text */
-  --text: #18181b;
-  --text-dim: #57575f;
-  --text-faint: #6e6e78;
+  /* ── surfaces ──────────────────────────────────────────────────────────── */
+  --canvas: var(--g50);
+  --sheet: var(--g0);
+  --sunken: var(--g100);
+  --hover: rgba(20, 20, 18, 0.045);
+  --selected: rgba(20, 20, 18, 0.06);
 
-  /* one accent, used for selection and focus only */
-  --accent: #2864d8;
-  /* Written out rather than colour-mixed: `color-mix()` needs a WebKit newer
-     than the minimum macOS this app supports, and an unsupported value here
-     drops the whole focus-ring declaration. */
-  --accent-wash: rgb(40 100 216 / 16%);
-  --scrim: rgb(0 0 0 / 34%);
+  /* Shadow-as-border: no surface in this app draws a CSS border. */
+  --line: rgba(20, 20, 18, 0.07);
+  --line-strong: rgba(20, 20, 18, 0.13);
+  --hairline: 0 0 0 1px var(--line);
 
-  /* state */
-  --ok: #2f7d4f;
-  --warn: #96590a;
-  --warn-bg: #fbf3e0;
-  --warn-bd: #e8d9a8;
-  --error: #b91c1c;
-  --error-bg: #fdf0f0;
+  /* ── text ramp ─────────────────────────────────────────────────────────── */
+  --fg: var(--ink);
+  --fg2: var(--g600);
+  /*
+   * ONE MEASURED DEVIATION from the reference, which is `--g500` (#72726C).
+   *
+   * `--fg3` is this window's faint *text* step and most of it is set at 10.5px
+   * and 11px — counts, key caps, path prefixes, the em dashes. #72726C measures
+   * 4.14:1 on `--sunken` (#F0F0ED), which is the plate under half of them, and
+   * GUI §8 makes AA non-negotiable. #6B6B64 measures 4.55:1 there and 5.36:1 on
+   * `--sheet`. Two steps of the ramp, not the whole scale: `--g500` itself is
+   * untouched and still means what the reference says it means.
+   */
+  --fg3: #6b6b64;
+  --fg4: var(--g400);
 
-  /* match reason / provenance — always paired with the word, never alone */
-  --exact: var(--accent);
-  --semantic: #7c4dcc;
-  --recent: var(--warn);
-  --det: var(--ok);
+  /* ── elevation ─────────────────────────────────────────────────────────── */
+  --el1: 0 0 0 1px rgba(20, 20, 18, 0.06), 0 1px 2px rgba(20, 20, 18, 0.04);
+  --el2: 0 0 0 1px rgba(20, 20, 18, 0.06), 0 4px 12px -2px rgba(20, 20, 18, 0.1),
+    0 12px 32px -8px rgba(20, 20, 18, 0.1);
+  --el3: 0 0 0 1px rgba(20, 20, 18, 0.08),
+    0 16px 48px -12px rgba(20, 20, 18, 0.24),
+    0 32px 80px -24px rgba(20, 20, 18, 0.2);
 
-  /* type */
-  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui,
-    sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
-
-  /* rem, so the scale follows the system text size (GUI §8). The mockup's px
-     values divided by the 16px root: 10.5, 11, 11.5, 12, 13, 14, 17, 19. */
-  --fs-xs: 0.65625rem;
-  --fs-sm: 0.6875rem;
-  --fs-mono: 0.71875rem;
-  --fs-md: 0.75rem;
-  --fs-base: 0.8125rem;
-  --fs-lg: 0.875rem;
-  --fs-xl: 1.0625rem;
-  --fs-2xl: 1.1875rem;
-
-  /* density — 28px rows, 13px base (GUI §6). The row floor is em-relative so a
-     larger system text size grows the row instead of clipping it. */
-  --row-h: max(28px, 2.16em);
-  --radius: 6px;
-  --radius-lg: 10px;
-  --radius-sm: 4px;
-
-  --pane-sidebar: 180px;
-  --pane-results: 360px;
-  --titlebar-h: 38px;
-
-  /* motion: only re-rank and pane transitions, both <= 150ms (GUI §6) */
-  --motion-rerank: 120ms;
-  --motion-pane: 150ms;
-  --ease: cubic-bezier(0.2, 0, 0.2, 1);
+  /* ── type ──────────────────────────────────────────────────────────────── */
+  --sans: "Inter", system-ui, -apple-system, sans-serif;
+  --tight: "Inter Tight", "Inter", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #161619;
-    --bg-raised: #1c1c20;
-    --bg-hover: #26262b;
-    --bg-sel: #1e2c48;
-    --panel: #1e1e23;
-    --chrome: #1f1f23;
+/* Dark. Keyed on the attribute only — `main.tsx` resolves the system
+ * preference to it — so this palette exists once and cannot drift from a
+ * duplicate in a media query. */
+[data-theme="dark"] {
+  --canvas: #0f0f0e;
+  --sheet: #161615;
+  --sunken: #1d1d1b;
+  --hover: rgba(255, 255, 255, 0.05);
+  --selected: rgba(255, 255, 255, 0.07);
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --fg: #f2f2ef;
+  --fg2: #b5b5af;
+  /* The same measured deviation as light, from the reference's #8A8A84. That
+     grey is 5.3:1 on `--sheet` and fine — until the row is *selected*, where
+     `--selected` lifts the plate to rgb(38,38,37) and it drops to 4.35:1, and
+     until it sits on the matched preview line's `--accent-soft` where it is
+     4.30:1. Both are exactly where a path prefix and a line number live.
+     #918F8A measures 4.61:1 on the worse of the two. */
+  --fg3: #918f8a;
+  --fg4: #5e5e59;
+  --el1: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 1px 2px rgba(0, 0, 0, 0.4);
+  --el2: 0 0 0 1px rgba(255, 255, 255, 0.07), 0 8px 24px -4px rgba(0, 0, 0, 0.6);
+  --el3: 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 24px 64px -12px rgba(0, 0, 0, 0.8);
+  --g100: #1d1d1b;
+  --g150: #232321;
+  --g200: #2b2b28;
+  --accent: #8b85ff;
+  --accent-soft: rgba(139, 133, 255, 0.14);
+  --accent-ring: rgba(139, 133, 255, 0.4);
 
-    --border: #2a2a30;
-    --border-strong: #3a3a42;
-
-    --text: #e9e9ec;
-    --text-dim: #9a9aa2;
-    --text-faint: #85858e;
-
-    --accent: #5c95ff;
-    --accent-wash: rgb(92 149 255 / 22%);
-    --scrim: rgb(0 0 0 / 50%);
-
-    --ok: #5fb37f;
-    --warn: #d4a017;
-    --warn-bg: #241f11;
-    --warn-bd: #3d3419;
-    --error: #f87171;
-    --error-bg: #2a1717;
-
-    --semantic: #a78bfa;
-  }
+  /* Status tones lifted a step for a near-black sheet. The light values sit at
+     2.4–3.1:1 on #161615; these clear 4.5:1 as body text and 3:1 as a graphic. */
+  --ok: #4ec98a;
+  --warn: #e0a83a;
+  --danger: #f0736a;
+  --info: #6fa2f0;
 }
 
-/* prefers-contrast: more — drop the mid-greys toward the primary text step. */
+/* `--fg4` is a NON-TEXT tone in this window.
+ *
+ * It is the reference's faintest step and it is kept at the reference's value,
+ * but nothing here sets text in it: #8A8A84 is 3.47:1 on the sheet and #5E5E59
+ * is 2.94:1 in dark, both well under the 4.5:1 that 10–12px text needs. It is
+ * available for a rule, a dot or a disabled glyph, where 3:1 is the bar. Faint
+ * text uses `--fg3`. Enclave's own `ENC-863` measures the same grey and reaches
+ * the same conclusion about it from the other direction.
+ */
+
+/* Accent used as small TEXT on an accent-tinted plate.
+ *
+ * Same family of problem as `--on-accent`, one layer along. The `exact` pill is
+ * `--accent` on `--accent-soft`; in dark that composites to 4.02:1, under the
+ * 4.5:1 an 11px label needs. The light accent on the light tint is 5.9:1 and
+ * needs no help, so this is derived per theme rather than set to one value.
+ * `--accent` itself is untouched: it is the focus ring and the cursor bar, and
+ * both of those are measured against the 3:1 a graphical object needs.
+ */
+:root {
+  --accent-text: var(--accent);
+}
+[data-theme="dark"] {
+  --accent-text: #a49fff;
+}
+
+/* Warn used as TEXT.
+ *
+ * `--warn` (#B7791F) is a plate-and-icon tone: 3.64:1 on the sheet and 2.94:1
+ * on its own tint, so a warning *sentence* in it fails the moment it matters.
+ * Darkened for light only — the dark `--warn` (#E0A83A) already clears 4.5:1
+ * on every surface it lands on.
+ */
+:root {
+  --warn-text: #8a5a12;
+}
+[data-theme="dark"] {
+  --warn-text: var(--warn);
+}
+
+/* The contrast-safe label on the accent.
+ *
+ * Not a constant `#fff`. The dark accent is *light* (#8B85FF) and white on it
+ * measures 3.04:1 — Enclave's axe run failed on exactly this. Derived by theme
+ * so no component has to remember. */
+:root {
+  --on-accent: #fff;
+}
+[data-theme="dark"] {
+  --on-accent: var(--ink);
+}
+
+/* The focus indicator.
+ *
+ * `--accent`, opaque — **not** `--accent-ring`. The ring is a 30–40% alpha wash
+ * meant for the glow behind a filled control; composited onto a surface it
+ * measures 1.68–2.42:1 across Enclave's theme/brand matrix against WCAG
+ * 1.4.11's 3:1 floor. The opaque accent measures 4.79:1 at worst. The reason
+ * this survived for so long in their tree is that axe checks text contrast and
+ * some graphical objects but never an `outline` colour on `:focus-visible`, so
+ * a green accessibility gate says nothing about it. */
+:root {
+  --focus-ring: var(--accent);
+  --focus-ring-w: 2px;
+  --focus-ring-offset: 1px;
+}
+
+/* ── Marrow's own vocabulary ───────────────────────────────────────────────
+ *
+ * Enclave's badges say how sensitive a document is. Marrow's say why a row is
+ * on screen and how much you may trust its position in the file — a different
+ * question, so a different set, built out of the neutral and status tokens
+ * rather than borrowed from a ladder that means something else.
+ *
+ * Colour is never the carrier: every badge below renders a *word*
+ * (`exact`, `path`, `~approx`, `[self]`). Remove the colour and the row still
+ * says what it is (A11Y-003). */
+:root {
+  /* why it matched */
+  --reason-exact: var(--accent);
+  --reason-semantic: #7c4dcc;
+  --reason-path: var(--fg3);
+  --reason-recent: var(--warn);
+
+  /* how much the location can be trusted */
+  --provenance-warn: var(--warn);
+  /* written by an agent — invariant #13, cannot be cited */
+  --self: var(--danger);
+}
+
+[data-theme="dark"] {
+  --reason-semantic: #a78bfa;
+}
+
+/* Pill tints.
+ *
+ * Written out as rgba rather than derived with `color-mix()`: the reference
+ * uses `color-mix(in srgb, var(--warn) 14%, transparent)`, which needs a WebKit
+ * newer than the oldest macOS this app supports — and an unsupported value in a
+ * `background` drops the whole declaration, so the pill would lose its plate
+ * silently. The percentages are the reference's (12–14%).
+ */
+:root {
+  --tint-ok: rgba(29, 138, 85, 0.12);
+  --tint-warn: rgba(183, 121, 31, 0.14);
+  --tint-warn-soft: rgba(183, 121, 31, 0.06);
+  --tint-warn-line: rgba(183, 121, 31, 0.4);
+  --tint-danger: rgba(192, 57, 43, 0.12);
+  --tint-info: rgba(47, 111, 219, 0.12);
+  --tint-semantic: rgba(124, 77, 204, 0.12);
+}
+
+[data-theme="dark"] {
+  --tint-ok: rgba(78, 201, 138, 0.14);
+  --tint-warn: rgba(224, 168, 58, 0.16);
+  --tint-warn-soft: rgba(224, 168, 58, 0.07);
+  --tint-warn-line: rgba(224, 168, 58, 0.42);
+  --tint-danger: rgba(240, 115, 106, 0.14);
+  --tint-info: rgba(111, 162, 240, 0.14);
+  --tint-semantic: rgba(167, 139, 250, 0.16);
+}
+
+/* `prefers-contrast: more` — collapse the mid-greys toward the primary step. */
 @media (prefers-contrast: more) {
   :root {
-    --text-dim: var(--text);
-    --text-faint: var(--text);
-    --border: var(--border-strong);
-  }
-}
-
-/*
- * GUI §8: re-rank becomes instant, not animated. Nothing else in this app
- * animates, so zeroing these two removes all motion.
- */
-@media (prefers-reduced-motion: reduce) {
-  :root {
-    --motion-rerank: 0ms;
-    --motion-pane: 0ms;
+    --fg2: var(--fg);
+    --fg3: var(--fg);
+    --fg4: var(--fg2);
+    --line: var(--line-strong);
   }
 }

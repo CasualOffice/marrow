@@ -11,7 +11,7 @@
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * The capability manifest grants the WebView no filesystem, shell or network
- * permission (SEC-012), so the five commands below are the complete surface
+ * permission (SEC-012), so the eight commands below are the complete surface
  * between this app and the disk.
  */
 
@@ -137,6 +137,19 @@ export interface WorkspaceRow {
   readonly name: string;
   readonly path: string;
   readonly files: number;
+  /**
+   * Per workspace, not global.
+   *
+   * GUI §11 requires every degraded state to be visible from the sidebar
+   * without navigating, and one global number cannot say *which* workspace is
+   * the problem. `unindexed > 0` and `cloudOnly > 0` are degraded states.
+   */
+  readonly chunks: number;
+  readonly contentBytes: number;
+  /** Contents deliberately not read. Never omitted, even at zero (TIER-008). */
+  readonly cloudOnly: number;
+  /** Recorded from metadata alone because the contents could not be indexed. */
+  readonly unindexed: number;
 }
 
 export function listWorkspaces(): Promise<WorkspaceRow[]> {
@@ -223,5 +236,45 @@ export function openPath(path: string): Promise<void> {
 /** Reveal a file in the system file manager. Indexed files only. */
 export function revealPath(path: string): Promise<void> {
   return call<void>("reveal_path", { path });
+}
+
+/* ── list_files ──────────────────────────────────────────────────────────── */
+
+/** Mirrors `commands::FileRow`. */
+export interface FileRow {
+  readonly path: string;
+  readonly relativePath: string;
+  readonly workspace: string;
+  readonly sizeBytes: number | null;
+  readonly modifiedMs: number | null;
+  readonly chunks: number;
+  /**
+   * Recorded, but with no searchable contents.
+   *
+   * The Files view must render this row differently from an indexed one — a
+   * file you can find by name but not by what is inside it is a different
+   * thing, and a browser that draws them identically is lying by omission.
+   */
+  readonly metadataOnly: boolean;
+}
+
+/**
+ * Browse the index, newest first.
+ *
+ * Browsing is not searching. The Files view used to be built on `search`, so
+ * with no query it showed nothing at all for an index holding 35,000 files.
+ */
+export function listFiles(
+  args: {
+    workspace?: string | undefined;
+    prefix?: string | undefined;
+    limit: number;
+  },
+): Promise<FileRow[]> {
+  return call<FileRow[]>("list_files", {
+    workspace: args.workspace ?? null,
+    prefix: args.prefix ?? null,
+    limit: args.limit,
+  });
 }
 

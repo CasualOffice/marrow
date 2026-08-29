@@ -1,58 +1,59 @@
-/* The overlay lives in-window until the global hotkey exists in Rust, so it
-   needs a scrim the real borderless window would not. */
+/* The lens. A genuinely floating surface, so it is the one place `--el3` is
+   used: the elevation ladder's top rung is for palettes and dialogs. */
 .scrim {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: var(--z-dialog);
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding-top: 14vh;
-  background: var(--scrim);
+  padding-top: 13vh;
+  background: rgba(20, 20, 18, 0.34);
+}
+
+:global([data-theme="dark"]) .scrim {
+  background: rgba(0, 0, 0, 0.5);
 }
 
 .panel {
   width: 640px;
   max-width: calc(100vw - 48px);
-  background: var(--panel);
-  border: 1px solid var(--border-strong);
-  border-radius: 12px;
+  background: var(--sheet);
+  border-radius: var(--r-sheet);
   overflow: hidden;
-  color: var(--text);
-  /* The one shadow in the app. A floating lens is genuinely above the window;
-     everything inside the window separates with borders instead (GUI §6). */
-  box-shadow: 0 24px 60px rgb(0 0 0 / 28%);
+  color: var(--fg);
+  box-shadow: var(--el3);
 }
 
 .queryRow {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 16px;
-  min-height: 52px;
-  border-bottom: 1px solid var(--border);
+  gap: var(--sp-5);
+  padding: 0 var(--sp-8);
+  min-height: 50px;
+  box-shadow: inset 0 -1px 0 var(--line);
 }
 
 .queryIcon {
-  color: var(--text-faint);
+  color: var(--fg3);
 }
 
 .input {
   flex-grow: 1;
   min-width: 0;
-  font-size: var(--fs-xl);
-  color: var(--text);
+  font-size: var(--fs-head);
+  color: var(--fg);
   caret-color: var(--accent);
 }
 
 .input::placeholder {
-  color: var(--text-faint);
+  color: var(--fg3);
 }
 
 .hits {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: var(--sp-2) 0;
   max-height: 52vh;
   overflow-y: auto;
 }
@@ -60,19 +61,29 @@
 .hit {
   display: flex;
   align-items: flex-start;
-  gap: 11px;
-  padding: 10px 16px;
-  border-left: 2px solid transparent;
+  gap: var(--sp-5);
+  padding: var(--sp-4) var(--sp-8);
+  position: relative;
 }
 
 .hit:hover {
-  background: var(--bg-hover);
+  background: var(--hover);
 }
 
 .selected,
 .selected:hover {
-  background: var(--bg-sel);
-  border-left-color: var(--accent);
+  background: var(--selected);
+}
+
+.selected::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: var(--sp-3);
+  bottom: var(--sp-3);
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
 }
 
 .jump {
@@ -87,18 +98,19 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
 .hitHead {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  align-items: center;
+  gap: var(--sp-3);
   min-width: 0;
 }
 
 .hitName {
-  font-weight: 590;
+  font-size: var(--fs-row);
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -109,28 +121,34 @@
 }
 
 .age {
+  font-family: var(--mono);
   font-size: var(--fs-xs);
-  color: var(--text-faint);
+  color: var(--fg3);
   white-space: nowrap;
 }
 
 .hitDir,
 .hitSnippet {
-  font-size: var(--fs-sm);
-  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  color: var(--fg3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.hitDir {
+  color: var(--fg3);
+}
+
 .footer {
   display: flex;
   align-items: center;
-  gap: 14px;
-  min-height: 32px;
-  padding: 0 16px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-raised);
+  gap: var(--sp-7);
+  min-height: var(--row-h-head);
+  padding: 0 var(--sp-8);
+  box-shadow: inset 0 1px 0 var(--line);
+  background: var(--canvas);
   font-size: var(--fs-xs);
-  color: var(--text-faint);
+  color: var(--fg3);
+  font-variant-numeric: tabular-nums;
 }

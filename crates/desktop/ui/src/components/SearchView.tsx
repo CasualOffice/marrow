@@ -1,9 +1,9 @@
 /**
- * The search view: field, results, detail (GUI §3.2).
+ * The search view: field, results, detail (GUI §3.2) — Enclave's list beside a
+ * peek panel, which is the same shape as this one.
  *
- * Layout is the mockup's: sidebar 180 · results 360 · detail fills. When the
- * ranking is empty the results pane gives way to the diagnosis, which spans the
- * width the two panes had — design/ZeroResults.dc.html.
+ * When the ranking is empty the results pane gives way to the diagnosis, which
+ * spans the width the two panes had.
  */
 
 import type { ReactNode, RefObject } from "react";
@@ -64,23 +64,30 @@ export function SearchView(props: SearchViewProps) {
 
   const footer = (
     <div className={styles.footer} role="status">
-      <span>
+      <span className={styles.count}>
         {response === undefined
           ? "—"
-          : // `matched` not `total`: the latter saturates at the page size, so a
-            // footer built on it reports "20 results" for a corpus holding 900.
+          : // `matched`, not `total`: the latter saturates at the page size, so
+            // a footer built on it reports "200 results" for a corpus holding
+            // 842 and the user has no way to detect the difference.
             `${count(response.matched)} ${response.matched === 1 ? "result" : "results"}`}
       </span>
-      <span aria-hidden="true">·</span>
-      <span className="mono">{response === undefined ? "—" : ms(response.elapsedMs)}</span>
+      <span className={styles.sep} aria-hidden="true">
+        ·
+      </span>
+      <span className="mono">
+        {response === undefined ? "—" : ms(response.elapsedMs)}
+      </span>
       {slow && (
         <>
-          <span aria-hidden="true">·</span>
+          <span className={styles.sep} aria-hidden="true">
+            ·
+          </span>
           <span className={styles.slow}>searching</span>
         </>
       )}
       <span className={styles.grow} />
-      <span>
+      <span className="mono">
         {response === undefined || response.branches.length === 0
           ? "—"
           : response.branches.join(" + ")}
@@ -88,74 +95,75 @@ export function SearchView(props: SearchViewProps) {
     </div>
   );
 
-  if (zero) {
-    return (
-      <div className={styles.wideArea}>
-        <div className={styles.fieldRow}>
-          <div className={styles.fieldWide}>
-            <SearchField
-              ref={searchRef}
-              value={query}
-              onChange={onQueryChange}
-              placeholder="Search everything indexed"
-              label="Search"
-              cap="⌘F"
-            />
-          </div>
-        </div>
-        <ZeroResults
-          query={query.trim()}
-          elapsedMs={response?.elapsedMs ?? 0}
-          error={error}
-          onTry={onQueryChange}
-        />
-        {footer}
-      </div>
-    );
-  }
+  // ONE SearchField, rendered outside every conditional.
+  //
+  // It used to be duplicated across the zero-results branch and the results
+  // branch. Typing the first character produced results, React swapped
+  // branches, and the input was unmounted and remounted — so focus and the
+  // caret were lost on every single keystroke. A conditional around an input
+  // is a remount, not a re-render.
+  const field = (
+    <div className={styles.fieldRow}>
+      <SearchField
+        ref={searchRef}
+        value={query}
+        onChange={onQueryChange}
+        placeholder="Search everything indexed"
+        label="Search"
+        cap="⌘F"
+      />
+    </div>
+  );
 
+  // The tree shape is identical in every state, so the input keeps its
+  // position and is never remounted. Only the className and the block below
+  // the field change — and note that even the error row and the list/zero
+  // swap are *after* the field, never around it. React reconciles by position:
+  // rendering the same element in two different branches still remounts it.
   return (
     <>
       <div
         ref={resultsRef}
         tabIndex={-1}
-        className={styles.results}
+        className={zero ? styles.wideArea : styles.results}
         onFocus={() => focusPane("results")}
       >
-        <div className={styles.fieldRow}>
-          <SearchField
-            ref={searchRef}
-            value={query}
-            onChange={onQueryChange}
-            placeholder="Search everything indexed"
-            label="Search"
-            cap="⌘F"
-          />
-        </div>
+        {field}
 
-        {error !== null && (
+        {error !== null && !zero && (
           <div className={styles.errorRow}>
             <ErrorNotice error={error} action={null} compact />
           </div>
         )}
 
-        <ResultList
-          hits={hits}
-          selectedKey={anchor?.key ?? null}
-          scrollNonce={scrollNonce}
-          onSelect={onSelect}
-          onOpen={onOpen}
-        />
+        {zero ? (
+          <ZeroResults
+            query={query.trim()}
+            elapsedMs={response?.elapsedMs ?? 0}
+            error={error}
+            onTry={onQueryChange}
+          />
+        ) : (
+          <ResultList
+            hits={hits}
+            selectedKey={anchor?.key ?? null}
+            scrollNonce={scrollNonce}
+            onSelect={onSelect}
+            onOpen={onOpen}
+          />
+        )}
 
         {footer}
       </div>
 
-      <DetailPane
-        ref={detailRef}
-        anchor={anchor}
-        hit={selectedHit}
-        idle={idle}
-      />
+      {!zero && (
+        <DetailPane
+          ref={detailRef}
+          anchor={anchor}
+          hit={selectedHit}
+          idle={idle}
+        />
+      )}
     </>
   );
 }

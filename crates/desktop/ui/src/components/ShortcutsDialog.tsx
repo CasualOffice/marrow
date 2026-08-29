@@ -1,9 +1,11 @@
 /**
  * `?` — the keyboard map (GUI §5.1).
  *
- * It lists every binding, including the three that currently have no desktop
- * command behind them. A shortcut that exists but does nothing is a bug; a
- * shortcut that exists and says what is missing is a to-do list.
+ * It lists every binding. `⌘↵` and `⇧↵` used to be on it as "needs a command
+ * that does not exist"; `open_path` and `reveal_path` arrived and they are real
+ * now. What is left marked is genuinely absent. A shortcut that exists but does
+ * nothing is a bug; a shortcut that exists and says what is missing is a to-do
+ * list.
  */
 
 import { useEffect, useRef } from "react";
@@ -44,19 +46,19 @@ const GROUPS: ReadonlyArray<{ title: string; items: Binding[] }> = [
   {
     title: "Acting",
     items: [
-      { keys: "↵", label: "Return", action: "Open the result in the detail pane" },
-      { keys: "⌘C", label: "Command C", action: "Copy the citation (path:line)" },
+      { keys: "↵", label: "Return", action: "Read it here — focus the preview" },
       {
         keys: "⌘↵",
         label: "Command Return",
-        action: "Open in $EDITOR at the line",
-        missing: "needs open_in_editor",
+        action: "Open in the system's default application",
       },
+      { keys: "⇧↵", label: "Shift Return", action: "Reveal in the file manager" },
+      { keys: "⌘C", label: "Command C", action: "Copy the citation (path:line)" },
       {
-        keys: "⇧↵",
-        label: "Shift Return",
-        action: "Reveal in Finder",
-        missing: "needs reveal_in_file_manager",
+        keys: "⌥Space",
+        label: "Option Space",
+        action: "Quick find while another app has focus",
+        missing: "needs a global-shortcut plugin",
       },
       { keys: "?", action: "This list" },
     ],

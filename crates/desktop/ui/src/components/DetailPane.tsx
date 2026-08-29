@@ -17,7 +17,12 @@ import { ProvenanceBadge, ReasonBadge, SelfBadge } from "./Badges";
 import { ErrorNotice } from "./ErrorNotice";
 import { useFileDetail, useRegion } from "../queries";
 import { useUi, type Anchor } from "../store";
-import { copyCitation, unavailable } from "../actions";
+import {
+  copyCitation,
+  openInSystem,
+  revealInFileManager,
+  unavailable,
+} from "../actions";
 import type { SearchHit } from "../api";
 
 export interface DetailPaneProps {
@@ -63,16 +68,38 @@ export const DetailPane = forwardRef<HTMLDivElement, DetailPaneProps>(
                 <button
                   type="button"
                   className={styles.capButton}
-                  onClick={() => unavailable("editor")}
+                  title="Open in the system's default application"
+                  onClick={() =>
+                    void openInSystem(
+                      anchor.path,
+                      baseOf(anchor.relativePath),
+                    )
+                  }
                 >
-                  <Kbd label="Command Return">⌘↵</Kbd> open
+                  <Kbd label="Command Return">⌘↵</Kbd>
+                  <span className={styles.capLabel}>open</span>
+                </button>
+                <button
+                  type="button"
+                  className={styles.capButton}
+                  title="Reveal in the file manager"
+                  onClick={() =>
+                    void revealInFileManager(
+                      anchor.path,
+                      baseOf(anchor.relativePath),
+                    )
+                  }
+                >
+                  <Kbd label="Shift Return">⇧↵</Kbd>
+                  <span className={styles.capLabel}>reveal</span>
                 </button>
                 <button
                   type="button"
                   className={styles.capButton}
                   onClick={() => void copyCitation(anchor)}
                 >
-                  <Kbd label="Command C">⌘C</Kbd> cite
+                  <Kbd label="Command C">⌘C</Kbd>
+                  <span className={styles.capLabel}>cite</span>
                 </button>
               </div>
               <div className={cx("mono", styles.path, "selectable")}>
@@ -111,6 +138,16 @@ export const DetailPane = forwardRef<HTMLDivElement, DetailPaneProps>(
                       </div>
                     );
                   })}
+                  {region.data?.truncated === true && (
+                    <div className={styles.truncated}>
+                      <span className={styles.truncatedRule} />
+                      <span>
+                        cut off here by the preview cap, not by the end of the
+                        file
+                      </span>
+                      <span className={styles.truncatedRule} />
+                    </div>
+                  )}
                 </div>
               )}
             </div>
