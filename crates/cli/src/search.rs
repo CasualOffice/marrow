@@ -11,11 +11,14 @@ use std::io::Write;
 
 use marrow_core::{Origin, ProvenanceClass, Result, SourceSpan, Timestamp};
 use marrow_index::{MatchMode, Snippet, TextHit, TextIndex, TextQuery};
+use marrow_store::Store;
 
 use crate::render::{self, Style};
 
 /// Render results, or a diagnosis when there are none.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
+    store: &Store,
     index: &dyn TextIndex,
     query: &str,
     limit: usize,
@@ -27,19 +30,94 @@ pub fn run(
     let started = std::time::Instant::now();
     let q = TextQuery::new(query).mode(MatchMode::Terms).limit(limit);
     let hits = index.search(&q)?;
+
+    // IDX-001: a file must be findable by its name. Content search alone cannot
+    // do that — a file with no parseable content has no chunks and therefore no
+    // index document, so `marrow index` could truthfully report "still findable
+    // by name" about a file that was not findable at all.
+    //
+    // This branch belongs in `marrow-query` alongside the fusion machinery; it
+    // lives here until the CLI is moved onto that crate.
+    let by_name = path_matches(store, query, limit, &hits)?;
     let elapsed = started.elapsed().as_millis();
 
     if json {
-        return render_json(&hits, query, elapsed, out);
+        return render_json(&hits, &by_name, query, elapsed, out);
     }
-    if hits.is_empty() {
+    if hits.is_empty() && by_name.is_empty() {
         return render_nothing(query, elapsed, style, out);
     }
-    render_hits(&hits, roots, elapsed, style, out)
+    render_hits(&hits, &by_name, roots, elapsed, style, out)
+}
+
+/// A file matched by its path rather than its contents.
+#[derive(Debug)]
+pub struct NameHit {
+    pub path: String,
+    pub modified: Timestamp,
+    /// True when the file has no searchable contents at all — worth saying,
+    /// because it explains why only the name matched.
+    pub metadata_only: bool,
+}
+
+/// Files whose path contains the query, excluding ones already found by content.
+fn path_matches(
+    store: &Store,
+    query: &str,
+    limit: usize,
+    already: &[TextHit],
+) -> Result<Vec<NameHit>> {
+    let needle = query.trim();
+    if needle.is_empty() {
+        return Ok(Vec::new());
+    }
+    let seen: std::collections::HashSet<&str> = already.iter().map(|h| h.path.as_str()).collect();
+
+    let conn = store.reader()?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT f.current_path, COALESCE(v.mtime_ms, 0),
+                    (SELECT count(*) FROM chunks c WHERE c.version_id = v.version_id)
+               FROM files f
+          LEFT JOIN file_versions v
+                 ON v.file_id = f.file_id AND v.status = 'CURRENT'
+              WHERE f.status = 'ACTIVE'
+                AND f.current_path IS NOT NULL
+                AND lower(f.current_path) LIKE '%' || lower(?1) || '%'
+              ORDER BY length(f.current_path)
+              LIMIT ?2",
+        )
+        .map_err(|e| marrow_store::map_sqlite(e, "searching by name"))?;
+
+    let rows = stmt
+        .query_map(
+            marrow_store::rusqlite::params![needle, limit as i64 * 2],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .and_then(|it| it.collect::<std::result::Result<Vec<_>, _>>())
+        .map_err(|e| marrow_store::map_sqlite(e, "searching by name"))?;
+
+    Ok(rows
+        .into_iter()
+        .filter(|(p, _, _)| !seen.contains(p.as_str()))
+        .map(|(path, mtime, chunks)| NameHit {
+            path,
+            modified: Timestamp::from_millis(mtime),
+            metadata_only: chunks == 0,
+        })
+        .take(limit)
+        .collect())
 }
 
 fn render_hits(
     hits: &[TextHit],
+    by_name: &[NameHit],
     roots: &[String],
     elapsed: u128,
     style: Style,
@@ -96,14 +174,38 @@ fn render_hits(
         writeln!(out)?;
     }
 
+    for n in by_name {
+        let rel = relative_to(&n.path, roots);
+        writeln!(
+            out,
+            "{}{}{} {}",
+            style.bold(&render::elide(&rel, style.width.saturating_sub(18))),
+            " ".repeat(style.width.saturating_sub(rel.chars().count() + 14).max(1)),
+            style.dim("name"),
+            style.dim(&age(n.modified))
+        )?;
+        if n.metadata_only {
+            // Says why only the name matched, rather than leaving the user to
+            // wonder why there is no excerpt.
+            writeln!(out, "  {}", style.dim("contents not indexed"))?;
+        }
+        writeln!(out)?;
+    }
+
+    let total = hits.len() + by_name.len();
     writeln!(
         out,
         "{}",
         style.dim(&format!(
-            "{} result{} · {}",
-            hits.len(),
-            if hits.len() == 1 { "" } else { "s" },
-            render::duration(elapsed)
+            "{} result{} · {}{}",
+            total,
+            if total == 1 { "" } else { "s" },
+            render::duration(elapsed),
+            if by_name.is_empty() {
+                String::new()
+            } else {
+                format!(" · {} by name", by_name.len())
+            }
         ))
     )?;
     Ok(())
@@ -131,7 +233,13 @@ fn render_nothing(query: &str, elapsed: u128, style: Style, out: &mut impl Write
     Ok(())
 }
 
-fn render_json(hits: &[TextHit], query: &str, elapsed: u128, out: &mut impl Write) -> Result<()> {
+fn render_json(
+    hits: &[TextHit],
+    by_name: &[NameHit],
+    query: &str,
+    elapsed: u128,
+    out: &mut impl Write,
+) -> Result<()> {
     // Same data as the human view — a second renderer, not a parallel path.
     let results: Vec<_> = hits
         .iter()
@@ -153,11 +261,23 @@ fn render_json(hits: &[TextHit], query: &str, elapsed: u128, out: &mut impl Writ
             })
         })
         .collect();
+    let named: Vec<_> = by_name
+        .iter()
+        .map(|n| {
+            serde_json::json!({
+                "path": n.path,
+                "reasons": ["name"],
+                "metadata_only": n.metadata_only,
+                "modified_ms": n.modified.as_millis(),
+            })
+        })
+        .collect();
     writeln!(
         out,
         "{}",
         serde_json::json!({
             "schema": "marrow.search/1",
+            "by_name": named,
             "query": query,
             "elapsed_ms": elapsed,
             "total": hits.len(),

@@ -93,11 +93,33 @@ pub fn count(n: u64) -> String {
 }
 
 /// Elapsed time, in the unit a human would use.
+///
+/// Rolls all the way to hours: a sweep interval rendered as "360 min 0 s" is
+/// arithmetic the reader has to do, which is the same complaint that made ages
+/// relative rather than dates.
 pub fn duration(ms: u128) -> String {
+    const S: u128 = 1_000;
+    const M: u128 = 60 * S;
+    const H: u128 = 60 * M;
     match ms {
-        _ if ms < 1000 => format!("{ms} ms"),
-        _ if ms < 60_000 => format!("{:.1} s", ms as f64 / 1000.0),
-        _ => format!("{} min {} s", ms / 60_000, (ms % 60_000) / 1000),
+        _ if ms < S => format!("{ms} ms"),
+        _ if ms < M => format!("{:.1} s", ms as f64 / S as f64),
+        _ if ms < H => {
+            let (m, s) = (ms / M, (ms % M) / S);
+            if s == 0 {
+                format!("{m} min")
+            } else {
+                format!("{m} min {s} s")
+            }
+        }
+        _ => {
+            let (h, m) = (ms / H, (ms % H) / M);
+            if m == 0 {
+                format!("{h} h")
+            } else {
+                format!("{h} h {m} min")
+            }
+        }
     }
 }
 
@@ -182,5 +204,13 @@ mod tests {
         assert_eq!(duration(8), "8 ms");
         assert_eq!(duration(2_400), "2.4 s");
         assert_eq!(duration(125_000), "2 min 5 s");
+        assert_eq!(
+            duration(120_000),
+            "2 min",
+            "a whole number of minutes drops the seconds"
+        );
+        // The bug this pins: a 6-hour sweep interval rendered as "360 min 0 s".
+        assert_eq!(duration(6 * 3_600_000), "6 h");
+        assert_eq!(duration(90 * 60_000), "1 h 30 min");
     }
 }

@@ -79,7 +79,11 @@ pub fn documents_for(
         outcome: screaming_snake(&format!("{:?}", artifact.outcome)),
         char_yield: Some(artifact.text_yield() as i64),
         page_count: None,
-        warnings: (!artifact.warnings.is_empty()).then(|| format!("{:?}", artifact.warnings)),
+        // The column is CHECK-constrained to valid JSON. `format!("{:?}")`
+        // produces Rust Debug output, which is not JSON and is rejected — and
+        // only for files that actually warn, so 156 of 35,000 failed silently
+        // into the error count while the rest wrote cleanly.
+        warnings: warnings_json(&artifact.warnings),
         parsed_at: marrow_core::Timestamp::now(),
     };
 
@@ -112,6 +116,18 @@ pub fn documents_for(
         .collect();
 
     Ok(Extracted { docs, parse })
+}
+
+/// Warnings as a JSON array, or `None` when there are none.
+///
+/// Hand-rolling the escaping here would be the third bug in this function's
+/// history; `serde_json` owns it.
+fn warnings_json(warnings: &[marrow_parse::ir::ParseWarning]) -> Option<String> {
+    if warnings.is_empty() {
+        return None;
+    }
+    let as_text: Vec<String> = warnings.iter().map(|w| format!("{w:?}")).collect();
+    serde_json::to_string(&as_text).ok()
 }
 
 /// `LowYield` → `LOW_YIELD`.
@@ -179,6 +195,26 @@ pub fn read_for_parsing(path: &str, tier: TierState, max_bytes: u64) -> Result<O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warnings_serialise_as_valid_json() {
+        // The column is CHECK-constrained with json_valid(); Debug output is
+        // not JSON, and the failure only appears for files that warn.
+        use marrow_parse::ir::ParseWarning;
+        assert_eq!(warnings_json(&[]), None);
+
+        let json = warnings_json(&[
+            ParseWarning::new(marrow_core::Code::ParLowYield, "little text extracted"),
+            // Quotes and backslashes are exactly what hand-rolled escaping gets
+            // wrong, so put them in the fixture.
+            ParseWarning::new(marrow_core::Code::ParCorrupt, "bad \"token\" at C:\\x"),
+        ])
+        .expect("some warnings");
+
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+        assert!(parsed.is_array());
+        assert_eq!(parsed.as_array().unwrap().len(), 2);
+    }
 
     #[test]
     fn compound_enum_names_get_their_underscores() {

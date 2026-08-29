@@ -11,6 +11,8 @@
 
 mod render;
 mod search;
+mod waiting;
+mod watching;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -18,19 +20,21 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use marrow_core::{Error, Result, Timestamp};
-use marrow_ingest::{Cancel, IngestPolicy, Progress, Stage};
+use marrow_ingest::{IngestPolicy, Progress, Stage};
 use marrow_scan::{AuthorizedRoot, WalkPolicy};
 use marrow_store::read::{NewRoot, NewWorkspace, StorageKind};
 use marrow_store::Store;
 use render::Style;
 
 /// Exit codes ([UX §8]). Zero results is success, not an error.
+pub(crate) const EXIT_INTERRUPTED: i32 = 5;
+
 mod exit {
     pub const OK: i32 = 0;
     pub const USAGE: i32 = 1;
     pub const NOT_FOUND: i32 = 2;
     pub const INDEX_UNAVAILABLE: i32 = 4;
-    pub const INTERRUPTED: i32 = 5;
+    pub const INTERRUPTED: i32 = super::EXIT_INTERRUPTED;
     pub const INTERNAL: i32 = 70;
 }
 
@@ -147,6 +151,9 @@ fn init_tracing(verbosity: u8) {
     };
     let _ = tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
+        // A redirected log full of escape codes is worse than no colour.
+        // `tracing_subscriber` colours unconditionally unless told otherwise.
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(level)),
@@ -209,7 +216,7 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
                 .collect();
             drop(conn);
             let index = marrow_index::Fts5Index::open(&store)?;
-            search::run(&index, &q, *limit, &roots, cli.json, style, out)
+            search::run(&store, &index, &q, *limit, &roots, cli.json, style, out)
         }
         Cmd::Status => status(cli.json, style, out),
         Cmd::Watch { name } => watch(name.as_deref(), style, out),
@@ -370,12 +377,9 @@ fn index(
         ));
     }
 
-    // Ctrl-C sets the flag; every stage checks it at its loop boundary.
-    let cancel = Cancel::new();
-    {
-        let c = cancel.clone();
-        let _ = ctrl_c(move || c.cancel());
-    }
+    // First Ctrl-C asks every stage to stop at its next boundary, which is what
+    // leaves the index consistent. A second exits immediately.
+    let cancel = waiting::install_interrupt_handler();
 
     let started = std::time::Instant::now();
     let mut totals = marrow_ingest::IngestOutcome::default();
@@ -395,6 +399,27 @@ fn index(
         };
         let progress = Arc::new(Progress::new());
         let text_index = marrow_index::Fts5Index::open(&store)?;
+
+        // UX §10: nothing is drawn until the work has run past ~500 ms, and it
+        // goes to stderr so stdout stays a clean pipe.
+        let meter = waiting::Meter::new();
+        meter.set_label(name.clone());
+        let mut spinner = waiting::Spinner::start(Arc::clone(&meter), "files");
+        let pump = {
+            let p = Arc::clone(&progress);
+            let m = Arc::clone(&meter);
+            let c = cancel.clone();
+            std::thread::spawn(move || {
+                while !c.is_cancelled() {
+                    m.set(p.get(Stage::Discovered));
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    if p.get(Stage::Discovered) == u64::MAX {
+                        break;
+                    }
+                }
+            })
+        };
+
         let outcome = marrow_ingest::ingest_root_with_index(
             &store,
             ws_id,
@@ -404,7 +429,11 @@ fn index(
             &progress,
             &cancel,
             Some(&text_index),
-        )?;
+        );
+        spinner.finish();
+        // The pump is a display detail; it must never hold up the result.
+        drop(pump);
+        let outcome = outcome?;
 
         if !json {
             writeln!(
@@ -433,6 +462,7 @@ fn index(
         totals.parsed += outcome.parsed;
         totals.chunks += outcome.chunks;
         totals.cancelled |= outcome.cancelled;
+        totals.merge_failures_from(&outcome);
         let _ = progress.get(Stage::Hashed);
     }
 
@@ -452,6 +482,12 @@ fn index(
                 "parsed": totals.parsed,
                 "chunks": totals.chunks,
                 "failed": totals.failed,
+                "failures": totals.failures.iter().map(|(code, g)| serde_json::json!({
+                    "code": code,
+                    "count": g.count,
+                    "message": g.message,
+                    "examples": g.examples,
+                })).collect::<Vec<_>>(),
                 "cancelled": totals.cancelled,
             })
         )?;
@@ -460,24 +496,68 @@ fn index(
             out,
             "\n{}",
             style.dim(&format!(
-                "{} files · {} in · {} parsed · {} chunks · {}{}",
+                "{} files · {} in · {} parsed · {} chunks · {}",
                 render::count(totals.discovered),
                 render::count(totals.stored),
                 render::count(totals.parsed),
                 render::count(totals.chunks),
                 render::duration(elapsed),
-                if totals.failed > 0 {
-                    format!(" · {} failed", totals.failed)
-                } else {
-                    String::new()
-                }
             ))
         )?;
+        render_failures(&totals, style, out)?;
     }
 
     if totals.cancelled {
         std::process::exit(exit::INTERRUPTED);
     }
+    Ok(())
+}
+
+/// Failures, grouped and actionable.
+///
+/// A dim `· 156 failed` at the end of a summary line is a number people learn
+/// to ignore. What makes it actionable is the code, the cause, and a path you
+/// can go and look at — so that is what gets rendered, and it gets its own
+/// block rather than a suffix.
+fn render_failures(
+    o: &marrow_ingest::IngestOutcome,
+    style: Style,
+    out: &mut impl Write,
+) -> Result<()> {
+    if o.failures.is_empty() {
+        return Ok(());
+    }
+    writeln!(out)?;
+    writeln!(
+        out,
+        "{} {} file{} could not be indexed",
+        style.warn("⚠"),
+        render::count(o.failed),
+        if o.failed == 1 { "" } else { "s" }
+    )?;
+    for (code, g) in &o.failures {
+        writeln!(
+            out,
+            "  {:>6} × {}",
+            render::count(g.count),
+            style.bold(code)
+        )?;
+        writeln!(out, "         {}", style.dim(&g.message))?;
+        for ex in g.examples.iter().filter(|e| !e.is_empty()) {
+            writeln!(
+                out,
+                "         {}",
+                style.dim(&render::elide(ex, style.width.saturating_sub(10)))
+            )?;
+        }
+    }
+    // Every failure isolates to one file (FS-011); saying so prevents the
+    // reasonable but wrong conclusion that the whole index is suspect.
+    writeln!(
+        out,
+        "\n  {}",
+        style.dim("These files are still findable by name. Only their contents are unindexed.")
+    )?;
     Ok(())
 }
 
@@ -577,125 +657,34 @@ fn status(json: bool, style: Style, out: &mut impl Write) -> Result<()> {
 fn watch(only: Option<&str>, style: Style, out: &mut impl Write) -> Result<()> {
     let store = open_store()?;
     let conn = store.reader()?;
-    let targets: Vec<_> = list_workspaces(&conn)?
+    let rows: Vec<_> = list_workspaces(&conn)?
         .into_iter()
         .filter(|(n, _, _)| only.is_none_or(|o| o == n))
         .collect();
+
+    let mut targets = Vec::with_capacity(rows.len());
+    for (name, path, _) in rows {
+        let (workspace_id, root_id) = ids_for(&conn, &name)?;
+        targets.push(watching::Target {
+            name,
+            path,
+            workspace_id,
+            root_id,
+        });
+    }
     drop(conn);
 
-    let Some((name, path, _)) = targets.into_iter().next() else {
+    if targets.is_empty() {
         return Err(Error::new(
             marrow_core::Code::FsNotFound,
-            "No workspace to watch. Run `marrow workspace add <path>` first.",
+            match only {
+                Some(n) => format!("No workspace named '{n}'. Run `marrow workspace list`."),
+                None => "No workspace to watch. Run `marrow workspace add <path>` first.".into(),
+            },
         ));
-    };
-
-    // One root for now. Watching several needs a thread per watcher and a
-    // shared cancel; that is worth doing when a second root exists.
-    let root = AuthorizedRoot::open(&path)?;
-    let conn = store.reader()?;
-    let (ws_id, root_id) = ids_for(&conn, &name)?;
-    drop(conn);
-
-    let mut watcher = marrow_scan::Watcher::open(&root)?;
-    let index = marrow_index::Fts5Index::open(&store)?;
-    let policy = IngestPolicy::default();
-    let cancel = Cancel::new();
-
-    writeln!(
-        out,
-        "{} {}  {}",
-        style.bold(&name),
-        style.dim(&path),
-        match watcher.health() {
-            marrow_scan::Health::Live => style.ok("live"),
-            h => style.warn(h.label()),
-        }
-    )?;
-    if let Some(reason) = watcher.health().reason() {
-        writeln!(out, "  {}", style.warn(reason))?;
     }
-    writeln!(
-        out,
-        "  {}",
-        style.dim(&format!(
-            "sweeping every {}",
-            render::duration(marrow_scan::reconcile_interval(watcher.health()).as_millis())
-        ))
-    )?;
-    writeln!(out, "  {}", style.dim("Ctrl-C to stop"))?;
 
-    let mut last_health = watcher.health().clone();
-    while let Some(hints) = watcher.next_batch(std::time::Duration::from_secs(2)) {
-        // WATCH-009: a change in health is reported the moment it happens.
-        if *watcher.health() != last_health {
-            last_health = watcher.health().clone();
-            writeln!(
-                out,
-                "{} {}",
-                style.warn("⚠"),
-                style.bold(last_health.label())
-            )?;
-            if let Some(r) = last_health.reason() {
-                writeln!(out, "  {}", style.warn(r))?;
-            }
-        }
-        if hints.is_empty() {
-            continue;
-        }
-        if hints.rescan_required {
-            writeln!(out, "  {}", style.dim("events were lost — sweeping"))?;
-            let progress = Arc::new(Progress::new());
-            let o = marrow_ingest::ingest_root_with_index(
-                &store,
-                ws_id,
-                root_id,
-                &root,
-                &policy,
-                &progress,
-                &cancel,
-                Some(&index),
-            )?;
-            writeln!(
-                out,
-                "  {} {} changed",
-                style.dim("sweep:"),
-                render::count(o.stored)
-            )?;
-            continue;
-        }
-
-        let progress = Arc::new(Progress::new());
-        let o = marrow_ingest::apply_hints(
-            &store,
-            ws_id,
-            root_id,
-            &root,
-            &policy,
-            &hints.touched,
-            &progress,
-            &cancel,
-            Some(&index),
-        )?;
-        if o.stored > 0 {
-            writeln!(
-                out,
-                "  {} {} · {} chunks",
-                style.dim(&render::count(o.stored)),
-                style.dim("changed"),
-                render::count(o.chunks)
-            )?;
-        }
-    }
-    Ok(())
-}
-
-/// Minimal Ctrl-C handling without pulling in a signal crate: spawn a thread
-/// that waits on the default handler being replaced is not possible in std, so
-/// we rely on the process default for now and expose the hook for later.
-fn ctrl_c(_f: impl FnOnce() + Send + 'static) -> Result<()> {
-    // TODO(M2): wire a real SIGINT handler. Until then Ctrl-C terminates the
-    // process; the store's WAL and the job queue make that safe to resume, so
-    // this is a UX gap rather than a correctness one.
-    Ok(())
+    let cancel = waiting::install_interrupt_handler();
+    writeln!(out, "{}", style.dim("Ctrl-C to stop"))?;
+    watching::run(&store, targets, &cancel, style, out)
 }

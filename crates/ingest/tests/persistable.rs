@@ -1,0 +1,357 @@
+//! Can the pipeline persist everything the parser can produce?
+//!
+//! Three bugs in this codebase have had the same shape: a value written into a
+//! CHECK-constrained column that the constraint rejects, where the *common*
+//! case satisfies it and an uncommon one does not.
+//!
+//! - `format!("{:?}", LowYield).to_uppercase()` → `LOWYIELD`, not `LOW_YIELD`.
+//!   `Ok` and `Partial` are single words, so 35,000 real files wrote cleanly.
+//! - `format!("{:?}", warnings)` into a `json_valid()` column. Only files that
+//!   actually warn have warnings, so 156 of 35,201 failed.
+//! - Both surfaced only as a number in an error counter, never as a failure.
+//!
+//! Finding these one at a time is luck. This file is the systematic version:
+//! drive the real pipeline over fixtures chosen to produce every outcome the
+//! parser can emit, and assert **zero** write failures.
+//!
+//! A new parser tier, outcome or warning that cannot be persisted fails here
+//! rather than in a counter six months later.
+
+use std::sync::Arc;
+
+use marrow_core::Timestamp;
+use marrow_ingest::{ingest_root_with_index, Cancel, IngestPolicy, Progress};
+use marrow_scan::AuthorizedRoot;
+use marrow_store::read::{NewRoot, NewWorkspace, StorageKind};
+use marrow_store::Store;
+
+/// Fixtures chosen so the router takes a different path through each one.
+///
+/// The point is coverage of *outcomes*, not of formats: an empty file and a
+/// binary blob exercise the branches a well-formed Markdown file never reaches.
+fn fixtures() -> Vec<(&'static str, Vec<u8>)> {
+    vec![
+        // Ordinary success, several parsers.
+        (
+            "notes.md",
+            b"# Title\n\nSome prose that is long enough to chunk.\n".to_vec(),
+        ),
+        (
+            "main.rs",
+            b"fn main() {\n    println!(\"hi\");\n}\n".to_vec(),
+        ),
+        ("conf.toml", b"[server]\nport = 8080\n".to_vec()),
+        ("data.json", br#"{"a": 1, "b": [2, 3]}"#.to_vec()),
+        ("rows.csv", b"name,qty\nwidget,3\ngadget,4\n".to_vec()),
+        ("plain.txt", b"just some text\n".to_vec()),
+        // Empty: LowYield, then the metadata-only terminal.
+        ("empty.md", Vec::new()),
+        ("empty.txt", Vec::new()),
+        // Malformed: the corrupt path.
+        ("broken.json", b"{ not valid json at all ".to_vec()),
+        ("broken.toml", b"[[[unclosed\n".to_vec()),
+        // JSONC — real tsconfig files do this, and it is what first produced a
+        // degrade-to-text warning on the real corpus.
+        (
+            "tsconfig.json",
+            b"{\n  // a comment\n  \"strict\": true\n}\n".to_vec(),
+        ),
+        // No parser at all: the T5 terminal.
+        (
+            "image.jpg",
+            vec![0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46],
+        ),
+        ("blob.bin", (0u8..=255).collect()),
+        // Invalid UTF-8: the decoder's replacement path.
+        ("mojibake.txt", vec![0xff, 0xfe, 0x00, 0x41, 0x00, 0x42]),
+        // Multi-byte at a boundary — the char-boundary panic came from here.
+        (
+            "wide.md",
+            format!("# H\n\n{}\n", "─".repeat(3000)).into_bytes(),
+        ),
+        // A single unbroken line past the chunk ceiling.
+        ("long.txt", format!("{}\n", "x".repeat(20_000)).into_bytes()),
+        // Nested structure, for the deepest parent chains.
+        (
+            "deep.md",
+            b"# a\n## b\n### c\n#### d\n\nbody text here.\n".to_vec(),
+        ),
+    ]
+}
+
+struct Fixture {
+    _dir: tempfile::TempDir,
+    store: Store,
+    ws: marrow_core::WorkspaceId,
+    root_id: marrow_core::RootId,
+    root: AuthorizedRoot,
+}
+
+fn setup() -> Fixture {
+    let dir = tempfile::tempdir().unwrap();
+    let corpus = dir.path().join("corpus");
+    std::fs::create_dir_all(&corpus).unwrap();
+    for (name, body) in fixtures() {
+        std::fs::write(corpus.join(name), body).unwrap();
+    }
+
+    let store = Store::open_with_migrations(
+        dir.path().join("marrow.sqlite"),
+        &[marrow_index::fts5::MIGRATION],
+    )
+    .unwrap();
+    let now = Timestamp::now();
+    let ws = store
+        .upsert_workspace(NewWorkspace {
+            workspace_id: marrow_core::WorkspaceId::new(),
+            name: "fixtures".into(),
+            at: now,
+        })
+        .unwrap();
+    let root = AuthorizedRoot::open(&corpus).unwrap();
+    let root_id = store
+        .upsert_root(NewRoot {
+            root_id: marrow_core::RootId::new(),
+            workspace_id: ws,
+            canonical_path: root.path().to_string_lossy().into_owned(),
+            volume_identity: None,
+            grant_token: None,
+            storage_kind: StorageKind::Local,
+            cloud_provider: None,
+            at: now,
+        })
+        .unwrap();
+    store.flush().unwrap();
+
+    Fixture {
+        _dir: dir,
+        store,
+        ws,
+        root_id,
+        root,
+    }
+}
+
+fn run(f: &Fixture) -> marrow_ingest::IngestOutcome {
+    let index = marrow_index::Fts5Index::open(&f.store).unwrap();
+    let progress = Arc::new(Progress::new());
+    ingest_root_with_index(
+        &f.store,
+        f.ws,
+        f.root_id,
+        &f.root,
+        &IngestPolicy::default(),
+        &progress,
+        &Cancel::new(),
+        Some(&index),
+    )
+    .unwrap()
+}
+
+#[test]
+fn every_artifact_the_parser_can_produce_is_persistable() {
+    // The test that would have caught all three bugs. A CHECK rejection shows
+    // up as `failed`, never as an error, so this is the only thing standing
+    // between a constraint mismatch and a silent gap in the index.
+    let f = setup();
+    let out = run(&f);
+
+    assert_eq!(
+        out.failed, 0,
+        "some artifact could not be persisted — this is almost always a value \
+         that violates a CHECK constraint. Outcome: {out:?}"
+    );
+    assert_eq!(
+        out.stored, out.discovered,
+        "every discovered file must be stored: {out:?}"
+    );
+}
+
+#[test]
+fn a_parse_result_is_recorded_for_every_file_including_unparseable_ones() {
+    // PAR-003: the parser's identity and version are how an upgrade schedules
+    // reprocessing. A file with no parser still needs the row, or we re-attempt
+    // it on every scan forever.
+    let f = setup();
+    let out = run(&f);
+
+    let conn = f.store.reader().unwrap();
+    let parses: i64 = conn
+        .query_row("SELECT count(*) FROM parse_results", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        parses as u64, out.stored,
+        "expected one parse result per stored file"
+    );
+}
+
+#[test]
+fn every_persisted_enum_satisfies_its_check_constraint() {
+    // Reading them back proves the constraint accepted them, but assert the
+    // exact vocabulary too: a typo that happens to be in the allowed set would
+    // otherwise pass silently.
+    let f = setup();
+    run(&f);
+    let conn = f.store.reader().unwrap();
+
+    let allowed_outcomes = [
+        "OK",
+        "PARTIAL",
+        "LOW_YIELD",
+        "FAILED",
+        "UNSUPPORTED",
+        "SKIPPED_POLICY",
+        "METADATA_ONLY",
+    ];
+    let allowed_tiers = ["T1", "T2", "T3", "T4", "T5"];
+    let allowed_provenance = ["EXACT", "DEGRADED", "APPROXIMATE", "METADATA_ONLY"];
+
+    for (column, allowed) in [
+        ("outcome", allowed_outcomes.as_slice()),
+        ("parser_tier", allowed_tiers.as_slice()),
+        ("provenance_class", allowed_provenance.as_slice()),
+    ] {
+        let mut stmt = conn
+            .prepare(&format!("SELECT DISTINCT {column} FROM parse_results"))
+            .unwrap();
+        let seen: Vec<String> = stmt
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(!seen.is_empty(), "{column}: nothing was persisted at all");
+        for v in &seen {
+            assert!(
+                allowed.contains(&v.as_str()),
+                "{column}: persisted `{v}`, which is not in the schema's allowed set {allowed:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn persisted_warnings_are_valid_json() {
+    // The column is `json_valid()`-constrained. Debug output is not JSON, and
+    // only files that actually warn have warnings — so the failure hides.
+    let f = setup();
+    run(&f);
+    let conn = f.store.reader().unwrap();
+
+    let mut stmt = conn
+        .prepare("SELECT warnings FROM parse_results WHERE warnings IS NOT NULL")
+        .unwrap();
+    let rows: Vec<String> = stmt
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+
+    assert!(
+        !rows.is_empty(),
+        "no fixture produced a warning, so this test proves nothing — add one \
+         that does (an empty file or malformed JSON will)"
+    );
+    for w in rows {
+        let parsed: serde_json::Value = serde_json::from_str(&w)
+            .unwrap_or_else(|e| panic!("persisted warnings are not valid JSON: {w:?} ({e})"));
+        assert!(
+            parsed.is_array(),
+            "warnings should be an array, got {parsed}"
+        );
+    }
+}
+
+#[test]
+fn the_index_and_the_canonical_chunks_agree_after_a_full_run() {
+    // D3's whole premise is that these cannot drift, because they commit in one
+    // transaction. If they ever differ, that premise is broken.
+    let f = setup();
+    run(&f);
+    let conn = f.store.reader().unwrap();
+
+    let chunks: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM chunks WHERE status='ACTIVE'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let docs: i64 = conn
+        .query_row("SELECT count(*) FROM text_index_docs", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        chunks, docs,
+        "canonical chunks and index documents diverged"
+    );
+}
+
+#[test]
+fn re_running_over_the_same_fixtures_writes_nothing() {
+    // Convergence. A pipeline that rewrites unchanged files looks like it works
+    // and quietly makes every re-index a full re-index.
+    let f = setup();
+    run(&f);
+    let second = run(&f);
+    assert_eq!(second.stored, 0, "second run should be a no-op: {second:?}");
+    assert_eq!(second.failed, 0);
+}
+
+#[test]
+fn a_file_that_cannot_be_read_is_still_recorded_from_its_metadata() {
+    // FS-011 / PAR-013, and a promise the CLI prints verbatim: after a failure
+    // it says "these files are still findable by name". That was false — the
+    // unreadable file was skipped entirely, so the report was reassuring the
+    // user about something that had not happened.
+    use std::os::unix::fs::PermissionsExt;
+
+    let f = setup();
+    let locked = f.root.path().join("unreadable.md");
+    std::fs::write(&locked, "secret").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let out = run(&f);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    assert_eq!(
+        out.stored, out.discovered,
+        "an unreadable file must still be recorded from metadata: {out:?}"
+    );
+    assert!(out.failed > 0, "and the failure must still be reported");
+
+    let conn = f.store.reader().unwrap();
+    let present: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM files WHERE current_path LIKE '%unreadable.md'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(present, 1, "the file must be findable by name");
+}
+
+#[test]
+fn the_failure_headline_always_equals_the_sum_of_its_groups() {
+    // A summary that says 2 over a list summing to 1 teaches people to distrust
+    // the whole report. Two accounting paths caused exactly that.
+    use std::os::unix::fs::PermissionsExt;
+
+    let f = setup();
+    for n in ["x1.md", "x2.md"] {
+        let p = f.root.path().join(n);
+        std::fs::write(&p, "body").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o000)).unwrap();
+    }
+    let out = run(&f);
+    for n in ["x1.md", "x2.md"] {
+        let p = f.root.path().join(n);
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    let summed: u64 = out.failures.values().map(|g| g.count).sum();
+    assert_eq!(
+        out.failed, summed,
+        "headline {} disagrees with its groups {summed}: {out:?}",
+        out.failed
+    );
+    assert!(out.failed >= 2, "both unreadable files should be reported");
+}

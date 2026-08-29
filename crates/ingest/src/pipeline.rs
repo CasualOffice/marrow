@@ -1,5 +1,6 @@
 //! The staged ingest pipeline.
 
+use std::collections::BTreeMap;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread;
@@ -53,7 +54,7 @@ impl Default for IngestPolicy {
 }
 
 /// What a run did.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IngestOutcome {
     pub discovered: u64,
     pub stored: u64,
@@ -63,12 +64,72 @@ pub struct IngestOutcome {
     pub parsed: u64,
     pub chunks: u64,
     pub cancelled: bool,
+    /// Why things failed, and how often — grouped by error code.
+    ///
+    /// A bare count is not actionable. "156 failed" tells you something is
+    /// wrong; "156 × PAR_LOW_YIELD" tells you which files and what to do,
+    /// and it is the difference between a number you ignore and a bug you fix.
+    pub failures: BTreeMap<&'static str, FailureGroup>,
+}
+
+/// One error code's worth of failures.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FailureGroup {
+    pub count: u64,
+    /// The message from the first occurrence. They share a code, so they share
+    /// a cause and an action.
+    pub message: String,
+    /// A few example paths, capped — enough to go and look, not a second log.
+    pub examples: Vec<String>,
+}
+
+impl IngestOutcome {
+    fn note_failure(&mut self, e: &marrow_core::Error, path: &str) {
+        // `failed` is recomputed from the groups at the end of a run, so this
+        // increment is only for callers that read it mid-run.
+        self.failed += 1;
+        let g = self
+            .failures
+            .entry(e.code().as_str())
+            .or_insert_with(|| FailureGroup {
+                count: 0,
+                message: e.message().to_string(),
+                examples: Vec::new(),
+            });
+        g.count += 1;
+        if g.examples.len() < 3 {
+            g.examples.push(path.to_string());
+        }
+    }
+
+    /// Fold another run's failures in, for a caller indexing several roots.
+    pub fn merge_failures_from(&mut self, other: &IngestOutcome) {
+        for (code, g) in &other.failures {
+            let e = self.failures.entry(code).or_insert_with(|| FailureGroup {
+                count: 0,
+                message: g.message.clone(),
+                examples: Vec::new(),
+            });
+            e.count += g.count;
+            for p in &g.examples {
+                if e.examples.len() < 3 {
+                    e.examples.push(p.clone());
+                }
+            }
+        }
+    }
 }
 
 /// One unit in flight between the hash stage and the writer.
 #[derive(Debug)]
 struct Hashed {
     path: String,
+    /// Why the bytes could not be read, if they could not.
+    ///
+    /// Carried rather than counted in the worker: two accounting paths produced
+    /// a summary whose headline said 2 and whose detail summed to 1, which is
+    /// worse than either number alone.
+    hash_error: Option<marrow_core::Error>,
     fs_identity: String,
     size: u64,
     mtime: Timestamp,
@@ -157,11 +218,18 @@ pub fn ingest_root_with_index(
             outcome.cancelled = true;
             break;
         }
+        // A file we could stat but not read is still recorded from its
+        // metadata (FS-011, PAR-013), so it stays findable by name — which is
+        // what the failure report promises. Skipping it here made that promise
+        // false for exactly the files it was written about.
+        if let Some(e) = &h.hash_error {
+            outcome.note_failure(e, &h.path);
+        }
         match record(store, &conn, workspace_id, root_id, &h, &mut inflight) {
             Ok(Some(ids)) => {
                 progress.bump(Stage::Stored);
                 outcome.stored += 1;
-                if policy.extract_content {
+                if policy.extract_content && h.hash_error.is_none() {
                     match extract(
                         store,
                         index,
@@ -183,6 +251,7 @@ pub fn ingest_root_with_index(
                             // the file stays discoverable by metadata.
                             debug!(path = %h.path, error = %e, "content extraction failed");
                             progress.bump(Stage::Failed);
+                            outcome.note_failure(&e, &h.path);
                         }
                     }
                 }
@@ -196,7 +265,7 @@ pub fn ingest_root_with_index(
                 // failure is, but one row failing should not abandon the run.
                 warn!(path = %h.path, error = %e, "failed to record file");
                 progress.bump(Stage::Failed);
-                outcome.failed += 1;
+                outcome.note_failure(&e, &h.path);
             }
         }
         if inflight.len() >= DRAIN_EVERY {
@@ -222,7 +291,10 @@ pub fn ingest_root_with_index(
 
     outcome.discovered = progress.get(Stage::Discovered);
     outcome.skipped_placeholder = progress.get(Stage::SkippedPlaceholder);
-    outcome.failed = progress.get(Stage::Failed);
+    // The headline is defined as the sum of the groups, so the number and the
+    // detail below it cannot disagree. A summary that says 2 over a list that
+    // sums to 1 teaches people to distrust the whole report.
+    outcome.failed = outcome.failures.values().map(|g| g.count).sum();
     outcome.cancelled |= cancel.is_cancelled();
     Ok(outcome)
 }
@@ -239,7 +311,9 @@ fn drain(inflight: &mut Vec<Pending<()>>, progress: &Progress, outcome: &mut Ing
         if let Err(e) = p.wait() {
             warn!(error = %e, "write failed");
             progress.bump(Stage::Failed);
-            outcome.failed += 1;
+            // No path here — the write is detached from the file by this point.
+            // The code and message are what make it actionable anyway.
+            outcome.note_failure(&e, "");
             outcome.stored = outcome.stored.saturating_sub(1);
         }
     }
@@ -322,6 +396,13 @@ pub fn apply_hints(
             continue;
         };
 
+        // A file we could stat but not read is still recorded from its
+        // metadata (FS-011, PAR-013), so it stays findable by name — which is
+        // what the failure report promises. Skipping it here made that promise
+        // false for exactly the files it was written about.
+        if let Some(e) = &h.hash_error {
+            outcome.note_failure(e, &h.path);
+        }
         match record(store, &conn, workspace_id, root_id, &h, &mut inflight) {
             Ok(Some(ids)) => {
                 outcome.stored += 1;
@@ -347,7 +428,7 @@ pub fn apply_hints(
             Ok(None) => outcome.unchanged += 1,
             Err(e) => {
                 warn!(path = %h.path, error = %e, "failed to record file");
-                outcome.failed += 1;
+                outcome.note_failure(&e, &h.path);
             }
         }
     }
@@ -454,14 +535,23 @@ fn hash_one(entry: &ScanEntry, max_bytes: u64, progress: &Progress) -> Option<Ha
             }
             Err(e) => {
                 debug!(%path, error = %e, "hash failed");
-                progress.bump(Stage::Failed);
-                None
+                return Some(Hashed {
+                    path,
+                    hash_error: Some(e),
+                    fs_identity: format!("{}:{}", f.identity.dev, f.identity.ino),
+                    size: f.size,
+                    mtime: f.mtime,
+                    tier: f.tier,
+                    hash: None,
+                    mime: f.mime_hint.map(|m| m.as_str().to_string()),
+                });
             }
         }
     };
 
     Some(Hashed {
         path,
+        hash_error: None,
         fs_identity: format!("{}:{}", f.identity.dev, f.identity.ino),
         size: f.size,
         mtime: f.mtime,
