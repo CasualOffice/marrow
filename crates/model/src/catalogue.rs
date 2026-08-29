@@ -45,7 +45,7 @@ use crate::registry::{Capabilities, Entry, Format, Licence, Source};
 type KvPerToken = Option<u32>;
 
 #[allow(clippy::too_many_arguments)] // A catalogue row has this many facts;
-// bundling them into a struct would only move the same list one line up.
+                                     // bundling them into a struct would only move the same list one line up.
 fn entry(
     id: &str,
     display_name: &str,

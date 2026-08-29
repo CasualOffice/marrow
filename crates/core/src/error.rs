@@ -47,6 +47,29 @@ macro_rules! codes {
             pub const fn class(self) -> Class {
                 match self { $( Code::$variant => Class::$class, )* }
             }
+
+            /// Parse a wire string back. Unknown strings are `None` rather
+            /// than a catch-all variant: a code we do not know is a version
+            /// mismatch, and silently mapping it to `INT_INVARIANT_VIOLATED`
+            /// would hide that.
+            pub fn from_wire(s: &str) -> Option<Code> {
+                match s { $( $wire => Some(Code::$variant), )* _ => None }
+            }
+        }
+
+        impl serde::Serialize for Code {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                s.serialize_str(self.as_str())
+            }
+        }
+
+        impl<'de> serde::Deserialize<'de> for Code {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Code, D::Error> {
+                let s = <std::borrow::Cow<'de, str>>::deserialize(d)?;
+                Code::from_wire(&s).ok_or_else(|| {
+                    serde::de::Error::custom(format!("unknown error code {s:?}"))
+                })
+            }
         }
     };
 }
@@ -331,6 +354,19 @@ mod tests {
         ] {
             assert!(!c.retryable(), "{c} will not become true by waiting");
         }
+    }
+
+    #[test]
+    fn every_code_round_trips_through_its_wire_form() {
+        for c in Code::ALL {
+            assert_eq!(Code::from_wire(c.as_str()), Some(*c));
+            let json = serde_json::to_string(c).unwrap();
+            assert_eq!(json, format!("{:?}", c.as_str()));
+            assert_eq!(serde_json::from_str::<Code>(&json).unwrap(), *c);
+        }
+        // A code from a newer build is a version mismatch, not a default.
+        assert_eq!(Code::from_wire("MOD_TIME_TRAVEL"), None);
+        assert!(serde_json::from_str::<Code>("\"MOD_TIME_TRAVEL\"").is_err());
     }
 
     #[test]

@@ -2262,6 +2262,7 @@ dependencies = [
  "marrow-hw",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
 ]
 
