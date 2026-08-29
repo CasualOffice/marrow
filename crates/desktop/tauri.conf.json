@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Marrow",
+  "version": "0.1.0",
+  "identifier": "dev.marrow.desktop",
+  "build": {
+    "frontendDist": "./ui/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "pnpm --dir ui dev",
+    "beforeBuildCommand": "pnpm --dir ui build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Marrow",
+        "width": 1180,
+        "height": 760,
+        "minWidth": 720,
+        "minHeight": 480,
+        "resizable": true,
+        "fullscreen": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "theme": null
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost",
+      "capabilities": ["main"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "icon": ["icons/icon.png"],
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
+  }
+}

@@ -26,6 +26,17 @@ pub struct ContentInput {
     pub origin: marrow_core::Origin,
 }
 
+/// What a parse produced, alongside the documents.
+///
+/// The parse record is not optional bookkeeping: PAR-003 makes the parser's
+/// identity and version the mechanism by which an upgrade schedules
+/// reprocessing. Chunks without it are searchable but unreprocessable.
+#[derive(Debug)]
+pub struct Extracted {
+    pub docs: Vec<TextDoc>,
+    pub parse: marrow_store::read::NewParse,
+}
+
 /// Parse and chunk one file into index documents.
 ///
 /// Returns an empty vec — not an error — when there is nothing to index. A
@@ -36,7 +47,7 @@ pub fn documents_for(
     policy: &ChunkPolicy,
     input: &ContentInput,
     bytes: &[u8],
-) -> Result<Vec<TextDoc>> {
+) -> Result<Extracted> {
     // **Invariant #5.** Reaching here with a non-Resident file would mean the
     // bytes were already read, which is the thing that triggers the download.
     // The caller must not have opened it; assert rather than trust.
@@ -55,12 +66,32 @@ pub fn documents_for(
     // and it may have changed since.
     let lines = std::str::from_utf8(bytes).ok().map(LineIndex::new);
 
+    // Recorded whether or not anything was chunked. A file with no parser is
+    // the commonest outcome on this corpus — 3,478 photos — and "we looked and
+    // there was nothing to extract" is exactly the fact that stops us looking
+    // again every scan.
+    let parse = marrow_store::read::NewParse {
+        version_id: input.version_id,
+        parser_id: artifact.parser_id.to_string(),
+        parser_version: artifact.parser_version.to_string(),
+        parser_tier: screaming_snake(&format!("{:?}", artifact.tier)),
+        provenance_class: provenance_sql(artifact.provenance),
+        outcome: screaming_snake(&format!("{:?}", artifact.outcome)),
+        char_yield: Some(artifact.text_yield() as i64),
+        page_count: None,
+        warnings: (!artifact.warnings.is_empty()).then(|| format!("{:?}", artifact.warnings)),
+        parsed_at: marrow_core::Timestamp::now(),
+    };
+
     if chunks.is_empty() {
         debug!(path = %input.path, outcome = ?artifact.outcome, "no chunks");
-        return Ok(Vec::new());
+        return Ok(Extracted {
+            docs: Vec::new(),
+            parse,
+        });
     }
 
-    Ok(chunks
+    let docs = chunks
         .into_iter()
         .map(|c| TextDoc {
             chunk_id: ChunkId::new(),
@@ -78,7 +109,38 @@ pub fn documents_for(
             origin: input.origin,
             modified: input.modified,
         })
-        .collect())
+        .collect();
+
+    Ok(Extracted { docs, parse })
+}
+
+/// `LowYield` → `LOW_YIELD`.
+///
+/// A plain `to_uppercase` gives `LOWYIELD`, which no CHECK constraint accepts —
+/// and because the common outcomes are single words (`Ok`, `Partial`), a real
+/// corpus run passes while the compound ones fail silently into the error
+/// count. Underscores have to be inserted at the case boundaries.
+fn screaming_snake(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    for (i, c) in name.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            out.push('_');
+        }
+        out.extend(c.to_uppercase());
+    }
+    out
+}
+
+/// Enum name to the CHECK-constrained wire form.
+fn provenance_sql(p: marrow_core::ProvenanceClass) -> String {
+    use marrow_core::ProvenanceClass::*;
+    match p {
+        Exact => "EXACT",
+        Degraded => "DEGRADED",
+        Approximate => "APPROXIMATE",
+        MetadataOnly => "METADATA_ONLY",
+    }
+    .to_string()
 }
 
 /// Convert a byte span to a line span where the source is available.
@@ -112,4 +174,58 @@ pub fn read_for_parsing(path: &str, tier: TierState, max_bytes: u64) -> Result<O
         return Ok(None);
     }
     Ok(Some(std::fs::read(path)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compound_enum_names_get_their_underscores() {
+        // The bug this pins: `to_uppercase` alone yields LOWYIELD, which the
+        // CHECK constraint rejects — and only for the outcomes a synthetic
+        // fixture produces, so a real corpus run looks fine.
+        assert_eq!(screaming_snake("LowYield"), "LOW_YIELD");
+        assert_eq!(screaming_snake("MetadataOnly"), "METADATA_ONLY");
+        assert_eq!(screaming_snake("Ok"), "OK");
+        assert_eq!(screaming_snake("T5"), "T5");
+    }
+
+    #[test]
+    fn every_outcome_and_tier_satisfies_its_check_constraint() {
+        // The schema's allowed sets, copied deliberately: if either side
+        // changes, this fails rather than the write failing at runtime.
+        const OUTCOMES: &[&str] = &[
+            "OK",
+            "PARTIAL",
+            "LOW_YIELD",
+            "FAILED",
+            "UNSUPPORTED",
+            "SKIPPED_POLICY",
+            "METADATA_ONLY",
+        ];
+        const TIERS: &[&str] = &["T1", "T2", "T3", "T4", "T5"];
+
+        for name in [
+            "Ok",
+            "Partial",
+            "LowYield",
+            "Failed",
+            "Unsupported",
+            "MetadataOnly",
+        ] {
+            let v = screaming_snake(name);
+            assert!(
+                OUTCOMES.contains(&v.as_str()),
+                "{name} -> {v} is not a legal outcome"
+            );
+        }
+        for name in ["T1", "T2", "T3", "T4", "T5"] {
+            let v = screaming_snake(name);
+            assert!(
+                TIERS.contains(&v.as_str()),
+                "{name} -> {v} is not a legal tier"
+            );
+        }
+    }
 }

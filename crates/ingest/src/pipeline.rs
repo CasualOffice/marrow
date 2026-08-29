@@ -516,8 +516,18 @@ fn extract(
         origin: Origin::User,
     };
 
-    let docs = documents_for(router, &policy.chunking, &input, &bytes)?;
+    let extracted = documents_for(router, &policy.chunking, &input, &bytes)?;
+    let docs = extracted.docs;
+    let parse = extracted.parse;
+
+    // PAR-003: recorded even when nothing was chunked, so a parser upgrade can
+    // find every file it has already seen.
     if docs.is_empty() {
+        inflight.push(
+            store
+                .writer()
+                .send(move |c| marrow_store::read::record_parse(c, &parse))?,
+        );
         return Ok(0);
     }
 
@@ -552,16 +562,16 @@ fn extract(
         // path; the convenience API is a trap at scale.
         let docs_for_write = docs.clone();
         inflight.push(store.writer().send(move |c| {
+            marrow_store::read::record_parse(c, &parse)?;
             marrow_store::read::replace_chunks(c, version_id, &rows)?;
             marrow_index::fts5::upsert_docs(c, &docs_for_write)
         })?);
         let _ = ix;
     } else {
-        inflight.push(
-            store
-                .writer()
-                .send(move |c| marrow_store::read::replace_chunks(c, version_id, &rows))?,
-        );
+        inflight.push(store.writer().send(move |c| {
+            marrow_store::read::record_parse(c, &parse)?;
+            marrow_store::read::replace_chunks(c, version_id, &rows)
+        })?);
     }
     Ok(n)
 }

@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "The only capabilities the WebView gets. SEC-012: no filesystem, no shell, no network — every affordance is an explicit named command.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging"
+  ]
+}

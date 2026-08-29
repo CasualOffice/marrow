@@ -1,6 +1,6 @@
 # Tracker
 
-**Current milestone:** M2 — MCP server
+**Current milestone:** M3 — Desktop shell
 **Last updated:** 2026-08-30
 
 > This is the file that actually gets updated. [ROADMAP.md](ROADMAP.md) is the plan; this is the state.
@@ -14,8 +14,8 @@
 |---|---|---|---|---|
 | M0 | Measure | `[x]` | 2026-08-30 | 2026-08-30 |
 | M1 | Index + query | `[x]` | 2026-08-30 | 2026-08-30 |
-| M2 | MCP server | `[~]` | 2026-08-30 | — |
-| M3 | PDF + tables | `[ ]` | — | — |
+| M2 | MCP server | `[x]` | 2026-08-30 | 2026-08-30 |
+| M3 | Desktop shell | `[~]` | 2026-08-30 | — |
 | M4 | Semantic | `[ ]` | — | — |
 | M5 | Write tools | `[ ]` | — | — |
 | M6 | Timeline | `[ ]` | — | — |
@@ -140,7 +140,8 @@ find ~ -flags dataless 2>/dev/null | wc -l
 - [x] `.mcp.json` written; verified working from an arbitrary cwd
 - [ ] Use it for a week; note which tool you actually reach for → informs M3
 - [ ] `search --literal` over MCP — `marrow-index::literal` exists, the tool does not expose it yet (removed from the schema rather than advertised-and-ignored)
-- [ ] Swap the hand-rolled queries for `marrow-query` once it lands
+- [x] `marrow-query` landed (32 tests) — read path: RRF fusion shape, FI read model, explain
+- [ ] Swap MCP's and desktop's hand-rolled SQL for `marrow-query`
 
 ---
 
@@ -259,6 +260,7 @@ Short entries. What shipped, what surprised you, what changed.
 | 2026-08-30 | Spec complete (7 parts). Re-scoped for solo/open-source in Part 7. Repo initialised. M0 started. |
 | 2026-08-30 | Named **Marrow** (D45). Docs renamed `Part_N_*.md`. Crate namespace left open as D46. |
 | 2026-08-30 | Reclaimed **64 GB** of Rust `target/` output (14→78 GB free). Build artifacts were 6.6× the entire knowledge corpus. M0 F11 superseded. |
+| 2026-08-30 | **M3 started.** Tauri shell builds; five read-only commands, WebView granted no fs/shell/network (SEC-012). `marrow-query` landed. Fixed a real gap it found: **ingest never wrote `parse_results`**, so PAR-003's parser-version-driven reprocessing could not work. Then found a second bug in that fix — `format!("{:?}").to_uppercase()` gives `LOWYIELD`, not `LOW_YIELD`, so compound outcomes failed their CHECK silently into the error count while single-word ones passed on the real corpus. |
 | 2026-08-30 | **M1 complete.** `search` works: 35,119 files → 13,716 parsed → 54,498 chunks in 15.6 s, queries in 0–3 ms with jumpable `path:line` and heading breadcrumbs. Three of my own bugs found by running rather than testing: a char-boundary panic in the chunker (a box-drawing glyph), the ceiling only applying to code nodes so a huge paragraph became one chunk, and the blocking `submit` reintroduced in the content stage. |
 | 2026-08-30 | **End to end.** `marrow workspace add` → `index` → `status` works on the real corpus: **41,110 files in 3.6 s cold, ~1 s warm, 0 writes on re-run.** Three bugs found by running it rather than testing it: a reader connection opened per file; the blocking `submit` API (100 ms/file → ~57 min); and hardlinks fighting over `current_path` so the index never converged. |
 | 2026-08-30 | **`marrow-store` done.** 36 tests. Found 6 spec defects ([D50](DECISIONS.md)); the load-bearing one: §106.1 mandates `origin_device_id`/`origin_principal_id` on every mutable row and the DDL declares neither. Settled as [D49](DECISIONS.md) and applied now — a column across 11 tables is not something to retrofit. |

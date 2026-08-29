@@ -1261,6 +1261,62 @@ pub fn replace_chunks(conn: &Connection, version_id: VersionId, chunks: &[NewChu
     Ok(())
 }
 
+/// A parse attempt to persist.
+///
+/// PAR-003: the parser's identity and version are what let an upgrade schedule
+/// reprocessing without a manual reindex. Without this row, a parser fix is
+/// invisible to every file already indexed.
+#[derive(Clone, Debug)]
+pub struct NewParse {
+    pub version_id: VersionId,
+    pub parser_id: String,
+    pub parser_version: String,
+    pub parser_tier: String,
+    pub provenance_class: String,
+    pub outcome: String,
+    pub char_yield: Option<i64>,
+    pub page_count: Option<i64>,
+    pub warnings: Option<String>,
+    pub parsed_at: Timestamp,
+}
+
+/// Record a parse attempt, replacing any earlier one for the same
+/// (version, parser, parser_version).
+///
+/// That triple is the idempotency key from §20.2: re-running the same parser
+/// over the same bytes converges rather than accumulating rows.
+pub fn record_parse(conn: &Connection, p: &NewParse) -> Result<()> {
+    conn.execute(
+        "INSERT INTO parse_results
+            (parse_id, version_id, parser_id, parser_version, parser_tier,
+             provenance_class, outcome, char_yield, page_count, warnings, parsed_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+         ON CONFLICT(version_id, parser_id, parser_version) DO UPDATE SET
+             parser_tier      = excluded.parser_tier,
+             provenance_class = excluded.provenance_class,
+             outcome          = excluded.outcome,
+             char_yield       = excluded.char_yield,
+             page_count       = excluded.page_count,
+             warnings         = excluded.warnings,
+             parsed_at        = excluded.parsed_at",
+        params![
+            ulid::Ulid::new().to_string(),
+            p.version_id.to_string(),
+            p.parser_id,
+            p.parser_version,
+            p.parser_tier,
+            p.provenance_class,
+            p.outcome,
+            p.char_yield,
+            p.page_count,
+            p.warnings,
+            p.parsed_at.as_millis(),
+        ],
+    )
+    .map(|_| ())
+    .map_err(|e| crate::map_sqlite(e, "recording a parse result"))
+}
+
 /// How many active chunks exist, for `marrow status`.
 pub fn chunk_count(conn: &Connection) -> Result<i64> {
     conn.query_row(

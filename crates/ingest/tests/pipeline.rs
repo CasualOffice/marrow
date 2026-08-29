@@ -230,7 +230,7 @@ fn a_file_over_the_hash_budget_is_recorded_but_not_read() {
     };
 
     let (out, progress) = f.run_with(&policy, &Cancel::new());
-    assert_eq!(out.stored, 1, "still recorded");
+    assert_eq!(out.stored, 1, "still recorded; outcome was {out:?}");
     assert_eq!(progress.get(Stage::Hashed), 0, "but never hashed");
 }
 
