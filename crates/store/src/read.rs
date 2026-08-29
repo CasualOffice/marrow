@@ -17,8 +17,8 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use marrow_core::{
-    Code, ContentHash, Error, FileId, FileStatus, JobId, Origin, Result, RootId, TierState,
-    Timestamp, VersionId, VersionStatus, WorkspaceId,
+    ChunkId, Code, ContentHash, Error, FileId, FileStatus, JobId, Origin, Result, RootId,
+    TierState, Timestamp, VersionId, VersionStatus, WorkspaceId,
 };
 use rusqlite::{params, types::Type, Connection, OptionalExtension, Row};
 
@@ -1201,4 +1201,72 @@ fn parse_id<T: FromStr<Err = ulid::DecodeError>>(s: &str, column: &str) -> Resul
         .with_context(format!("{column} = {s:?}"))
         .with_source(e)
     })
+}
+
+// ── chunks ────────────────────────────────────────────────────────────────
+
+/// A chunk to persist. Mirrors `marrow_parse::Chunk` without depending on it —
+/// `store` is an adapter and must not know the parser exists (LLD §1).
+#[derive(Clone, Debug)]
+pub struct NewChunk {
+    pub chunk_id: ChunkId,
+    pub version_id: VersionId,
+    pub chunk_kind: String,
+    pub text: String,
+    pub context_prefix: Option<String>,
+    pub token_count: i64,
+    pub text_hash: ContentHash,
+    pub chunker_version: String,
+    pub provenance_class: String,
+}
+
+/// Replace a version's chunks.
+///
+/// Deleting first is what makes re-parsing idempotent: a file that shrinks must
+/// not leave its old tail behind as searchable chunks that no longer exist in
+/// the source. `ON DELETE CASCADE` from the lexical index's doc table carries
+/// the removal through, so the two cannot drift.
+pub fn replace_chunks(conn: &Connection, version_id: VersionId, chunks: &[NewChunk]) -> Result<()> {
+    conn.execute(
+        "DELETE FROM chunks WHERE version_id = ?1",
+        [version_id.to_string()],
+    )
+    .map_err(|e| crate::map_sqlite(e, "clearing previous chunks"))?;
+
+    if chunks.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = conn
+        .prepare_cached(
+            "INSERT INTO chunks
+                (chunk_id, version_id, chunk_kind, text, context_prefix,
+                 token_count, text_hash, chunker_version, provenance_class)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        )
+        .map_err(|e| crate::map_sqlite(e, "preparing chunk insert"))?;
+    for c in chunks {
+        stmt.execute(params![
+            c.chunk_id.to_string(),
+            c.version_id.to_string(),
+            c.chunk_kind,
+            c.text,
+            c.context_prefix,
+            c.token_count,
+            c.text_hash.to_hex(),
+            c.chunker_version,
+            c.provenance_class,
+        ])
+        .map_err(|e| crate::map_sqlite(e, "inserting a chunk"))?;
+    }
+    Ok(())
+}
+
+/// How many active chunks exist, for `marrow status`.
+pub fn chunk_count(conn: &Connection) -> Result<i64> {
+    conn.query_row(
+        "SELECT count(*) FROM chunks WHERE status = 'ACTIVE'",
+        [],
+        |r| r.get(0),
+    )
+    .map_err(|e| crate::map_sqlite(e, "counting chunks"))
 }

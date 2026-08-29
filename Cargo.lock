@@ -508,6 +508,8 @@ name = "marrow-ingest"
 version = "0.1.0"
 dependencies = [
  "marrow-core",
+ "marrow-index",
+ "marrow-parse",
  "marrow-scan",
  "marrow-store",
  "tempfile",

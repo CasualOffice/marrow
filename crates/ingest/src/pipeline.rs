@@ -13,6 +13,7 @@ use marrow_store::read::{NewFile, NewVersion};
 use marrow_store::{Pending, ReadConn, Store};
 use tracing::{debug, warn};
 
+use crate::content::{documents_for, read_for_parsing, ContentInput};
 use crate::progress::{Cancel, Progress, Stage};
 
 /// How much of the corpus a run is allowed to look at.
@@ -26,6 +27,14 @@ pub struct IngestPolicy {
     /// (FS-015). M0 found nothing over 500 MB in the real corpus, so this is a
     /// guard against a pathological file, not a routine path.
     pub max_hash_bytes: u64,
+    /// Parse and index file contents. Off leaves a metadata-only index, which
+    /// is still a useful one — `search --literal` and every path/metadata
+    /// query work without it.
+    pub extract_content: bool,
+    /// Ceiling for the parse stage. Lower than the hash ceiling because parsing
+    /// holds the whole file plus its IR in memory, where hashing streams.
+    pub max_parse_bytes: u64,
+    pub chunking: marrow_parse::ChunkPolicy,
 }
 
 impl Default for IngestPolicy {
@@ -36,6 +45,9 @@ impl Default for IngestPolicy {
                 .map(|n| (n.get().saturating_sub(2)).max(1))
                 .unwrap_or(2),
             max_hash_bytes: 512 * 1024 * 1024,
+            extract_content: true,
+            max_parse_bytes: 16 * 1024 * 1024,
+            chunking: marrow_parse::ChunkPolicy::default(),
         }
     }
 }
@@ -48,6 +60,8 @@ pub struct IngestOutcome {
     pub unchanged: u64,
     pub skipped_placeholder: u64,
     pub failed: u64,
+    pub parsed: u64,
+    pub chunks: u64,
     pub cancelled: bool,
 }
 
@@ -76,6 +90,34 @@ pub fn ingest_root(
     policy: &IngestPolicy,
     progress: &Arc<Progress>,
     cancel: &Cancel,
+) -> Result<IngestOutcome> {
+    ingest_root_with_index(
+        store,
+        workspace_id,
+        root_id,
+        root,
+        policy,
+        progress,
+        cancel,
+        None,
+    )
+}
+
+/// As [`ingest_root`], also writing chunks to a lexical index.
+///
+/// The index is optional because a metadata-only index is still useful — path
+/// and metadata queries and `search --literal` all work without it — and
+/// because it keeps the scan path testable without one.
+#[allow(clippy::too_many_arguments)]
+pub fn ingest_root_with_index(
+    store: &Store,
+    workspace_id: WorkspaceId,
+    root_id: RootId,
+    root: &AuthorizedRoot,
+    policy: &IngestPolicy,
+    progress: &Arc<Progress>,
+    cancel: &Cancel,
+    index: Option<&dyn marrow_index::TextIndex>,
 ) -> Result<IngestOutcome> {
     // Bounded so the walk cannot outrun hashing and buffer the corpus.
     let (tx_scan, rx_scan) = sync_channel::<ScanEntry>(1024);
@@ -108,6 +150,7 @@ pub fn ingest_root(
     // instead of being silently dropped.
     let mut outcome = IngestOutcome::default();
     let mut inflight: Vec<Pending<()>> = Vec::with_capacity(DRAIN_EVERY);
+    let router = marrow_parse::ParserRouter::with_default_parsers();
 
     for h in rx_hash {
         if cancel.is_cancelled() {
@@ -115,11 +158,36 @@ pub fn ingest_root(
             break;
         }
         match record(store, &conn, workspace_id, root_id, &h, &mut inflight) {
-            Ok(true) => {
+            Ok(Some(ids)) => {
                 progress.bump(Stage::Stored);
                 outcome.stored += 1;
+                if policy.extract_content {
+                    match extract(
+                        store,
+                        index,
+                        &router,
+                        policy,
+                        workspace_id,
+                        &h,
+                        &ids,
+                        &mut inflight,
+                    ) {
+                        Ok(n) if n > 0 => {
+                            progress.bump(Stage::Parsed);
+                            outcome.parsed += 1;
+                            outcome.chunks += n as u64;
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            // A parse failure isolates to one file (FS-011);
+                            // the file stays discoverable by metadata.
+                            debug!(path = %h.path, error = %e, "content extraction failed");
+                            progress.bump(Stage::Failed);
+                        }
+                    }
+                }
             }
-            Ok(false) => {
+            Ok(None) => {
                 progress.bump(Stage::Unchanged);
                 outcome.unchanged += 1;
             }
@@ -144,6 +212,13 @@ pub fn ingest_root(
     let _ = walk_handle.join();
 
     store.flush()?;
+
+    if let Some(ix) = index {
+        // Flush the writer first: index docs have a foreign key to `chunks`,
+        // so the canonical rows must be committed before their documents are.
+        store.flush()?;
+        let _ = ix;
+    }
 
     outcome.discovered = progress.get(Stage::Discovered);
     outcome.skipped_placeholder = progress.get(Stage::SkippedPlaceholder);
@@ -296,7 +371,7 @@ fn record(
     root_id: RootId,
     h: &Hashed,
     inflight: &mut Vec<Pending<()>>,
-) -> Result<bool> {
+) -> Result<Option<RecordedIds>> {
     let now = Timestamp::now();
 
     // Path first, identity second — and identity only counts as a RENAME when
@@ -343,12 +418,16 @@ fn record(
             at: now,
         };
         let v = new_version(file_id, h, now);
+        let ids = RecordedIds {
+            file_id,
+            version_id: v.version_id,
+        };
         inflight.push(
             store.writer().send(move |c| {
                 marrow_store::read::insert_file_with_version(c, &f, &v).map(|_| ())
             })?,
         );
-        return Ok(true);
+        return Ok(Some(ids));
     };
 
     // Known file. Two things can have changed: where it is, and what it says.
@@ -372,8 +451,13 @@ fn record(
         (None, _) => true,
     };
 
+    let mut ids = None;
     if changed {
         let v = new_version(file.file_id, h, now);
+        ids = Some(RecordedIds {
+            file_id: file.file_id,
+            version_id: v.version_id,
+        });
         inflight.push(
             store
                 .writer()
@@ -382,7 +466,104 @@ fn record(
         wrote = true;
     }
 
-    Ok(wrote)
+    // A path change on its own is a write, but not a reason to re-parse: the
+    // bytes did not move. Only a new version yields ids for the content stage.
+    let _ = wrote;
+    Ok(ids)
+}
+
+/// What `record` produced, so the content stage knows what to attach chunks to.
+#[derive(Clone, Copy, Debug)]
+struct RecordedIds {
+    file_id: FileId,
+    version_id: VersionId,
+}
+
+/// Parse a file and write its chunks to the store and the lexical index.
+///
+/// Returns the number of chunks produced. Zero is normal — a photo has no
+/// parser, and photos are 3,478 of this corpus's 41,110 files.
+#[allow(clippy::too_many_arguments)]
+fn extract(
+    store: &Store,
+    index: Option<&dyn marrow_index::TextIndex>,
+    router: &marrow_parse::ParserRouter,
+    policy: &IngestPolicy,
+    workspace_id: WorkspaceId,
+    h: &Hashed,
+    ids: &RecordedIds,
+    inflight: &mut Vec<Pending<()>>,
+) -> Result<usize> {
+    // **Invariant #5** guards the open itself, not a caller's discipline.
+    let Some(bytes) = read_for_parsing(&h.path, h.tier, policy.max_parse_bytes)? else {
+        return Ok(0);
+    };
+
+    let file_name = std::path::Path::new(&h.path)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| h.path.clone());
+
+    let input = ContentInput {
+        file_id: ids.file_id,
+        version_id: ids.version_id,
+        workspace_id,
+        path: h.path.clone(),
+        file_name,
+        size: h.size,
+        tier: h.tier,
+        modified: h.mtime,
+        origin: Origin::User,
+    };
+
+    let docs = documents_for(router, &policy.chunking, &input, &bytes)?;
+    if docs.is_empty() {
+        return Ok(0);
+    }
+
+    // Chunks first: the index's documents have a foreign key to them, which is
+    // D3's consistency property expressed in DDL rather than in prose.
+    let rows: Vec<marrow_store::read::NewChunk> = docs
+        .iter()
+        .map(|d| marrow_store::read::NewChunk {
+            chunk_id: d.chunk_id,
+            version_id: d.version_id,
+            chunk_kind: "TEXT".into(),
+            text: d.body.clone(),
+            context_prefix: (!d.title.is_empty()).then(|| d.title.clone()),
+            token_count: d.body.len().div_ceil(4) as i64,
+            text_hash: marrow_core::ContentHash::of(d.body.as_bytes()),
+            chunker_version: marrow_parse::CHUNKER_VERSION.into(),
+            provenance_class: format!("{:?}", d.provenance).to_uppercase(),
+        })
+        .collect();
+
+    let version_id = ids.version_id;
+    let n = rows.len();
+    if let Some(ix) = index {
+        // One closure, so one transaction: the canonical chunks and their index
+        // documents commit together or not at all. That is the D3 property, and
+        // it also means the index write already sees the chunks it references —
+        // no need to wait for a commit between them.
+        //
+        // `send`, not `submit`. Submitting blocks until the batch commits (up
+        // to 100 ms), which across 34k files is the difference between seconds
+        // and an hour. I made exactly this mistake once already in the metadata
+        // path; the convenience API is a trap at scale.
+        let docs_for_write = docs.clone();
+        inflight.push(store.writer().send(move |c| {
+            marrow_store::read::replace_chunks(c, version_id, &rows)?;
+            marrow_index::fts5::upsert_docs(c, &docs_for_write)
+        })?);
+        let _ = ix;
+    } else {
+        inflight.push(
+            store
+                .writer()
+                .send(move |c| marrow_store::read::replace_chunks(c, version_id, &rows))?,
+        );
+    }
+    Ok(n)
 }
 
 fn new_version(file_id: FileId, h: &Hashed, now: Timestamp) -> NewVersion {

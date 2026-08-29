@@ -30,8 +30,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
+mod content;
 mod pipeline;
 mod progress;
 
-pub use pipeline::{ingest_root, IngestOutcome, IngestPolicy};
+pub use content::{documents_for, read_for_parsing, ContentInput};
+pub use pipeline::{ingest_root, ingest_root_with_index, IngestOutcome, IngestPolicy};
 pub use progress::{Cancel, Progress, Stage};

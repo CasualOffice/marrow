@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 mod render;
+mod search;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -17,7 +18,7 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use marrow_core::{Error, Result, Timestamp};
-use marrow_ingest::{ingest_root, Cancel, IngestPolicy, Progress, Stage};
+use marrow_ingest::{Cancel, IngestPolicy, Progress, Stage};
 use marrow_scan::{AuthorizedRoot, WalkPolicy};
 use marrow_store::read::{NewRoot, NewWorkspace, StorageKind};
 use marrow_store::Store;
@@ -66,6 +67,14 @@ enum Cmd {
         /// Honour .gitignore in this run (D47: per-root, off by default)
         #[arg(long)]
         gitignore: bool,
+    },
+    /// Find things
+    Search {
+        /// What to look for
+        query: Vec<String>,
+        /// Maximum results
+        #[arg(short = 'n', long, default_value_t = 20)]
+        limit: usize,
     },
     /// Index health
     Status,
@@ -171,6 +180,24 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
         }
         Cmd::Workspace(WorkspaceCmd::List) => workspace_list(cli.json, style, out),
         Cmd::Index { name, gitignore } => index(name.as_deref(), *gitignore, cli.json, style, out),
+        Cmd::Search { query, limit } => {
+            let q = query.join(" ");
+            if q.trim().is_empty() {
+                return Err(Error::new(
+                    marrow_core::Code::CfgInvalid,
+                    "Nothing to search for. Pass a query: marrow search \"auth refresh token\"",
+                ));
+            }
+            let store = open_store()?;
+            let conn = store.reader()?;
+            let roots: Vec<String> = list_workspaces(&conn)?
+                .into_iter()
+                .map(|(_, p, _)| p)
+                .collect();
+            drop(conn);
+            let index = marrow_index::Fts5Index::open(&store)?;
+            search::run(&index, &q, *limit, &roots, cli.json, style, out)
+        }
         Cmd::Status => status(cli.json, style, out),
     }
 }
@@ -345,7 +372,17 @@ fn index(
             ..Default::default()
         };
         let progress = Arc::new(Progress::new());
-        let outcome = ingest_root(&store, ws_id, root_id, &root, &policy, &progress, &cancel)?;
+        let text_index = marrow_index::Fts5Index::open(&store)?;
+        let outcome = marrow_ingest::ingest_root_with_index(
+            &store,
+            ws_id,
+            root_id,
+            &root,
+            &policy,
+            &progress,
+            &cancel,
+            Some(&text_index),
+        )?;
 
         if !json {
             writeln!(
@@ -371,6 +408,8 @@ fn index(
         totals.unchanged += outcome.unchanged;
         totals.skipped_placeholder += outcome.skipped_placeholder;
         totals.failed += outcome.failed;
+        totals.parsed += outcome.parsed;
+        totals.chunks += outcome.chunks;
         totals.cancelled |= outcome.cancelled;
         let _ = progress.get(Stage::Hashed);
     }
@@ -388,6 +427,8 @@ fn index(
                 "stored": totals.stored,
                 "unchanged": totals.unchanged,
                 "skipped_placeholder": totals.skipped_placeholder,
+                "parsed": totals.parsed,
+                "chunks": totals.chunks,
                 "failed": totals.failed,
                 "cancelled": totals.cancelled,
             })
@@ -397,9 +438,11 @@ fn index(
             out,
             "\n{}",
             style.dim(&format!(
-                "{} files · {} in {}{}",
+                "{} files · {} in · {} parsed · {} chunks · {}{}",
                 render::count(totals.discovered),
                 render::count(totals.stored),
+                render::count(totals.parsed),
+                render::count(totals.chunks),
                 render::duration(elapsed),
                 if totals.failed > 0 {
                     format!(" · {} failed", totals.failed)

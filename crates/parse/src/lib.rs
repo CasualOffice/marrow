@@ -64,6 +64,7 @@
 #![warn(missing_debug_implementations)]
 
 pub mod budget;
+pub mod chunk;
 pub mod code;
 pub mod csv;
 pub mod decode;
@@ -75,6 +76,7 @@ pub mod structured;
 pub mod text;
 
 pub use budget::{BudgetGuard, Budgets};
+pub use chunk::{chunk, Chunk, ChunkKind, ChunkPolicy, CHUNKER_VERSION};
 pub use code::{CodeParser, Lang};
 pub use csv::CsvParser;
 pub use decode::Decoded;

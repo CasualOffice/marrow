@@ -34,6 +34,8 @@ impl Cancel {
 pub enum Stage {
     Discovered,
     Hashed,
+    /// Files whose contents were parsed into at least one chunk.
+    Parsed,
     Stored,
     /// Cloud placeholders seen and deliberately not read (TIER-005). Surfaced
     /// because a silent zero here is indistinguishable from "no cloud files",
@@ -51,6 +53,7 @@ pub enum Stage {
 pub struct Progress {
     discovered: AtomicU64,
     hashed: AtomicU64,
+    parsed: AtomicU64,
     stored: AtomicU64,
     skipped_placeholder: AtomicU64,
     unchanged: AtomicU64,
@@ -66,6 +69,7 @@ impl Progress {
         let c = match stage {
             Stage::Discovered => &self.discovered,
             Stage::Hashed => &self.hashed,
+            Stage::Parsed => &self.parsed,
             Stage::Stored => &self.stored,
             Stage::SkippedPlaceholder => &self.skipped_placeholder,
             Stage::Unchanged => &self.unchanged,
@@ -78,6 +82,7 @@ impl Progress {
         match stage {
             Stage::Discovered => &self.discovered,
             Stage::Hashed => &self.hashed,
+            Stage::Parsed => &self.parsed,
             Stage::Stored => &self.stored,
             Stage::SkippedPlaceholder => &self.skipped_placeholder,
             Stage::Unchanged => &self.unchanged,

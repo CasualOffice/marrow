@@ -2,7 +2,7 @@
 
 A local knowledge runtime. It indexes folders you point it at, understands their structure, answers questions with citations to the **exact page, cell or line**, and exposes all of it over MCP so the agent you already use — Claude Code, Codex, Cursor — can search everything you own.
 
-**Status:** 📐 Specification complete, implementation not started. Currently at **M0**.
+**Status:** M1 complete — indexes and searches a real corpus. Currently at **M2**.
 **Scope:** Personal project. One user, one machine, open source. Not a product.
 **Licence:** Apache-2.0
 
@@ -47,9 +47,9 @@ It also deliberately does **not** build: an OS sandbox ([§129](docs/Part_7_Solo
 
 | | |
 |---|---|
-| Current milestone | **M0 — Measure** |
-| Next action | Count your own corpus by type, size and cloud-sync status ([TRACKER](TRACKER.md#m0--measure)) |
-| First useful output | **M2**, ~7–12 weeks part-time — your coding agent can search everything you own |
+| Current milestone | **M2 — MCP server** |
+| What works today | `workspace add` · `index` · `search` · `status`, over 35,119 real files |
+| Measured | 15.6 s to index and chunk the corpus; **0–3 ms** queries |
 
 See **[ROADMAP.md](ROADMAP.md)** for phases and **[TRACKER.md](TRACKER.md)** for the live task list.
 
