@@ -1,0 +1,46 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Local runtime data — never commit an index or anything derived from personal files
+/data/
+/.lkar/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+
+# Models and weights — content-addressed, fetched on demand, never in git
+/models/
+*.gguf
+*.onnx
+*.safetensors
+
+# Benchmark and corpus output (may contain real paths/filenames)
+/bench/results/
+/corpus/
+*.bench.json
+
+# Diagnostics and logs
+/logs/
+*.log
+diagnostics-*.zip
+
+# Node (only if a UI lands post-M6)
+node_modules/
+dist/
+.vite/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Secrets — belt and braces; nothing here should ever exist (SEC-005: use the OS keyring)
+.env
+.env.*
+*.pem
+*.key
+secrets.*
