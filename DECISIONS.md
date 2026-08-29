@@ -18,6 +18,7 @@ Recorded, not yet fixed in the spec text. Each was found by building against Par
 | 2 | §107 requires refusing a database newer than this build, but §108 has **no error code for it** | **Fixed** — added `DB_SCHEMA_TOO_NEW` to core |
 | 3 | `jobs.status` defines both `FAILED` and `DEAD`, but §111.1's state machine only uses `DEAD` | M1 never writes `FAILED`. Leave the column, document the unused variant |
 | 4 | `chunks.provenance_class` has no CHECK constraint while `parse_results.provenance_class` does, for the same value set | Fix when M4 writes chunks |
+| 7 | **`parse_results.outcome`'s CHECK omits `METADATA_ONLY`** — the router's terminal outcome for any file with no parser (Part 3 §63 T5) | **Fixed.** Persisting a parse result for any binary would have failed the constraint; on this corpus that is all 3,478 photos. Migration v1 was edited in place rather than adding a v3 that recreates the table — forward-only matters once something real depends on a migration, and nothing does yet. Revisit that stance the moment an index exists that is worth keeping |
 | 5 | No typed IDs for `file_paths.path_id`, `parse_results.parse_id`, `devices.device_id` | **Fixed** — added `PathId`, `ParseId`, `DeviceId` to core |
 | 6 | A lone write blocks up to 100 ms because §50 fixes the batch at "500 rows or 100 ms" | Accepted. An adaptive early commit on an empty inbox would be faster and is exactly the "clever batching" the design warned against. Callers wanting it use `send` + `flush` |
 

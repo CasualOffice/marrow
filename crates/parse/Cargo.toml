@@ -1,0 +1,49 @@
+[package]
+name = "marrow-parse"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+marrow-core.workspace = true
+serde.workspace = true
+tracing.workspace = true
+
+# Not in `[workspace.dependencies]`: only this crate turns bytes into an IR, so
+# the format libraries live here rather than widening the workspace surface.
+# Deliberately absent: `marrow-scan`. Parsers take bytes plus a `FileProbe`,
+# never a path — see the note on `FileProbe` in `parser.rs`.
+
+# Text decoding. `encoding_rs` does the transcoding, `chardetng` guesses the
+# label when there is no BOM and the bytes are not valid UTF-8.
+encoding_rs = "0.8"
+chardetng = "0.1"
+
+# Markdown. `into_offset_iter()` is the reason for this crate specifically: it
+# hands back a byte range with every event, which is exactly invariant #1.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
+
+# Code. Grammars are chosen by real corpus counts (bench/M0-corpus.md §6).
+tree-sitter = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-sequel = "0.3"
+
+# Structured config.
+# `toml_edit` rather than `toml`: it keeps a byte span on every key and value.
+# `toml` deserializes into typed structs and throws the offsets away.
+toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
+serde_json = { workspace = true }
+yaml-rust2 = "0.12"
+
+# No `csv` crate: `ByteRecord::range()` indexes the record's private buffer, not
+# the source, so cell provenance would have to be reconstructed anyway. See
+# `csv.rs` — a quote-aware splitter that yields source ranges directly is both
+# smaller and the only version that can satisfy invariant #1.
+
+[dev-dependencies]
+tempfile = "3"

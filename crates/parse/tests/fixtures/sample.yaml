@@ -1,0 +1,12 @@
+name: fixture
+tier: T1
+budgets:
+  max_nodes: 100000
+  max_depth: 64
+parsers:
+  - text
+  - markdown
+script: |
+  echo not: a key
+  echo still: not a key
+exact: true

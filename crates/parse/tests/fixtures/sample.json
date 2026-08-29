@@ -1,0 +1,10 @@
+{
+  "name": "fixture",
+  "tier": "T1",
+  "budgets": {
+    "maxNodes": 100000,
+    "maxDepth": 64
+  },
+  "parsers": ["text", "markdown", "code"],
+  "exact": true
+}

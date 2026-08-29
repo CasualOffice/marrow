@@ -1,0 +1,4 @@
+tier,provenance,notes
+T1,exact,"byte ranges, line ranges"
+T2,exact,"page and bbox"
+T5,metadata,"no content parsed"

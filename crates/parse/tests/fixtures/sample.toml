@@ -1,0 +1,17 @@
+name = "fixture"
+edition = "2021"
+
+[budgets]
+max_file_bytes = 52428800
+max_nodes = 100000
+
+[budgets.nested]
+depth = 64
+
+[[parsers]]
+id = "text"
+tier = "T1"
+
+[[parsers]]
+id = "markdown"
+tier = "T1"

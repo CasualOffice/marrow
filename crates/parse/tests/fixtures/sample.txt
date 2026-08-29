@@ -1,0 +1,6 @@
+Marrow indexes folders you have granted it.
+
+It answers with citations to the exact line, so an answer can be checked
+rather than believed.
+
+Nothing here is real user data.

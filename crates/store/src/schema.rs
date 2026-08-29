@@ -204,8 +204,14 @@ CREATE TABLE parse_results (
     parser_tier         TEXT NOT NULL CHECK (parser_tier IN ('T1','T2','T3','T4','T5')),
     provenance_class    TEXT NOT NULL CHECK (provenance_class IN
                           ('EXACT','DEGRADED','APPROXIMATE','METADATA_ONLY')),  -- CONV-003
+    -- METADATA_ONLY is the router's terminal outcome (Part 3 §63 T5): a file
+    -- with no parser stays discoverable from metadata, which is a fact about
+    -- the file, not an error. Part 6 §106.5's CHECK omits it, so persisting a
+    -- parse result for any binary would have failed the constraint — on this
+    -- corpus that is every one of the 3,478 photos.
     outcome             TEXT NOT NULL CHECK (outcome IN
-                          ('OK','PARTIAL','LOW_YIELD','FAILED','UNSUPPORTED','SKIPPED_POLICY')),
+                          ('OK','PARTIAL','LOW_YIELD','FAILED','UNSUPPORTED',
+                           'SKIPPED_POLICY','METADATA_ONLY')),
     char_yield          INTEGER,
     page_count          INTEGER,
     warnings            TEXT CHECK (warnings IS NULL OR json_valid(warnings)),
