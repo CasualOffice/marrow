@@ -21,9 +21,10 @@ Milestones, not phases. Each one ends at something used daily. Derived from [Par
 
 | Cumulative | Part-time | Full-time |
 |---|---|---|
-| **M2 — useful daily** | **7–12 weeks** | **4–5 weeks** |
-| M4 — semantic working | 15–25 weeks | 8–12 weeks |
-| M6 — the substantive product | 22–35 weeks | 11–17 weeks |
+| **M2 — useful daily (via Claude Code)** | **7–12 weeks** | **4–5 weeks** |
+| **M3 — the app exists** | **13–21 weeks** | **7–9 weeks** |
+| M4 — semantic working | 17–27 weeks | 9–12 weeks |
+| M6 — the substantive product | 24–37 weeks | 12–18 weeks |
 
 ---
 

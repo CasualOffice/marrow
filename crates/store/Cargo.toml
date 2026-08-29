@@ -2,7 +2,18 @@
 name = "marrow-store"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]
 marrow-core.workspace = true
+rusqlite.workspace = true
+tracing.workspace = true
+# `ulid` directly: three M1 rows (`file_paths.path_id`, `parse_results.parse_id`,
+# `devices.device_id`) have no typed ID in `marrow_core::id`, and adding one is
+# out of scope for this crate. Minted here, stored as TEXT ULID like every other key.
+ulid.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

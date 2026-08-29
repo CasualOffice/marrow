@@ -8,6 +8,23 @@ Only decisions that are still live under the solo scope. The full historical log
 
 ## Open
 
+### D48 — Does MCP (M2) still come before the desktop shell (M3)?
+
+**Needed by:** end of M1.
+
+Now that the desktop app is the product, the milestone order is a real tradeoff:
+
+| Order | For | Against |
+|---|---|---|
+| **MCP first, then GUI** *(recommended)* | Cheapest possible end-to-end test of the query API — 1–2 weeks. A bad API found through MCP costs a day; found after three panes are built on it, it costs a rewrite. If the GUI slips, the index is still useful daily via Claude Code | Delays the thing you actually want to look at by ~2 weeks |
+| **GUI first** | Motivation. Risk **S7** says interest fades before something is usable daily, and a window is more motivating than a stdio server | Builds UI on an unvalidated query API |
+
+**Recommendation: MCP first**, on the engineering argument. But S7 is a real risk and this is a call about your own motivation, which I can't make for you.
+
+- [ ] Decide at end of M1
+
+---
+
 ### D46 — Crate namespace on crates.io
 
 **Needed by:** first `cargo publish`, or never if the crates stay unpublished.
@@ -46,12 +63,6 @@ Questions logged so far:
 1. _—_
 2. _—_
 3. _—_
-
----
-
-### D42 — Build a UI at all?
-
-**Deferred past M6.** CLI + MCP + your existing agent front-end covers it. Revisit when the CLI genuinely annoys you, and note *what* annoyed you — that's the UI spec.
 
 ---
 
@@ -104,6 +115,18 @@ Dropped from M3. If the corpus ever changes, this reverses cheaply — the parse
 Consequences: FSEvents watcher semantics with event-ID replay · native Vision framework for OCR if ever needed (0 MB) · NFD filename normalization is mandatory, not optional · `SF_DATALESS` / `.icloud` stubs are the placeholder detection path.
 
 Disk was briefly a constraint at 17 GB free; 64 GB of that was reclaimable Rust `target/` output. Now 78 GB free — not a constraint.
+
+### D42 — Build a GUI? → **Yes. The desktop app is the product** *(reversed 2026-08-30)*
+
+Previously deferred past M6 on the Part 7 §130 argument that Claude Code already provides a front-end, so a UI would be rebuilding what exists.
+
+**Reversed by the author.** The desktop app is the product surface.
+
+What this reverses: Part 7 §130's UI deletion, and Part 1 §16's information architecture returns (trimmed to what ships — see [GUI.md](docs/GUI.md) §4).
+
+What it does **not** reverse — §130's other half still stands: no agent runtime, no model gateway, no approval-UX-as-chat. A GUI does not require owning inference. `Ask` is a query surface with citations, not a conversation with tool-calling.
+
+Stack: Tauri 2 + React + TypeScript (Part 1 §17.1). Three frontends — desktop, CLI, MCP — over one core, which strengthens the ports-and-adapters seam rather than complicating it.
 
 ### D45 — Product name → **Marrow**
 

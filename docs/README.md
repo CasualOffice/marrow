@@ -31,7 +31,17 @@ For solo use, one more: **don't rebuild the agent layer.** Claude Code and frien
 | **5** | [Part 5 — Capabilities](Part_5_Capabilities.md) | §93–104. Prior art, hardware probe, local LLM, execution tiers, generative media, file intelligence, tables, agent parity, answer coverage | **Core**, as amended by Part 7 §129 (execution) and §127 (hardware) |
 | **6** | [Part 6 — Engineering Reference](Part_6_Engineering_Reference.md) | §105–122. SQLite DDL, migrations, errors, config, IPC, jobs, chunking, fusion, context envelope, tests, budgets, glossary, indexes | **Build from this.** Trim the DDL per Part 7 §135.1; §110 IPC is deferred |
 
-**Conflict rule:** later parts supersede earlier ones. Part 7 wins over everything.
+### Design documents
+
+Written after the spec, and they win over it for the surfaces they cover.
+
+| Doc | Covers |
+|---|---|
+| [GUI.md](GUI.md) | **Desktop app** — stack, Tauri boundary, IA, the two modes, interaction, visual direction, performance budgets. Reverses D42; supersedes Part 1 §16 |
+| [UX.md](UX.md) | **Terminal + MCP** — command surface, result rendering, errors, machine output |
+| [LLD.md](LLD.md) | **Internals** — layering, patterns used *and rejected*, concurrency, error strategy, seams, testing |
+
+**Conflict rule:** later parts supersede earlier ones, and the design docs supersede the spec for their surface. Part 7 wins over Parts 1–6.
 
 ---
 

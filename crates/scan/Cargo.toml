@@ -1,0 +1,25 @@
+[package]
+name = "marrow-scan"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+marrow-core.workspace = true
+blake3.workspace = true
+tracing.workspace = true
+
+# Not in `[workspace.dependencies]`: only this crate walks a filesystem or
+# normalises a path, so the versions live here rather than widening the
+# workspace surface.
+ignore = "0.4"
+unicode-normalization = "0.1"
+
+# No `libc` / `rustix`: `std::os::macos::fs::MetadataExt::st_flags()` already
+# exposes the `SF_DATALESS` bit from the `lstat` we have to do anyway, so the
+# placeholder check (invariant #5) needs no FFI and no `unsafe`.
+
+[dev-dependencies]
+tempfile = "3"
