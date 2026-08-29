@@ -1,6 +1,6 @@
 # Tracker
 
-**Current milestone:** M3 — Desktop shell
+**Current milestone:** M3 — Desktop shell · Part 8 S1–S3 (model runtime)
 **Last updated:** 2026-08-30
 
 > This is the file that actually gets updated. [ROADMAP.md](ROADMAP.md) is the plan; this is the state.
@@ -20,6 +20,21 @@
 | M5 | Write tools | `[ ]` | — | — |
 | M6 | Timeline | `[ ]` | — | — |
 | M7+ | Optional | `[ ]` | — | — |
+
+### Part 8 — model runtime ([§150](docs/Part_8_Model_Runtime.md))
+
+The core. Semantic search, Ask and graph extraction all run through it,
+so this is a dependency rather than a detour.
+
+| S | Name | Status | Notes |
+|---|---|---|---|
+| S1 | Hardware probe + live sampler + sizing | `[x]` | `marrow-hw`. 37 tests |
+| S2 | Registry, catalogue, download, Ollama detection | `[~]` | Registry and catalogue done; **download and detection not started** |
+| S3 | Supervisor: states, admission, breaker, queue, scratch | `[x]` | `marrow-model`. 92 tests |
+| S4 | MLX runtime in a worker process, KV reuse, Fast/Thorough | `[ ]` | The first line of real inference |
+| S5 | Ask pipeline (§148), skeletons, streaming | `[ ]` | — |
+| S5b | Eval harness across the shortlist (§149) | `[ ]` | — |
+| S6 | Cloud providers behind the same trait | `[ ]` | — |
 
 ---
 
@@ -164,6 +179,44 @@ find ~ -flags dataless 2>/dev/null | wc -l
 - [ ] Unit-mismatch blocks the operation (never coerce silently)
 - [ ] Table chunks: repeated headers + schema chunk
 - [ ] Expose over MCP
+
+---
+
+## Part 8 — model runtime
+
+**Exit:** a question asked in the desktop app is answered by a local model,
+grounded in retrieved chunks, with citations — and the app costs nothing when
+nobody is asking.
+
+### S1 — hardware `[x]`
+- [x] `Probe` — static machine shape, pessimistic on failure (HW-010)
+- [x] `Sampler` — live conditions under a 1 ms budget, ring buffer, staleness detectable
+- [x] `sizing` — weights · KV · runtime buffers · resident embedder · OS reserve, calibrated to the 3–4 GB budget and pinned by a test
+- [x] `profile` — Efficient / Balanced / Larger local / Cloud, defaulting by probe
+- [ ] Models page reading all of the above — **the S1 exit criterion, still open**
+
+### S2 — registry `[~]`
+- [x] `Entry`, `Capabilities`, `Licence`, `Source`, `Format`
+- [x] Built-in catalogue: Qwen 3.5 4B · Nemotron Nano 4B · Granite 4 3B · Gemma 4B
+- [ ] **Pin the real SHA-256 for each entry.** Every catalogue row ships `sha256: None` today, so nothing is downloadable. This is deliberate — a guessed digest fails after a 3 GB pull and looks like a corrupt network — but it is the blocking item for the whole stage
+- [ ] Resumable download into `partial/`, verified before promotion to `weights/`
+- [ ] Ollama / LM Studio detection (R1 — zero bytes downloaded)
+
+### S3 — supervisor `[x]`
+- [x] Lifecycle states with a reason on every transition (SUP-001/002/003)
+- [x] Admission against the live sample; policy before resources; every refusal names its number
+- [x] Circuit breaker, persisted, ladder 3/5/8
+- [x] Bounded per-model queue, strict priority, cancellation both directions
+- [x] Model workspace: content-addressed weights, per-request scratch, path-escape refusal, orphan sweep
+- [x] KV prefix cache accounting: exact-prefix, scope-fenced, LRU under a footprint-derived cap
+- [x] Supervisor thread with sampler-paced wakeups and a flushing shutdown
+
+### S4 — first runtime `[ ]`
+- [ ] `GenerationProvider` trait
+- [ ] MLX behind it, availability verified by loading (LLM-036)
+- [ ] Worker process with rlimits; OOM kills the worker, never the index
+- [ ] KV reuse wired to the real cache
+- [ ] Fast / Thorough on the wire
 
 ---
 
