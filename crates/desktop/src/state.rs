@@ -5,7 +5,7 @@ use marrow_index::{Fts5Index, TextIndex, TextQuery};
 use marrow_store::Store;
 
 use crate::commands::{
-    to_hit, FileDetail, IndexHealth, Region, SearchHit, SearchResponse, WorkspaceRow,
+    to_hit, FileDetail, FileRow, IndexHealth, Region, SearchHit, SearchResponse, WorkspaceRow,
 };
 
 /// Everything the commands need. Opened once at startup.
@@ -38,7 +38,17 @@ impl Core {
         }
 
         let capped = limit.clamp(1, 200);
-        let q = TextQuery::new(trimmed).limit(capped);
+
+        // **Prefix mode, because this is an as-you-type field.**
+        //
+        // Whole-token matching means `enclav` matches nothing until the final
+        // `e` is typed — every intermediate keystroke shows an empty result
+        // list, which reads as "search is broken" rather than "keep typing".
+        // Prefix makes the last term match as a prefix; GUI §5.2 calls this the
+        // as-you-type mode and it measures at ~415 µs.
+        let q = TextQuery::new(trimmed)
+            .mode(marrow_index::MatchMode::Prefix)
+            .limit(capped);
         let raw = self.index.search(&q)?;
 
         // How many documents actually matched, so the footer does not report
@@ -50,7 +60,11 @@ impl Core {
             raw.len()
         } else {
             self.index
-                .search(&TextQuery::new(trimmed).limit(capped * 10))
+                .search(
+                    &TextQuery::new(trimmed)
+                        .mode(marrow_index::MatchMode::Prefix)
+                        .limit(capped * 10),
+                )
                 .map(|r| r.len())
                 .unwrap_or(raw.len())
         };
@@ -251,6 +265,75 @@ impl Core {
             lines: selected.into_iter().take(MAX_LINES).collect(),
             truncated,
         })
+    }
+
+    /// List indexed files, newest first.
+    ///
+    /// Browsing is not searching: the Files view was built on `search`, so with
+    /// no query it showed an empty pane for an index holding 35,000 files.
+    pub fn list_files(
+        &self,
+        workspace: Option<&str>,
+        prefix: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<FileRow>> {
+        let conn = self.store.reader()?;
+        let roots = self.roots()?;
+        let limit = limit.clamp(1, 1000) as i64;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT f.current_path, w.name, v.size_bytes, v.mtime_ms,
+                        (SELECT count(*) FROM chunks c WHERE c.version_id = v.version_id)
+                   FROM files f
+                   JOIN workspaces w ON w.workspace_id = f.workspace_id
+              LEFT JOIN file_versions v
+                     ON v.file_id = f.file_id AND v.status = 'CURRENT'
+                  WHERE f.status = 'ACTIVE'
+                    AND f.current_path IS NOT NULL
+                    AND (?1 IS NULL OR w.name = ?1)
+                    AND (?2 IS NULL OR lower(f.current_path) LIKE '%' || lower(?2) || '%')
+               ORDER BY COALESCE(v.mtime_ms, 0) DESC
+                  LIMIT ?3",
+            )
+            .map_err(|e| marrow_store::map_sqlite(e, "listing files"))?;
+
+        let rows = stmt
+            .query_map(
+                marrow_store::rusqlite::params![workspace, prefix, limit],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Option<i64>>(2)?,
+                        r.get::<_, Option<i64>>(3)?,
+                        r.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .and_then(|it| it.collect::<std::result::Result<Vec<_>, _>>())
+            .map_err(|e| marrow_store::map_sqlite(e, "listing files"))?;
+
+        Ok(rows
+            .into_iter()
+            .map(
+                |(path, workspace, size_bytes, modified_ms, chunks)| FileRow {
+                    relative_path: roots
+                        .iter()
+                        .filter(|r| path.starts_with(r.as_str()))
+                        .max_by_key(|r| r.len())
+                        .and_then(|r| path.strip_prefix(r.as_str()))
+                        .map(|s| s.trim_start_matches('/').to_string())
+                        .unwrap_or_else(|| path.clone()),
+                    path,
+                    workspace,
+                    size_bytes,
+                    modified_ms,
+                    chunks,
+                    metadata_only: chunks == 0,
+                },
+            )
+            .collect())
     }
 
     /// Hand a file to the system, or reveal it in the file manager.

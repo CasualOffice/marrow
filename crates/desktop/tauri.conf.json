@@ -5,8 +5,6 @@
   "identifier": "dev.marrow.desktop",
   "build": {
     "frontendDist": "./ui/dist",
-    "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "pnpm --dir ui dev",
     "beforeBuildCommand": "pnpm --dir ui build"
   },
   "app": {
@@ -26,13 +24,20 @@
     ],
     "security": {
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost",
-      "capabilities": ["main"]
+      "capabilities": [
+        "main"
+      ]
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
-    "icon": ["icons/icon.png"],
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "icon": [
+      "icons/icon.png"
+    ],
     "macOS": {
       "minimumSystemVersion": "11.0"
     }

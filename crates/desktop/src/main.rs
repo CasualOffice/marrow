@@ -60,6 +60,7 @@ fn main() {
             commands::read_region,
             commands::open_path,
             commands::reveal_path,
+            commands::list_files,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the Marrow window");

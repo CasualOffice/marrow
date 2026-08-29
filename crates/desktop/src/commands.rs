@@ -259,7 +259,10 @@ pub(crate) fn to_hit(rank: usize, h: &marrow_index::TextHit, roots: &[String]) -
         path: h.path.clone(),
         line,
         breadcrumb: h.title.clone(),
-        excerpt: h.snippet.text.clone(),
+        // Centred on the match here, because the UI is given no offsets and can
+        // therefore only take the first lines — which for a large chunk shows
+        // text that does not contain the search term at all.
+        excerpt: centre_on_match(&h.snippet),
         provenance: match h.provenance {
             ProvenanceClass::Exact => "exact",
             ProvenanceClass::Degraded => "degraded",
@@ -272,6 +275,69 @@ pub(crate) fn to_hit(rank: usize, h: &marrow_index::TextHit, roots: &[String]) -
         modified_ms: h.modified.as_millis(),
         file_id: h.file_id.to_string(),
     }
+}
+
+/// Trim a snippet to the lines that actually contain the match.
+///
+/// FTS5 marks matches with the delimiters `marrow-index` configured. A result
+/// row shows two lines; taking the first two of a ten-line snippet shows the
+/// user text without their search term in it, which reads as a broken search.
+fn centre_on_match(s: &marrow_index::Snippet) -> String {
+    const OPEN: char = '\u{1}';
+    const CLOSE: char = '\u{2}';
+
+    let lines: Vec<&str> = s
+        .text
+        .lines()
+        .map(str::trim_end)
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    // First line carrying a marker; fall back to the start when FTS5 gave us
+    // none (a prefix match on a short field can do that).
+    let hit = lines.iter().position(|l| l.contains(OPEN)).unwrap_or(0);
+
+    lines
+        .iter()
+        .skip(hit)
+        .take(2)
+        .map(|l| l.replace(OPEN, "").replace(CLOSE, ""))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// One file, for the Files browser.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileRow {
+    pub path: String,
+    pub relative_path: String,
+    pub workspace: String,
+    pub size_bytes: Option<i64>,
+    pub modified_ms: Option<i64>,
+    pub chunks: i64,
+    /// Recorded but with no searchable contents — the Files view says so
+    /// rather than showing a row that looks the same as an indexed one.
+    pub metadata_only: bool,
+}
+
+/// List indexed files, newest first.
+///
+/// The Files view was built on `search`, so with no query it showed nothing —
+/// an empty browser for an index holding 35,000 files. Browsing is not
+/// searching and needs its own command.
+#[tauri::command]
+pub async fn list_files(
+    core: State<'_, Arc<Core>>,
+    workspace: Option<String>,
+    prefix: Option<String>,
+    limit: usize,
+) -> Res<Vec<FileRow>> {
+    let core = Arc::clone(&core);
+    blocking(move || core.list_files(workspace.as_deref(), prefix.as_deref(), limit)).await
 }
 
 /// Names every command the WebView may call.
@@ -291,6 +357,7 @@ const COMMAND_NAMES: &[&str] = &[
     "read_region",
     "open_path",
     "reveal_path",
+    "list_files",
 ];
 
 #[cfg(test)]
@@ -314,7 +381,7 @@ mod tests {
     fn the_command_surface_is_small_and_read_only() {
         // Every name here is a hole in the WebView sandbox. M1 exposes no
         // mutation at all; when one arrives it needs a deliberate addition.
-        assert_eq!(COMMAND_NAMES.len(), 7);
+        assert_eq!(COMMAND_NAMES.len(), 8);
         for n in COMMAND_NAMES {
             assert!(
                 !n.contains("write") && !n.contains("delete") && !n.contains("exec"),
