@@ -14,9 +14,10 @@
   marrow-desktop ──┬── marrow-cli ──┬── marrow-mcp     three adapters,
      (Tauri 2)      │                │                   one core
                     ▼                ▼
-                   ┌────────────────────────┐
-                   │      marrow-query      │   orchestration
-                   └────────────┬───────────┘
+            ┌───────────────────┴──────────────────┐
+            │   marrow-ingest   │   marrow-query   │   orchestration
+            │   (write path)    │   (read path)    │
+            └───────────────────┬──────────────────┘
                                 │
         ┌───────────────┬───────┴───────┬──────────────┐
         ▼               ▼               ▼              ▼
@@ -257,7 +258,8 @@ crates/
 ├── scan/          walk, tier, probe, hash, path safety
 ├── parse/         parser trait + router + T1 parsers    (M1)
 ├── index/         TextIndex port + adapter              (M1)
-├── query/         planner, fusion, result assembly      (M1)
+├── ingest/        write path: scan → hash → store       (M1)
+├── query/         read path: planner, fusion, results   (M1)
 ├── mcp/           stdio server                          (M2)
 ├── cli/           argument parsing + rendering
 └── desktop/       Tauri commands + events               (M3)

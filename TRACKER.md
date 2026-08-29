@@ -73,7 +73,7 @@ find ~ -flags dataless 2>/dev/null | wc -l
 - [x] **Cloud placeholder detection — never hydrate** ⚠️ — `SF_DATALESS` + `.icloud` stubs, metadata-only
 - [x] Path canonicalization + symlink escape + NFC/NFD identity — component-wise, not string-prefix
 - [x] Lazy walk with per-entry error isolation (FS-011)
-- [ ] Stable `file_id` + path history (**path ≠ identity**) — store + scan both ready, needs the ingest pipeline to join them
+- [x] Stable `file_id` + path history (**path ≠ identity**) — rename keeps its id; hardlinks stay distinct
 - [ ] `notify` watcher with coalescing/debounce
 - [ ] Reconciliation loop; watcher-health reporting (`Live`/`Degraded`/`Poll-only`)
 - [ ] Unicode NFC/NFD normalization so macOS doesn't create duplicate identities
@@ -93,13 +93,24 @@ find ~ -flags dataless 2>/dev/null | wc -l
 - [ ] Default-exclude app noise: `*.dat` `*.toc` `*.journal` `*.strings` `*.plist`, fonts (~2,700 files, 29%)
 - [ ] `.gitignore` respect as **per-root policy**, not global (M0 F9 — it hides 442 xlsx)
 
+### Ingest pipeline
+- [x] Staged pipeline, bounded channels, N hash workers ([LLD §2.6](docs/LLD.md))
+- [x] Cancellation token checked at every stage boundary
+- [x] Progress counters (discovered / hashed / stored / skipped / failed)
+- [x] **Idempotent: converges on a real 41,110-file corpus, 0 writes on re-run**
+- [ ] Wire `marrow-parse` behind the hash stage
+- [ ] Wire `marrow-index` behind parse
+
 ### Index + query
-- [ ] Tantivy schema and writer
-- [ ] Near-real-time index updates after parse
+- [x] D3 settled → SQLite FTS5, on transactional-consistency grounds
+- [ ] FTS5 adapter behind the `TextIndex` port
 - [ ] CLI `search` (filters: path, type, date)
 - [ ] CLI `file` — the file-intelligence panel
-- [ ] CLI `status` — index health, backlog, errors, placeholder count
+- [x] CLI `status` — workspaces, file counts, bytes, cloud-only
+- [x] CLI `workspace add` / `list`, `index`
+- [x] `--json` on every command; colour auto-off when piped
 - [ ] "Why not found" explanation
+- [ ] Real SIGINT handler (currently the process default; safe to resume, but a UX gap)
 
 ### Gates
 - [ ] `kill -9` mid-scan → resumes cleanly, no duplicate work
@@ -240,6 +251,7 @@ Short entries. What shipped, what surprised you, what changed.
 | 2026-08-30 | Spec complete (7 parts). Re-scoped for solo/open-source in Part 7. Repo initialised. M0 started. |
 | 2026-08-30 | Named **Marrow** (D45). Docs renamed `Part_N_*.md`. Crate namespace left open as D46. |
 | 2026-08-30 | Reclaimed **64 GB** of Rust `target/` output (14→78 GB free). Build artifacts were 6.6× the entire knowledge corpus. M0 F11 superseded. |
+| 2026-08-30 | **End to end.** `marrow workspace add` → `index` → `status` works on the real corpus: **41,110 files in 3.6 s cold, ~1 s warm, 0 writes on re-run.** Three bugs found by running it rather than testing it: a reader connection opened per file; the blocking `submit` API (100 ms/file → ~57 min); and hardlinks fighting over `current_path` so the index never converged. |
 | 2026-08-30 | **`marrow-store` done.** 36 tests. Found 6 spec defects ([D50](DECISIONS.md)); the load-bearing one: §106.1 mandates `origin_device_id`/`origin_principal_id` on every mutable row and the DDL declares neither. Settled as [D49](DECISIONS.md) and applied now — a column across 11 tables is not something to retrofit. |
 | 2026-08-30 | **`marrow-scan` done.** 42 tests. Resolved M0's blocked item: 58 iCloud placeholders, 1.35 GB, 9–36 ms. Two traps found — `hidden(true)` would have hidden every placeholder (TIER-008 would read zero); APFS is normalization-*insensitive*, so NFC/NFD must be handled in our path key. D47 quantified: **34,459 files with gitignore off vs 9,435 with it on** — size M1 for ~34k. |
 | 2026-08-30 | **Design pass.** GUI.md / UX.md / LLD.md written before more code. Five desktop screens mocked. D42 reversed — the desktop app is the product. |

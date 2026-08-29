@@ -1,0 +1,16 @@
+[package]
+name = "marrow-ingest"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+marrow-core.workspace = true
+marrow-scan.workspace = true
+marrow-store.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

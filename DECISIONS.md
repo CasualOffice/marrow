@@ -86,18 +86,6 @@ Questions logged so far:
 
 ---
 
-### D3 — Lexical index: Tantivy or SQLite FTS5? — **REOPENED by M0**
-
-Was settled as Tantivy. M0 changes the input: the corpus is **9,435 files**, not 100k.
-
-At that scale both are instant. FTS5 removes a dependency and a second index to keep consistent with canonical state; Tantivy's advantages (per-field BM25, pluggable tokenizers, richer analyzers) are real but barely exercised by 9.4k documents.
-
-**Leaning FTS5.** Decide during M1 — the cost of being wrong is one rewrite of a small module, and Part 2 §36.3 already names "compact profile: SQLite FTS5 only" as a supported shape.
-
-- [ ] Decide at M1
-
----
-
 ### D2 / D31 — Embedding and LLM runtime
 
 Two viable paths:
@@ -117,6 +105,27 @@ Hardware is T-mid (16 GB unified): 7–8B @ Q4 comfortable, 13–14B tight, 30B+
 ---
 
 ## Settled
+
+### D3 — Lexical index → **SQLite FTS5** *(settled at M1)*
+
+Originally Tantivy; reopened by M0 on scale grounds (9,435 files, later revised to ~34,459 with per-root gitignore). Both are instant at that size, so scale was never going to decide it.
+
+**The deciding argument is transactional consistency, which I under-weighted earlier.** FTS5 lives in the same database as canonical state, so an index update happens **in the same transaction** as the row it derives from. There is no window where the index and the canonical store disagree, and no dual-write to reconcile.
+
+With Tantivy that consistency is a standing obligation: a separate directory, a separate commit, a separate crash-recovery story, and the periodic index-verification pass Part 6 §116 (V4) exists to run. All of that is real work whose only payoff at this scale is analyzer quality we would barely exercise.
+
+| | FTS5 | Tantivy |
+|---|---|---|
+| Consistency with canonical state | **Free — same transaction** | A reconciliation problem |
+| Dependencies added | **None** (`rusqlite` already present) | One large one |
+| BM25 | Yes, via `bm25()` | Yes, richer |
+| Tokenizers | `unicode61`, `porter`, `trigram` | Pluggable, better CJK |
+| Crash recovery | **The database's** | Its own |
+| Speed at 34k docs | Instant | Instant |
+
+Tantivy wins on analyzer quality and at a scale this corpus will not reach. It stays reachable: the `TextIndex` port ([LLD §2.1](docs/LLD.md)) exists precisely so this is one adapter, and Part 2 §36.3 already sanctions the FTS5-only profile.
+
+**Revisit if** CJK content appears in quantity, or field-weighted BM25 measurably beats what FTS5 gives on the golden query set.
 
 ### D49 — SYNC-006 columns → **`origin_device_id` only, canonical tables only**
 

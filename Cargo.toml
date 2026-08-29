@@ -1,6 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/store", "crates/scan", "crates/cli"]
+members = [
+    "crates/core",
+    "crates/store",
+    "crates/scan",
+    "crates/parse",
+    "crates/index",
+    "crates/ingest",
+    "crates/cli",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +21,9 @@ publish = false
 marrow-core  = { path = "crates/core" }
 marrow-store = { path = "crates/store" }
 marrow-scan  = { path = "crates/scan" }
+marrow-parse = { path = "crates/parse" }
+marrow-index = { path = "crates/index" }
+marrow-ingest = { path = "crates/ingest" }
 
 anyhow     = "1"
 thiserror  = "2"
