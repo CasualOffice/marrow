@@ -149,8 +149,18 @@ fn data_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// The composition root.
+///
+/// This is the only place that knows every adapter in play, so it is where the
+/// migration chain is assembled. `marrow-index` adds FTS5 tables to the same
+/// database (D3), but it depends on `marrow-store` — so store cannot reference
+/// it back without a cycle. The binary composes them instead, which keeps store
+/// unaware of index and index a swappable implementation of a port.
 fn open_store() -> Result<Store> {
-    Store::open(data_dir()?.join(marrow_store::DB_FILE_NAME))
+    Store::open_with_migrations(
+        data_dir()?.join(marrow_store::DB_FILE_NAME),
+        &[marrow_index::fts5::MIGRATION],
+    )
 }
 
 fn run(cli: &Cli, style: Style) -> Result<()> {

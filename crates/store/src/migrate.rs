@@ -200,12 +200,18 @@ fn apply(conn: &mut Connection, from: i64, migrations: &[Migration]) -> Result<i
 }
 
 /// Open the write connection, migrating it up to this build's schema version.
-pub(crate) fn open_migrated(loc: &Location) -> Result<(Connection, i64)> {
+/// Open a database, applying `migrations` in order.
+///
+/// The composition root reaches this through [`crate::Store::open_with_migrations`],
+/// which is the public seam; this stays crate-private so `Location` does not
+/// leak. Also how the failure and restore paths are tested without shipping a
+/// broken migration.
+/// The default chain, for tests that do not care about composition.
+#[cfg(test)]
+fn open_migrated(loc: &Location) -> Result<(Connection, i64)> {
     open_migrated_with(loc, MIGRATIONS)
 }
 
-/// As [`open_migrated`], with an injectable chain so the failure and
-/// restore paths are testable without shipping a broken migration.
 pub(crate) fn open_migrated_with(
     loc: &Location,
     migrations: &[Migration],

@@ -127,6 +127,34 @@ Tantivy wins on analyzer quality and at a scale this corpus will not reach. It s
 
 **Revisit if** CJK content appears in quantity, or field-weighted BM25 measurably beats what FTS5 gives on the golden query set.
 
+#### Measured after implementing — 34,459 docs, release, M-series
+
+Latency is a function of **document frequency**, not corpus size, so the benchmark corpus is Zipf-shaped with planted terms of known df. A uniform vocabulary would make every term a worst case and tell you nothing.
+
+| Query | p50 | p95 |
+|---|---|---|
+| unique term (df=1) | **30 µs** | 33 µs |
+| df 0.1% | 187 µs | 567 µs |
+| df 10% | 3.9 ms | 6.0 ms |
+| df 100% | **11.8 ms** | 15.2 ms |
+| prefix, as-you-type | **415 µs** | — |
+| phrase | 214 µs | — |
+| df 10% + path glob | 3.5 ms | — |
+| full rebuild | 6.0 s | — |
+
+LLD §8's ~5 ms lexical budget holds to ~10% df, and as-you-type is 0.4 ms — inside GUI §5.2's 8 ms first-paint.
+
+#### Two things the D3 reasoning got wrong
+
+| # | Correction |
+|---|---|
+| 1 | **BM25 has no early termination.** `LIMIT 100` does not stop FTS5 scoring postings — a term in every document costs 11.8 ms because all 34,459 postings are scored, then sorted. "Both are instant at that size" is true for realistic df, not for a stopword-like term. The `ORDER BY rank … rank MATCH 'bm25(…)'` form the docs imply is optimized measured **slower** (36 ms vs 24 ms), so the plain `bm25()` alias stands. If 100%-df ever matters the fix is a stopword list or a df cap in `query`, not different SQL |
+| 2 | **The storage cost was not priced.** FTS5 must be self-contained for `snippet()`/`highlight()` to work — a contentless table cannot produce them — so chunk text is stored **twice**, plus prefix indexes. **136 MB for 34k documents.** The comparison table said "dependencies added: none" and said nothing about the database roughly doubling. Tantivy's separate directory would have been comparable, so the decision does not change, but the table was incomplete |
+
+#### Migration composition
+
+`marrow-index` depends on `marrow-store`, so store cannot reference index's migration back — that is a cycle. The **composition root** (the binary) assembles the chain instead, via `Store::open_with_migrations`. Store stays unaware of index; index stays a swappable implementation of a port. Verified: a fresh database opens at `schema_version 2` with both migrations applied through the one runner, backup-before-migrate intact.
+
 ### D49 — SYNC-006 columns → **`origin_device_id` only, canonical tables only**
 
 Part 6 §106.1 mandates `origin_device_id` **and** `origin_principal_id` on every mutable row. The DDL declares neither on any M1 table. Settled during M1 rather than deferred, because adding a column to eleven tables later means a migration plus a backfill that cannot know the answer.

@@ -127,6 +127,32 @@ impl Store {
         Self::open_with(Location::File(path.as_ref().to_path_buf()), cfg)
     }
 
+    /// Open with adapter migrations appended to the base chain.
+    ///
+    /// Adapters that add tables to the canonical database — `marrow-index`'s
+    /// FTS5 tables are the first — cannot register themselves here: they depend
+    /// on this crate, so this crate referencing them back would be a cycle.
+    ///
+    /// So the **composition root** assembles the chain. The binary is the only
+    /// place that knows which adapters are in play, which is exactly where that
+    /// knowledge belongs; `store` stays unaware of `index`, and `index` stays a
+    /// swappable implementation of a port.
+    ///
+    /// Ordering is the caller's responsibility: versions must be contiguous and
+    /// ascending across the whole composed chain.
+    pub fn open_with_migrations(
+        path: impl AsRef<Path>,
+        extra: &[migrate::Migration],
+    ) -> Result<Self> {
+        let mut chain: Vec<migrate::Migration> = migrate::MIGRATIONS.to_vec();
+        chain.extend_from_slice(extra);
+        Self::open_with_chain(
+            Location::File(path.as_ref().to_path_buf()),
+            WriterConfig::default(),
+            &chain,
+        )
+    }
+
     /// An in-memory store. Readers still work; nothing survives the process.
     pub fn open_in_memory() -> Result<Self> {
         Self::open_with(Location::memory(), WriterConfig::default())
@@ -138,7 +164,15 @@ impl Store {
     }
 
     fn open_with(loc: Location, cfg: WriterConfig) -> Result<Self> {
-        let (conn, schema_version) = migrate::open_migrated(&loc)?;
+        Self::open_with_chain(loc, cfg, migrate::MIGRATIONS)
+    }
+
+    fn open_with_chain(
+        loc: Location,
+        cfg: WriterConfig,
+        chain: &[migrate::Migration],
+    ) -> Result<Self> {
+        let (conn, schema_version) = migrate::open_migrated_with(&loc, chain)?;
         let actor = writer::WriterActor::spawn(conn, cfg);
         let handle = actor.handle().clone();
         tracing::info!(

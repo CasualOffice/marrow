@@ -1,0 +1,27 @@
+[package]
+name = "marrow-index"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+marrow-core.workspace = true
+# D3: the lexical index lives in the canonical database, so this crate has the
+# same storage dependency as everything else and adds none of its own. `rusqlite`
+# comes through `marrow_store::rusqlite` on purpose — a second, possibly
+# different, rusqlite version in the tree would mean two SQLite builds.
+marrow-store.workspace = true
+# `SourceSpan` is stored as the same JSON `ir_nodes.source_span` holds, so the
+# span on a hit is byte-identical to the canonical one rather than a re-encoding.
+serde_json.workspace = true
+tracing.workspace = true
+
+# Literal search only (CAP-005). Both operate on bytes, because a file that is
+# not valid UTF-8 must still be searchable rather than skipped.
+memchr = "2"
+regex = "1"
+
+[dev-dependencies]
+tempfile = "3"

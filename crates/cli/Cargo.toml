@@ -15,6 +15,7 @@ marrow-core.workspace = true
 marrow-store.workspace = true
 marrow-scan.workspace = true
 marrow-ingest.workspace = true
+marrow-index.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 clap = { version = "4", features = ["derive"] }

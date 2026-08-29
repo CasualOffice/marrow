@@ -469,6 +469,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "marrow-core",
+ "marrow-index",
  "marrow-ingest",
  "marrow-scan",
  "marrow-store",

@@ -103,7 +103,10 @@ find ~ -flags dataless 2>/dev/null | wc -l
 
 ### Index + query
 - [x] D3 settled → SQLite FTS5, on transactional-consistency grounds
-- [ ] FTS5 adapter behind the `TextIndex` port
+- [x] FTS5 adapter behind the `TextIndex` port — 45 tests, benchmarked
+- [x] Literal search (CAP-005) — index-independent, cancellable, refuses non-Resident files
+- [x] Migration composition at the binary, not in store (avoids the cycle)
+- [ ] Wire the index into the ingest pipeline
 - [ ] CLI `search` (filters: path, type, date)
 - [ ] CLI `file` — the file-intelligence panel
 - [x] CLI `status` — workspaces, file counts, bytes, cloud-only
