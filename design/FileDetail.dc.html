@@ -1,0 +1,195 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0}
+    a{color:var(--accent)} a:hover{color:var(--accent)}
+    .t[data-theme="light"]{
+      --bg:#fdfdfd;--bg-raised:#f6f6f7;--bg-hover:#eeeef0;--bg-sel:#e8effc;
+      --border:#e4e4e7;--border-strong:#d4d4d8;
+      --text:#18181b;--text-dim:#6b6b73;--text-faint:#9b9ba3;
+      --accent:#2f6feb;--warn:#a16207;--warn-bg:#fbf3e0;
+      --exact:#2f6feb;--det:#2f7d4f;--chrome:#ececed;
+    }
+    .t[data-theme="dark"]{
+      --bg:#161619;--bg-raised:#1c1c20;--bg-hover:#26262b;--bg-sel:#1e2c48;
+      --border:#2a2a30;--border-strong:#3a3a42;
+      --text:#e9e9ec;--text-dim:#9a9aa2;--text-faint:#6b6b74;
+      --accent:#4d8bff;--warn:#d4a017;--warn-bg:#2a2313;
+      --exact:#4d8bff;--det:#5fb37f;--chrome:#1f1f23;
+    }
+    .mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+  </style>
+</helmet>
+
+<div class="t" data-theme="{{theme}}" style="width:1180px;height:760px;display:flex;flex-direction:column;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;font-size:13px;line-height:1.45;border:1px solid var(--border-strong);border-radius:10px;overflow:hidden">
+
+  <div style="height:38px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 14px;background:var(--chrome);border-bottom:1px solid var(--border)">
+    <div style="display:flex;gap:8px;align-items:center">
+      <div style="width:11px;height:11px;border-radius:50%;background:#ec6a5e"></div>
+      <div style="width:11px;height:11px;border-radius:50%;background:#f4bf4f"></div>
+      <div style="width:11px;height:11px;border-radius:50%;background:#61c554"></div>
+    </div>
+    <div style="flex-grow:1;text-align:center;font-size:12px;font-weight:590;color:var(--text-dim)">q2-report.xlsx</div>
+    <div style="width:54px"></div>
+  </div>
+
+  <div style="flex-grow:1;display:flex;min-height:0">
+
+    <!-- file list -->
+    <div style="width:280px;flex-shrink:0;border-right:1px solid var(--border);background:var(--bg-raised);display:flex;flex-direction:column;min-height:0">
+      <div style="padding:9px 12px;border-bottom:1px solid var(--border);font-size:10.5px;font-weight:640;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-faint)">melp / finance</div>
+      <sc-for list="{{siblings}}" as="s" hint-placeholder-count="6">
+        <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:{{s.bg}};border-left:2px solid {{s.edge}};color:{{s.fg}}">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="flex-shrink:0;opacity:0.6"><path d="M9 1.5H4a1.5 1.5 0 0 0-1.5 1.5v10A1.5 1.5 0 0 0 4 14.5h8a1.5 1.5 0 0 0 1.5-1.5V6z" stroke-linejoin="round"/><path d="M9 1.5V6h4.5" stroke-linejoin="round"/></svg>
+          <span style="flex-grow:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{s.name}}</span>
+          <span class="mono" style="font-size:10px;color:var(--text-faint)">{{s.size}}</span>
+        </div>
+      </sc-for>
+    </div>
+
+    <!-- intelligence -->
+    <div style="flex-grow:1;min-width:0;overflow:hidden;display:flex;flex-direction:column">
+
+      <div style="padding:16px 22px 13px;border-bottom:1px solid var(--border);flex-shrink:0">
+        <div style="display:flex;align-items:baseline;gap:10px">
+          <span style="font-size:19px;font-weight:640;letter-spacing:-0.01em">q2-report.xlsx</span>
+          <span style="flex-grow:1"></span>
+          <span style="font-size:11px;color:var(--exact);font-weight:560">exact provenance</span>
+        </div>
+        <div class="mono" style="font-size:11.5px;color:var(--text-dim);margin-top:3px">~/Desktop/melp/finance/q2-report.xlsx</div>
+        <div style="display:flex;gap:14px;margin-top:8px;font-size:11.5px;color:var(--text-dim)">
+          <span>14.1 MB</span><span>·</span><span>xlsx</span><span>·</span><span>modified 3w ago</span>
+        </div>
+      </div>
+
+      <div style="flex-grow:1;overflow:hidden;padding:16px 22px;display:flex;flex-direction:column;gap:18px">
+
+        <!-- identity -->
+        <div style="display:flex;flex-direction:column;gap:7px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:10.5px;font-weight:640;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-faint)">Identity</span>
+            <div style="flex-grow:1;height:1px;background:var(--border)"></div>
+          </div>
+          <sc-for list="{{identity}}" as="i" hint-placeholder-count="3">
+            <div style="display:flex;align-items:baseline;gap:12px">
+              <span style="width:96px;flex-shrink:0;font-size:12px;color:var(--text-dim)">{{i.k}}</span>
+              <span class="mono" style="font-size:11.5px;color:var(--text)">{{i.v}}</span>
+              <span style="font-size:11px;color:var(--text-faint)">{{i.note}}</span>
+            </div>
+          </sc-for>
+        </div>
+
+        <!-- self-described metadata -->
+        <div style="display:flex;flex-direction:column;gap:7px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:10.5px;font-weight:640;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-faint)">What this file says about itself</span>
+            <div style="flex-grow:1;height:1px;background:var(--border)"></div>
+            <span style="font-size:10.5px;color:var(--det);font-weight:560">deterministic</span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px 26px">
+            <sc-for list="{{meta}}" as="m" hint-placeholder-count="6">
+              <div style="display:flex;align-items:baseline;gap:12px">
+                <span style="width:96px;flex-shrink:0;font-size:12px;color:var(--text-dim)">{{m.k}}</span>
+                <span style="font-size:12px;color:{{m.fg}};flex-grow:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{m.v}}</span>
+                <span class="mono" style="font-size:10px;color:var(--text-faint)">{{m.src}}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+
+        <!-- structure -->
+        <div style="display:flex;flex-direction:column;gap:7px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:10.5px;font-weight:640;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-faint)">Structure</span>
+            <div style="flex-grow:1;height:1px;background:var(--border)"></div>
+            <span style="font-size:11px;color:var(--text-dim)">4 sheets · 12 tables · 1,840 rows</span>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:6px;overflow:hidden">
+            <div style="display:grid;grid-template-columns:1.4fr 0.9fr 0.9fr 1.6fr;gap:0;background:var(--bg-raised);border-bottom:1px solid var(--border);padding:5px 10px;font-size:10.5px;font-weight:640;letter-spacing:0.04em;text-transform:uppercase;color:var(--text-faint)">
+              <span>Sheet</span><span>Range</span><span>Header</span><span>Column types</span>
+            </div>
+            <sc-for list="{{sheets}}" as="s" hint-placeholder-count="4">
+              <div style="display:grid;grid-template-columns:1.4fr 0.9fr 0.9fr 1.6fr;gap:0;padding:5px 10px;border-bottom:1px solid var(--border);font-size:11.5px">
+                <span>{{s.name}}</span>
+                <span class="mono" style="color:var(--text-dim)">{{s.range}}</span>
+                <span class="mono" style="color:var(--text-dim)">{{s.header}}</span>
+                <span style="color:var(--text-dim)">{{s.types}}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+
+        <!-- index state -->
+        <div style="display:flex;flex-direction:column;gap:7px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:10.5px;font-weight:640;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-faint)">Index</span>
+            <div style="flex-grow:1;height:1px;background:var(--border)"></div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px">
+            <sc-for list="{{index}}" as="x" hint-placeholder-count="4">
+              <div style="display:flex;flex-direction:column;gap:2px">
+                <span style="font-size:10.5px;color:var(--text-faint)">{{x.k}}</span>
+                <span style="font-size:12.5px;color:{{x.fg}}">{{x.v}}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light","section":"Theme"},"$preview":{"width":1180,"height":760}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const dim = 'var(--text-faint)';
+    return {
+      theme: this.props.theme ?? 'light',
+      siblings: [
+        { name:'q1-report.xlsx', size:'12.8 MB', bg:'transparent', edge:'transparent', fg:'var(--text)' },
+        { name:'q2-report.xlsx', size:'14.1 MB', bg:'var(--bg-sel)', edge:'var(--accent)', fg:'var(--text)' },
+        { name:'headcount.csv',  size:'84 KB',   bg:'transparent', edge:'transparent', fg:'var(--text)' },
+        { name:'runway.xlsx',    size:'2.1 MB',  bg:'transparent', edge:'transparent', fg:'var(--text)' },
+        { name:'notes.md',       size:'6 KB',    bg:'transparent', edge:'transparent', fg:'var(--text)' },
+        { name:'archive.zip',    size:'88 MB',   bg:'transparent', edge:'transparent', fg:'var(--text-dim)' },
+      ],
+      identity: [
+        { k:'file',      v:'01M17KJXJ2K51K4824XQ56H2Q7', note:'stable since 12 Mar' },
+        { k:'content',   v:'blake3:9f2a1c8e4d…',          note:'3 versions · 2 earlier paths' },
+        { k:'duplicate', v:'none',                        note:'' },
+      ],
+      meta: [
+        { k:'author',        v:'Sachin Sarwa',    src:'docProps/core.xml', fg:'var(--text)' },
+        { k:'created',       v:'2026-03-12',      src:'docProps/core.xml', fg:'var(--text)' },
+        { k:'last saved by', v:'Sachin Sarwa',    src:'docProps/core.xml', fg:'var(--text)' },
+        { k:'application',   v:'Microsoft Excel', src:'docProps/app.xml',  fg:'var(--text)' },
+        { k:'company',       v:'—',               src:'',                  fg:dim },
+        { k:'downloaded',    v:'—',               src:'',                  fg:dim },
+      ],
+      sheets: [
+        { name:'Q2 Summary', range:'B4:H42',  header:'row 3', types:'currency · date · text' },
+        { name:'Regions',    range:'A1:D218', header:'row 1', types:'text · int · currency' },
+        { name:'Headcount',  range:'A1:F96',  header:'row 1', types:'text · date · int' },
+        { name:'Raw',        range:'A1:M1484',header:'row 1', types:'mixed' },
+      ],
+      index: [
+        { k:'parsed',  v:'xlsx v0.1.0', fg:'var(--text)' },
+        { k:'chunks',  v:'48 active',   fg:'var(--text)' },
+        { k:'pending', v:'—',           fg:dim },
+        { k:'errors',  v:'—',           fg:dim },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

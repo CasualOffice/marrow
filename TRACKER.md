@@ -29,7 +29,7 @@
 
 - [x] Count files by extension across candidate roots — 189 exts, code+md+photos dominate
 - [x] Count by size bucket — 70.6% <64KB, nothing ≥500MB
-- [?] Identify cloud-sync roots and count placeholders — **roots found, count unresolved** (`find -flags dataless` timed out at 2 min). Blocks TIER work; re-measure scoped before touching those roots
+- [x] Identify cloud-sync roots and count placeholders — **58 files, 58 placeholders, 1.35 GB, measured in 9–36 ms** via `SF_DATALESS`. The M0 timeout was `find`'s traversal, not the flag check (F13–F18)
 - [x] Note pathological cases — `node_modules` 76k files in 15 dirs; `~/Library` excluded by design; 0 symlinks
 - [x] Spike: `ignore` walk — **97,308 files/s**, 0 errors
 - [x] Spike: `blake3` — **417 MB/s**, 4,209 files/s, 3.6% dupes
@@ -66,11 +66,12 @@ find ~ -flags dataless 2>/dev/null | wc -l
 
 ### Discovery
 - [ ] Workspace + root model with explicit consent
-- [~] `ignore`-based scan, `.gitignore` **as per-root policy** (D47), symlinks off
-- [~] `blake3` content hashing — refuses non-Resident files
-- [~] Stable `file_id` + path history (**path ≠ identity**)
-- [~] **Cloud placeholder detection — never hydrate** ⚠️
-- [~] Path canonicalization + symlink escape + NFC/NFD identity
+- [x] `ignore`-based scan, `.gitignore` **as per-root policy** (D47), symlinks off
+- [x] `blake3` content hashing — refuses non-Resident files, unreachable without a tier check
+- [x] **Cloud placeholder detection — never hydrate** ⚠️ — `SF_DATALESS` + `.icloud` stubs, metadata-only
+- [x] Path canonicalization + symlink escape + NFC/NFD identity — component-wise, not string-prefix
+- [x] Lazy walk with per-entry error isolation (FS-011)
+- [ ] Stable `file_id` + path history (**path ≠ identity**) — needs store wiring
 - [ ] `notify` watcher with coalescing/debounce
 - [ ] Reconciliation loop; watcher-health reporting (`Live`/`Degraded`/`Poll-only`)
 - [ ] Unicode NFC/NFD normalization so macOS doesn't create duplicate identities
@@ -234,5 +235,7 @@ Short entries. What shipped, what surprised you, what changed.
 | 2026-08-30 | Spec complete (7 parts). Re-scoped for solo/open-source in Part 7. Repo initialised. M0 started. |
 | 2026-08-30 | Named **Marrow** (D45). Docs renamed `Part_N_*.md`. Crate namespace left open as D46. |
 | 2026-08-30 | Reclaimed **64 GB** of Rust `target/` output (14→78 GB free). Build artifacts were 6.6× the entire knowledge corpus. M0 F11 superseded. |
+| 2026-08-30 | **`marrow-scan` done.** 42 tests. Resolved M0's blocked item: 58 iCloud placeholders, 1.35 GB, 9–36 ms. Two traps found — `hidden(true)` would have hidden every placeholder (TIER-008 would read zero); APFS is normalization-*insensitive*, so NFC/NFD must be handled in our path key. D47 quantified: **34,459 files with gitignore off vs 9,435 with it on** — size M1 for ~34k. |
+| 2026-08-30 | **Design pass.** GUI.md / UX.md / LLD.md written before more code. Five desktop screens mocked. D42 reversed — the desktop app is the product. |
 | 2026-08-30 | **M1 started.** Workspace + `marrow-core` committed: 17 tests, clippy clean. Found ULID ordering is ms-granular not total — doc corrected, limitation pinned by a test. `store` and `scan` building in parallel. |
 | 2026-08-30 | **M0 done.** Corpus is 9,435 files / 1 GB — 10× smaller than the spec assumed. Perf beats every target by 1–3 orders of magnitude. 14 PDFs total → PDF dropped from M3. Zero video/audio/email. See [bench/M0-corpus.md](bench/M0-corpus.md). |

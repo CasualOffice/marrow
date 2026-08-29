@@ -49,7 +49,10 @@ M0 F9: `.gitignore` does 97% of the exclusion work, which is the single highest-
 
 FS-002 already says "where configured", so the spec permits the right answer. Make it **per-root policy**, defaulting to on for roots that look like code and off elsewhere.
 
-- [ ] Implement as per-root in M1
+**Cost now measured** (M0 F15): with gitignore **off**, `~/Desktop` yields **34,459 files** vs **9,435** with it on — 3.7×, walked in 411 ms either way. The default stands, but everything downstream in M1 should be sized for ~34k files, not 9.4k.
+
+- [x] Implemented as per-root policy in `marrow-scan`
+- [ ] Choose the per-root default heuristic (code-looking roots on, others off)
 
 ---
 

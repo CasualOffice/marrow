@@ -1,0 +1,165 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0}
+    a{color:var(--accent)} a:hover{color:var(--accent)}
+    .t[data-theme="light"]{
+      --bg:#fdfdfd;--bg-raised:#f6f6f7;--bg-hover:#eeeef0;--bg-sel:#e8effc;
+      --border:#e4e4e7;--border-strong:#d4d4d8;
+      --text:#18181b;--text-dim:#6b6b73;--text-faint:#9b9ba3;
+      --accent:#2f6feb;--warn:#a16207;--warn-bg:#fbf3e0;--warn-bd:#e8d9a8;
+      --error:#b91c1c;--ok:#2f7d4f;--chrome:#ececed;
+    }
+    .t[data-theme="dark"]{
+      --bg:#161619;--bg-raised:#1c1c20;--bg-hover:#26262b;--bg-sel:#1e2c48;
+      --border:#2a2a30;--border-strong:#3a3a42;
+      --text:#e9e9ec;--text-dim:#9a9aa2;--text-faint:#6b6b74;
+      --accent:#4d8bff;--warn:#d4a017;--warn-bg:#241f11;--warn-bd:#3d3419;
+      --error:#f87171;--ok:#5fb37f;--chrome:#1f1f23;
+    }
+    .mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+  </style>
+</helmet>
+
+<div class="t" data-theme="{{theme}}" style="width:1180px;height:760px;display:flex;flex-direction:column;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;font-size:13px;line-height:1.45;border:1px solid var(--border-strong);border-radius:10px;overflow:hidden">
+
+  <div style="height:38px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 14px;background:var(--chrome);border-bottom:1px solid var(--border)">
+    <div style="display:flex;gap:8px;align-items:center">
+      <div style="width:11px;height:11px;border-radius:50%;background:#ec6a5e"></div>
+      <div style="width:11px;height:11px;border-radius:50%;background:#f4bf4f"></div>
+      <div style="width:11px;height:11px;border-radius:50%;background:#61c554"></div>
+    </div>
+    <div style="flex-grow:1;text-align:center;font-size:12px;font-weight:590;color:var(--text-dim)">Status</div>
+    <div style="width:54px"></div>
+  </div>
+
+  <div style="flex-grow:1;overflow:hidden;padding:22px 26px;display:flex;flex-direction:column;gap:16px;min-height:0">
+
+    <!-- workspaces -->
+    <sc-for list="{{workspaces}}" as="w" hint-placeholder-count="3">
+      <div style="border:1px solid {{w.border}};border-radius:8px;background:{{w.bg}};overflow:hidden">
+
+        <div style="display:flex;align-items:center;gap:10px;padding:12px 16px">
+          <div style="width:7px;height:7px;border-radius:50%;background:{{w.dot}};flex-shrink:0"></div>
+          <span style="font-size:14px;font-weight:620">{{w.name}}</span>
+          <span class="mono" style="font-size:11.5px;color:var(--text-dim)">{{w.path}}</span>
+          <span style="flex-grow:1"></span>
+          <span style="font-size:11px;font-weight:600;color:{{w.stateFg}};background:{{w.stateBg}};border-radius:4px;padding:2px 7px">{{w.state}}</span>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0;padding:0 16px 12px">
+          <sc-for list="{{w.stats}}" as="s" hint-placeholder-count="5">
+            <div style="display:flex;flex-direction:column;gap:1px">
+              <span class="mono" style="font-size:15px;font-weight:600;color:{{s.fg}}">{{s.v}}</span>
+              <span style="font-size:10.5px;color:var(--text-faint)">{{s.k}}</span>
+            </div>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{w.hasIssues}}" hint-placeholder-val="{{true}}">
+          <div style="border-top:1px solid {{w.border}};padding:10px 16px;display:flex;flex-direction:column;gap:8px">
+            <sc-for list="{{w.issues}}" as="i" hint-placeholder-count="2">
+              <div style="display:flex;align-items:flex-start;gap:9px">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="{{i.icon}}" stroke-width="1.6" style="flex-shrink:0;margin-top:1px"><path d="M8 2.5 14.5 13.5h-13z" stroke-linejoin="round"/><path d="M8 6.5v3M8 11.6v.1" stroke-linecap="round"/></svg>
+                <div style="flex-grow:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+                  <span style="font-size:12.5px;color:var(--text)">{{i.title}}</span>
+                  <span style="font-size:11.5px;color:var(--text-dim)">{{i.detail}}</span>
+                </div>
+                <div style="display:flex;gap:6px;flex-shrink:0">
+                  <sc-for list="{{i.actions}}" as="a" hint-placeholder-count="2">
+                    <span style="font-size:11.5px;color:{{a.fg}};border:1px solid var(--border-strong);background:var(--bg);border-radius:5px;padding:3px 9px">{{a.label}}</span>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+      </div>
+    </sc-for>
+
+    <div style="flex-grow:1"></div>
+
+    <!-- totals -->
+    <div style="display:flex;align-items:center;gap:18px;padding-top:14px;border-top:1px solid var(--border);font-size:12px;color:var(--text-dim)">
+      <span><span class="mono" style="color:var(--text);font-weight:600">3</span> workspaces</span>
+      <span><span class="mono" style="color:var(--text);font-weight:600">12,971</span> files</span>
+      <span><span class="mono" style="color:var(--text);font-weight:600">1.4 GB</span> content</span>
+      <span><span class="mono" style="color:var(--text);font-weight:600">42 MB</span> index</span>
+      <span style="flex-grow:1"></span>
+      <span style="display:flex;align-items:center;gap:6px"><span style="width:6px;height:6px;border-radius:50%;background:var(--ok)"></span>queue idle</span>
+    </div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light","section":"Theme"},"$preview":{"width":1180,"height":760}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const ok = {
+      dot:'#3fae5a', border:'var(--border)', bg:'transparent',
+      state:'live', stateFg:'var(--ok)', stateBg:'transparent',
+    };
+    return {
+      theme: this.props.theme ?? 'light',
+      workspaces: [
+        { name:'melp', path:'~/Desktop/melp', ...ok,
+          hasIssues:false, issues:[],
+          stats:[
+            {k:'files',   v:'9,435',  fg:'var(--text)'},
+            {k:'content', v:'1.0 GB', fg:'var(--text)'},
+            {k:'chunks',  v:'48,201', fg:'var(--text)'},
+            {k:'indexed', v:'3 min',  fg:'var(--text-dim)'},
+            {k:'reconciled', v:'2 h', fg:'var(--text-dim)'},
+          ] },
+
+        { name:'vault', path:'~/Desktop/melp/services/vault',
+          dot:'var(--warn)', border:'var(--warn-bd)', bg:'var(--warn-bg)',
+          state:'poll-only', stateFg:'var(--warn)', stateBg:'transparent',
+          hasIssues:true,
+          stats:[
+            {k:'files',   v:'2,058',  fg:'var(--text)'},
+            {k:'content', v:'340 MB', fg:'var(--text)'},
+            {k:'chunks',  v:'11,904', fg:'var(--text)'},
+            {k:'indexed', v:'12 min', fg:'var(--text-dim)'},
+            {k:'reconciled', v:'5 min',fg:'var(--warn)'},
+          ],
+          issues:[
+            { icon:'var(--warn)', title:'Watcher unavailable — FSEvents limit reached',
+              detail:'Falling back to a 5-minute reconciliation sweep. Changes may take up to 5 minutes to appear.',
+              actions:[{label:'Diagnose', fg:'var(--text)'}] },
+            { icon:'var(--error)', title:'17 files failed to parse',
+              detail:'14 malformed archives · 3 read timeouts. They remain discoverable by metadata.',
+              actions:[{label:'Review', fg:'var(--text)'},{label:'Retry', fg:'var(--accent)'}] },
+          ] },
+
+        { name:'icloud', path:'~/Library/Mobile Documents',
+          dot:'var(--warn)', border:'var(--warn-bd)', bg:'var(--warn-bg)',
+          state:'metadata only', stateFg:'var(--warn)', stateBg:'transparent',
+          hasIssues:true,
+          stats:[
+            {k:'files',   v:'58',     fg:'var(--text)'},
+            {k:'content', v:'—',      fg:'var(--text-faint)'},
+            {k:'chunks',  v:'—',      fg:'var(--text-faint)'},
+            {k:'indexed', v:'3 min',  fg:'var(--text-dim)'},
+            {k:'reconciled', v:'2 h', fg:'var(--text-dim)'},
+          ],
+          issues:[
+            { icon:'var(--warn)', title:'58 files are cloud-only and were not read',
+              detail:'Reading them would download 1.35 GB from iCloud. Metadata is indexed; contents are not.',
+              actions:[{label:'Keep as is', fg:'var(--text)'},{label:'Download 1.35 GB', fg:'var(--accent)'}] },
+          ] },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

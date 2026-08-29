@@ -88,7 +88,10 @@ impl Default for WalkPolicy {
             follow_links: false,
             same_file_system: false,
             max_depth: None,
-            excluded_dirs: DEFAULT_NOISE_DIRS.iter().map(|s| (*s).to_string()).collect(),
+            excluded_dirs: DEFAULT_NOISE_DIRS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
         }
     }
 }
@@ -239,57 +242,58 @@ impl Iterator for Scan {
     type Item = ScanEvent;
 
     fn next(&mut self) -> Option<ScanEvent> {
-        loop {
-            let entry = match self.inner.next()? {
-                Ok(e) => e,
-                Err(e) => return Some(ScanEvent::Failed(map_walk_error(e))),
-            };
+        // Exactly one event per underlying entry: `ignore` has already applied
+        // the filter predicate, so nothing is skipped here and there is nothing
+        // to loop over.
+        let entry = match self.inner.next()? {
+            Ok(e) => e,
+            Err(e) => return Some(ScanEvent::Failed(map_walk_error(e))),
+        };
 
-            // A non-fatal per-entry error (e.g. an unreadable `.gitignore`).
-            // The entry itself is still good, so it is reported and kept.
-            if let Some(err) = entry.error() {
-                tracing::debug!(path = %entry.path().display(), error = %err, "partial walk error");
-            }
+        // A non-fatal per-entry error (e.g. an unreadable `.gitignore`).
+        // The entry itself is still good, so it is reported and kept.
+        if let Some(err) = entry.error() {
+            tracing::debug!(path = %entry.path().display(), error = %err, "partial walk error");
+        }
 
-            let meta = match entry.metadata() {
-                Ok(m) => m,
-                Err(e) => return Some(ScanEvent::Failed(map_walk_error(e))),
-            };
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(e) => return Some(ScanEvent::Failed(map_walk_error(e))),
+        };
 
-            // Invariant #7, for the opt-in `follow_links` case only: a followed
-            // symlink is the one way a walk can leave the authorised root.
-            if self.check_containment && entry.path_is_symlink() {
-                match std::fs::canonicalize(entry.path()) {
-                    Ok(real) if !self.root.contains(&real) => {
-                        return Some(ScanEvent::Failed(
-                            Error::new(
-                                Code::FsPathEscapeBlocked,
-                                "Skipped a symbolic link that leaves the authorised root. \
-                                 Add its target as a root if indexing it is intended.",
-                            )
-                            .with_context(format!(
-                                "{} -> {}",
-                                entry.path().display(),
-                                real.display()
-                            )),
-                        ));
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        return Some(ScanEvent::Failed(
-                            Error::from(e).with_context(entry.path().display().to_string()),
-                        ))
-                    }
+        // Invariant #7, for the opt-in `follow_links` case only: a followed
+        // symlink is the one way a walk can leave the authorised root.
+        if self.check_containment && entry.path_is_symlink() {
+            match std::fs::canonicalize(entry.path()) {
+                Ok(real) if !self.root.contains(&real) => {
+                    return Some(ScanEvent::Failed(
+                        Error::new(
+                            Code::FsPathEscapeBlocked,
+                            "Skipped a symbolic link that leaves the authorised root. \
+                             Add its target as a root if indexing it is intended.",
+                        )
+                        .with_context(format!(
+                            "{} -> {}",
+                            entry.path().display(),
+                            real.display()
+                        )),
+                    ));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    return Some(ScanEvent::Failed(
+                        Error::from(e).with_context(entry.path().display().to_string()),
+                    ))
                 }
             }
-
-            let facts = probe::facts_from_metadata(entry.path(), &meta);
-            return Some(ScanEvent::Entry(ScanEntry {
-                path: entry.path().to_path_buf(),
-                depth: entry.depth(),
-                facts,
-            }));
         }
+
+        let facts = probe::facts_from_metadata(entry.path(), &meta);
+        Some(ScanEvent::Entry(ScanEntry {
+            path: entry.path().to_path_buf(),
+            depth: entry.depth(),
+            facts,
+        }))
     }
 }
 
@@ -322,7 +326,9 @@ fn map_walk_error(e: ignore::Error) -> Error {
         ),
     };
     tracing::warn!(code = %code, detail = %context, "walk error (scan continues)");
-    Error::new(code, message).with_context(context).with_source(e)
+    Error::new(code, message)
+        .with_context(context)
+        .with_source(e)
 }
 
 #[cfg(test)]
@@ -446,12 +452,21 @@ mod tests {
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
 
         let root = root_of(base);
+        // NB: strip against `root.path()`, not `base`. On macOS `/var` is a
+        // symlink to `/private/var`, so a `TempDir` path is never canonical and
+        // never a prefix of the walked paths.
         let mut files = BTreeSet::new();
         let mut errors = Vec::new();
         for ev in walk(&root, &WalkPolicy::default()) {
             match ev {
                 ScanEvent::Entry(e) if e.is_file() => {
-                    files.insert(e.path.strip_prefix(base).unwrap().display().to_string());
+                    files.insert(
+                        e.path
+                            .strip_prefix(root.path())
+                            .unwrap()
+                            .display()
+                            .to_string(),
+                    );
                 }
                 ScanEvent::Entry(_) => {}
                 ScanEvent::Failed(e) => errors.push(e),
@@ -545,10 +560,7 @@ mod tests {
         let found = file_names(&root, &WalkPolicy::default());
         assert_eq!(
             found,
-            BTreeSet::from([
-                ".Report.pdf.icloud".to_string(),
-                "visible.md".to_string()
-            ]),
+            BTreeSet::from([".Report.pdf.icloud".to_string(), "visible.md".to_string()]),
             "{found:?}"
         );
 
@@ -603,9 +615,6 @@ mod tests {
             .unwrap();
         assert_eq!(e.facts.size, 5);
         assert_eq!(e.facts.tier, marrow_core::TierState::Resident);
-        assert_eq!(
-            e.facts.mime_hint.map(|m| m.as_str()),
-            Some("text/markdown")
-        );
+        assert_eq!(e.facts.mime_hint.map(|m| m.as_str()), Some("text/markdown"));
     }
 }

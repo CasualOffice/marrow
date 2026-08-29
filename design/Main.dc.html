@@ -1,0 +1,236 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0}
+    a{color:var(--accent)} a:hover{color:var(--accent)}
+    .t[data-theme="light"]{
+      --bg:#fdfdfd;--bg-raised:#f6f6f7;--bg-hover:#eeeef0;--bg-sel:#e8effc;
+      --border:#e4e4e7;--border-strong:#d4d4d8;
+      --text:#18181b;--text-dim:#6b6b73;--text-faint:#9b9ba3;
+      --accent:#2f6feb;--warn:#a16207;--warn-bg:#fbf3e0;--error:#b91c1c;
+      --exact:#2f6feb;--semantic:#7c4dcc;--recent:#a16207;--chrome:#ececed;
+    }
+    .t[data-theme="dark"]{
+      --bg:#161619;--bg-raised:#1c1c20;--bg-hover:#26262b;--bg-sel:#1e2c48;
+      --border:#2a2a30;--border-strong:#3a3a42;
+      --text:#e9e9ec;--text-dim:#9a9aa2;--text-faint:#6b6b74;
+      --accent:#4d8bff;--warn:#d4a017;--warn-bg:#2a2313;--error:#f87171;
+      --exact:#4d8bff;--semantic:#a78bfa;--recent:#d4a017;--chrome:#1f1f23;
+    }
+    .mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+  </style>
+</helmet>
+
+<div class="t" data-theme="{{theme}}" style="width:1180px;height:760px;display:flex;flex-direction:column;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;font-size:13px;line-height:1.45;border:1px solid var(--border-strong);border-radius:10px;overflow:hidden">
+
+  <!-- title bar -->
+  <div style="height:38px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 14px;background:var(--chrome);border-bottom:1px solid var(--border)">
+    <div style="display:flex;gap:8px;align-items:center">
+      <div style="width:11px;height:11px;border-radius:50%;background:#ec6a5e"></div>
+      <div style="width:11px;height:11px;border-radius:50%;background:#f4bf4f"></div>
+      <div style="width:11px;height:11px;border-radius:50%;background:#61c554"></div>
+    </div>
+    <div style="flex-grow:1;text-align:center;font-size:12px;font-weight:590;color:var(--text-dim);letter-spacing:0.01em">Marrow</div>
+    <div style="width:54px"></div>
+  </div>
+
+  <div style="flex-grow:1;display:flex;min-height:0">
+
+    <!-- ── sidebar ───────────────────────────────────────── -->
+    <div style="width:180px;flex-shrink:0;background:var(--bg-raised);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:10px 0">
+
+      <div style="display:flex;flex-direction:column;gap:1px;padding:0 8px">
+        <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border-radius:6px;background:var(--bg-sel);color:var(--accent);font-weight:590">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14" stroke-linecap="round"/></svg>
+          Search
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border-radius:6px;color:var(--text-dim)">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 1.5H4a1.5 1.5 0 0 0-1.5 1.5v10A1.5 1.5 0 0 0 4 14.5h8a1.5 1.5 0 0 0 1.5-1.5V6z" stroke-linejoin="round"/><path d="M9 1.5V6h4.5" stroke-linejoin="round"/></svg>
+          Files
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border-radius:6px;color:var(--text-dim)">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 8.5a5 5 0 0 1-5 5H3l1.4-2.2A5 5 0 1 1 13.5 8.5z" stroke-linejoin="round"/></svg>
+          Ask
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border-radius:6px;color:var(--text-dim)">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1.5 8h3l2-4.5L9.5 12l2-4h3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Activity
+        </div>
+      </div>
+
+      <div style="height:1px;background:var(--border);margin:12px 16px"></div>
+
+      <div style="padding:0 16px 6px;font-size:10.5px;font-weight:640;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-faint)">Workspaces</div>
+      <div style="display:flex;flex-direction:column;gap:1px;padding:0 8px">
+        <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border-radius:6px;color:var(--text)">
+          <div style="width:6px;height:6px;border-radius:50%;background:#3fae5a;flex-shrink:0"></div>
+          <span style="flex-grow:1">melp</span>
+          <span class="mono" style="font-size:10.5px;color:var(--text-faint)">9,435</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border-radius:6px;color:var(--text)">
+          <div style="width:6px;height:6px;border-radius:50%;background:#3fae5a;flex-shrink:0"></div>
+          <span style="flex-grow:1">pictures</span>
+          <span class="mono" style="font-size:10.5px;color:var(--text-faint)">3,478</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border-radius:6px;color:var(--text-dim)">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="var(--warn)" stroke-width="1.6" style="flex-shrink:0"><path d="M8 2.5 14.5 13.5h-13z" stroke-linejoin="round"/><path d="M8 6.5v3M8 11.6v.1" stroke-linecap="round"/></svg>
+          <span style="flex-grow:1">icloud</span>
+          <span class="mono" style="font-size:10.5px;color:var(--warn)">412</span>
+        </div>
+      </div>
+
+      <div style="flex-grow:1"></div>
+
+      <div style="padding:0 8px">
+        <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border-radius:6px;color:var(--text-dim)">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v1.8M8 12.7v1.8M14.5 8h-1.8M3.3 8H1.5M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3M12.6 12.6l-1.3-1.3M4.7 4.7 3.4 3.4" stroke-linecap="round"/></svg>
+          Settings
+        </div>
+      </div>
+    </div>
+
+    <!-- ── results list ──────────────────────────────────── -->
+    <div style="width:360px;flex-shrink:0;border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0">
+
+      <div style="padding:10px 12px;border-bottom:1px solid var(--border);flex-shrink:0">
+        <div style="display:flex;align-items:center;gap:7px;height:30px;padding:0 9px;background:var(--bg-raised);border:1px solid var(--border-strong);border-radius:6px;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 14%,transparent)">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--text-faint)" stroke-width="1.5" style="flex-shrink:0"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14" stroke-linecap="round"/></svg>
+          <span style="flex-grow:1;color:var(--text)">auth refresh token</span>
+          <span class="mono" style="font-size:10px;color:var(--text-faint);border:1px solid var(--border-strong);border-radius:3px;padding:1px 4px">⌘F</span>
+        </div>
+      </div>
+
+      <div style="flex-grow:1;overflow:hidden;display:flex;flex-direction:column">
+        <sc-for list="{{results}}" as="r" hint-placeholder-count="4">
+          <div style="padding:9px 12px;border-bottom:1px solid var(--border);background:{{r.rowBg}};border-left:2px solid {{r.rowEdge}};display:flex;flex-direction:column;gap:3px">
+            <div style="display:flex;align-items:baseline;gap:8px">
+              <span style="font-weight:590;color:var(--text);flex-grow:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{r.name}}</span>
+              <span style="font-size:10.5px;color:{{r.badgeColor}};font-weight:560">{{r.reason}}</span>
+              <span style="font-size:10.5px;color:var(--text-faint)">{{r.age}}</span>
+            </div>
+            <div class="mono" style="font-size:11px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{r.dir}}</div>
+            <div class="mono" style="font-size:11px;color:var(--text-dim);background:var(--bg-raised);border-radius:4px;padding:4px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{r.snippet}}</div>
+            <div style="font-size:10.5px;color:var(--text-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{r.crumb}}</div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="height:26px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 12px;border-top:1px solid var(--border);background:var(--bg-raised);font-size:10.5px;color:var(--text-faint)">
+        <span>17 results</span>
+        <span>·</span>
+        <span class="mono">8 ms</span>
+        <span style="flex-grow:1"></span>
+        <span>lexical + semantic</span>
+      </div>
+    </div>
+
+    <!-- ── detail ────────────────────────────────────────── -->
+    <div style="flex-grow:1;display:flex;flex-direction:column;min-width:0;min-height:0">
+
+      <div style="padding:12px 16px 10px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:3px;flex-shrink:0">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:14px;font-weight:620">token.rs</span>
+          <span style="font-size:10.5px;color:var(--exact);font-weight:560">exact</span>
+          <span style="flex-grow:1"></span>
+          <span class="mono" style="font-size:10px;color:var(--text-faint);border:1px solid var(--border-strong);border-radius:3px;padding:1px 5px">⌘↵ open</span>
+          <span class="mono" style="font-size:10px;color:var(--text-faint);border:1px solid var(--border-strong);border-radius:3px;padding:1px 5px">⌘C cite</span>
+        </div>
+        <div class="mono" style="font-size:11px;color:var(--text-dim)">melp/services/vault/src/auth/token.rs</div>
+      </div>
+
+      <div style="flex-grow:1;overflow:hidden;padding:10px 0;min-height:0">
+        <sc-for list="{{code}}" as="l" hint-placeholder-count="12">
+          <div style="display:flex;gap:0;background:{{l.bg}};border-left:2px solid {{l.edge}}">
+            <span class="mono" style="width:46px;flex-shrink:0;text-align:right;padding-right:12px;font-size:11.5px;color:var(--text-faint);user-select:none">{{l.n}}</span>
+            <span class="mono" style="font-size:11.5px;color:{{l.fg}};white-space:pre">{{l.src}}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="border-top:1px solid var(--border);background:var(--bg-raised);padding:9px 16px;flex-shrink:0;display:flex;flex-direction:column;gap:7px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:10.5px;font-weight:640;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-faint)">This file</span>
+          <div style="flex-grow:1;height:1px;background:var(--border)"></div>
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="var(--text-faint)" stroke-width="1.6"><path d="M4 6.5 8 10.5l4-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px">
+          <div style="display:flex;flex-direction:column;gap:2px">
+            <span style="font-size:10.5px;color:var(--text-faint)">modified</span>
+            <span style="font-size:12px">2 days ago</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:2px">
+            <span style="font-size:10.5px;color:var(--text-faint)">symbols</span>
+            <span style="font-size:12px">14 · 3 impls</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:2px">
+            <span style="font-size:10.5px;color:var(--text-faint)">provenance</span>
+            <span style="font-size:12px;color:var(--exact)">exact · AST</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:2px">
+            <span style="font-size:10.5px;color:var(--text-faint)">chunks</span>
+            <span style="font-size:12px">18 active</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light","section":"Theme"},"$preview":{"width":1180,"height":760}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const sel = 'var(--bg-sel)';
+    const results = [
+      { name:'token.rs', dir:'vault/src/auth/', reason:'exact', age:'2d',
+        snippet:'pub async fn refresh_token(&self, ctx: &Ctx)',
+        crumb:'impl TokenService › fn refresh_token',
+        rowBg:sel, rowEdge:'var(--accent)', badgeColor:'var(--exact)' },
+      { name:'auth-design.md', dir:'docs/', reason:'semantic', age:'3w',
+        snippet:'## Refresh token rotation',
+        crumb:'Authentication › Refresh token rotation',
+        rowBg:'transparent', rowEdge:'transparent', badgeColor:'var(--semantic)' },
+      { name:'2026-06-standup.md', dir:'notes/', reason:'semantic', age:'8w',
+        snippet:'decided to move refresh tokens out of localStorage',
+        crumb:'§ June standup',
+        rowBg:'transparent', rowEdge:'transparent', badgeColor:'var(--semantic)' },
+      { name:'session.sql', dir:'vault/migrations/', reason:'path', age:'5w',
+        snippet:'CREATE TABLE refresh_tokens (',
+        crumb:'migrations › 0014_session',
+        rowBg:'transparent', rowEdge:'transparent', badgeColor:'var(--text-dim)' },
+    ];
+    const hl = (n) => n === 142;
+    const raw = [
+      [138,'    /// Rotate a refresh token, revoking the previous one.','var(--text-faint)'],
+      [139,'    ///','var(--text-faint)'],
+      [140,'    /// Returns `Stale` if the presented token was already used.','var(--text-faint)'],
+      [141,'    #[tracing::instrument(skip(self, ctx))]','var(--text-dim)'],
+      [142,'    pub async fn refresh_token(&self, ctx: &Ctx) -> Result<Token> {','var(--text)'],
+      [143,'        let claims = self.decode(&ctx.refresh)?;','var(--text)'],
+      [144,'        if self.revoked.contains(&claims.jti) {','var(--text)'],
+      [145,'            return Err(Error::new(Code::PolDenied, "token already used"));','var(--text)'],
+      [146,'        }','var(--text)'],
+      [147,'        let next = self.mint(claims.sub, ctx.now)?;','var(--text)'],
+      [148,'        self.revoked.insert(claims.jti);','var(--text)'],
+      [149,'        Ok(next)','var(--text)'],
+      [150,'    }','var(--text)'],
+    ];
+    const code = raw.map(([n, src, fg]) => ({
+      n, src, fg,
+      bg: hl(n) ? 'var(--bg-sel)' : 'transparent',
+      edge: hl(n) ? 'var(--accent)' : 'transparent',
+    }));
+    return { theme: this.props.theme ?? 'light', results, code };
+  }
+}
+</script>
+</body>
+</html>

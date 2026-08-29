@@ -89,11 +89,7 @@ pub fn tier_from_metadata(path: &Path, meta: &Metadata) -> TierState {
         tracing::trace!(path = %path.display(), "dataless: SF_DATALESS set");
         return TierState::Placeholder;
     }
-    if path
-        .file_name()
-        .map(is_icloud_stub_name)
-        .unwrap_or(false)
-    {
+    if path.file_name().map(is_icloud_stub_name).unwrap_or(false) {
         tracing::trace!(path = %path.display(), "dataless: .icloud stub");
         return TierState::Placeholder;
     }
@@ -189,7 +185,10 @@ mod tests {
             icloud_stub_original_name(&OsString::from(".Q3 Report.pdf.icloud")).as_deref(),
             Some("Q3 Report.pdf")
         );
-        assert_eq!(icloud_stub_original_name(&OsString::from("report.pdf")), None);
+        assert_eq!(
+            icloud_stub_original_name(&OsString::from("report.pdf")),
+            None
+        );
     }
 
     #[test]

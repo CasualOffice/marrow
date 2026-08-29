@@ -166,11 +166,31 @@ The entire corpus can be walked, hashed and persisted in under three seconds.
 
 | Item | Status |
 |---|---|
-| **Cloud placeholder count** | `~/Library/CloudStorage` and `~/Library/Mobile Documents` both exist (iCloud Drive, WhatsApp, Keynote, iBooks). A `find -flags dataless` over `$HOME` **timed out at 2 minutes** — itself a signal that touching these paths is slow. Needs a scoped re-measure before M1's TIER work. **Do not index these roots until it's answered.** |
+| ~~Cloud placeholder count~~ | **RESOLVED 2026-08-30** during M1 scanner work — see §9. |
 | `~/Library` | Never scanned; excluded by design. Caches and app support have no knowledge value and are enormous |
 | Corpus volatility | One snapshot. Re-run `spike/` after M1 to see how much the numbers move |
 
 ---
+
+## 9. Resolved: the cloud placeholder question
+
+M0 left this open because `find -flags dataless` over `$HOME` timed out at two minutes. The scanner's metadata-only tier check settled it in milliseconds.
+
+| Root | Files | Placeholders | Mechanism | Logical bytes | Time |
+|---|---|---|---|---|---|
+| `~/Library/Mobile Documents` | 58 | **58 (100%)** | `SF_DATALESS` ×58, `.icloud` stub ×0 | **1.35 GB** | 9–36 ms |
+| `~/Library/CloudStorage` | 0 | — | — | — | — |
+
+**The timeout was `find`'s traversal cost, not the flag check.** Reading `st_flags` off an `lstat` we already perform is free.
+
+| # | Finding | Consequence |
+|---|---|---|
+| **F13** | `.icloud` stubs are effectively extinct here — `SF_DATALESS` fired 58/58 | Keep both mechanisms (older sync clients and non-APFS volumes still produce stubs), but the flag is the live path |
+| **F14** | **`hidden(true)` would have hidden every placeholder** | `.icloud` stubs are always dot-prefixed, so the walker's default hidden filter erases the only evidence an evicted file exists. TIER-008's "cloud-only, not indexed" count would have silently read **zero** — a feature that looks like it works. Walk with `hidden(false)` and filter hidden files in our own predicate, with a stub exemption |
+| **F15** | **D47 quantified: gitignore off yields 34,459 files on `~/Desktop`, vs 9,435 with it on** | **3.7× larger.** The per-root default is still correct (F9), but **M1 sizing should assume ~34k files, not 9.4k** |
+| **F16** | APFS is normalization-**insensitive**, not merely preserving | Both NFC and NFD spellings of one name cannot coexist in a directory; `canonicalize` returns the stored (NFD) form. Normalization must happen in our path key — it cannot be expected from the OS |
+| **F17** | `Hydrating` is not observable from metadata | A file mid-hydration still carries `SF_DATALESS`, so it reads as `Placeholder` until complete. `TierState::Hydrating` is never returned by the scanner |
+| **F18** | A detached volume surfaces as an `lstat` failure on the **parent**, not as `Unavailable` | Tier detection returns an error rather than a state. Critically, a failed stat never yields "Resident" — the safe direction |
 
 ## 8. How to reproduce
 

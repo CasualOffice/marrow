@@ -1,0 +1,137 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0}
+    a{color:var(--accent)} a:hover{color:var(--accent)}
+    .t[data-theme="light"]{
+      --bg:#fdfdfd;--bg-raised:#f6f6f7;--bg-hover:#eeeef0;--bg-sel:#e8effc;
+      --border:#e4e4e7;--border-strong:#d4d4d8;
+      --text:#18181b;--text-dim:#6b6b73;--text-faint:#9b9ba3;
+      --accent:#2f6feb;--warn:#a16207;--ok:#2f7d4f;--chrome:#ececed;
+    }
+    .t[data-theme="dark"]{
+      --bg:#161619;--bg-raised:#1c1c20;--bg-hover:#26262b;--bg-sel:#1e2c48;
+      --border:#2a2a30;--border-strong:#3a3a42;
+      --text:#e9e9ec;--text-dim:#9a9aa2;--text-faint:#6b6b74;
+      --accent:#4d8bff;--warn:#d4a017;--ok:#5fb37f;--chrome:#1f1f23;
+    }
+    .mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+  </style>
+</helmet>
+
+<div class="t" data-theme="{{theme}}" style="width:1180px;height:620px;display:flex;flex-direction:column;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;font-size:13px;line-height:1.45;border:1px solid var(--border-strong);border-radius:10px;overflow:hidden">
+
+  <div style="height:38px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 14px;background:var(--chrome);border-bottom:1px solid var(--border)">
+    <div style="display:flex;gap:8px;align-items:center">
+      <div style="width:11px;height:11px;border-radius:50%;background:#ec6a5e"></div>
+      <div style="width:11px;height:11px;border-radius:50%;background:#f4bf4f"></div>
+      <div style="width:11px;height:11px;border-radius:50%;background:#61c554"></div>
+    </div>
+    <div style="flex-grow:1;text-align:center;font-size:12px;font-weight:590;color:var(--text-dim)">Marrow</div>
+    <div style="width:54px"></div>
+  </div>
+
+  <div style="flex-grow:1;display:flex;min-height:0">
+
+    <div style="width:180px;flex-shrink:0;background:var(--bg-raised);border-right:1px solid var(--border);padding:10px 8px">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border-radius:6px;background:var(--bg-sel);color:var(--accent);font-weight:590">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14" stroke-linecap="round"/></svg>
+        Search
+      </div>
+    </div>
+
+    <div style="flex-grow:1;display:flex;flex-direction:column;min-width:0">
+
+      <div style="padding:10px 16px;border-bottom:1px solid var(--border);flex-shrink:0">
+        <div style="display:flex;align-items:center;gap:7px;height:30px;max-width:420px;padding:0 9px;background:var(--bg-raised);border:1px solid var(--border-strong);border-radius:6px;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 14%,transparent)">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--text-faint)" stroke-width="1.5" style="flex-shrink:0"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14" stroke-linecap="round"/></svg>
+          <span style="flex-grow:1">quarterly revenue</span>
+        </div>
+      </div>
+
+      <div style="flex-grow:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 40px;min-height:0">
+
+        <div style="width:100%;max-width:560px;display:flex;flex-direction:column;gap:22px">
+
+          <div style="display:flex;flex-direction:column;gap:5px">
+            <span style="font-size:17px;font-weight:600">No matches for “quarterly revenue”</span>
+            <span style="font-size:13px;color:var(--text-dim)">Searched 9,435 files across 2 workspaces in 6 ms.</span>
+          </div>
+
+          <div style="height:1px;background:var(--border)"></div>
+
+          <div style="display:flex;flex-direction:column;gap:11px">
+            <span style="font-size:10.5px;font-weight:640;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-faint)">Not indexed — it may be here</span>
+
+            <sc-for list="{{gaps}}" as="g" hint-placeholder-count="3">
+              <div style="display:flex;align-items:center;gap:12px;padding:11px 13px;border:1px solid var(--border);border-radius:7px;background:var(--bg-raised)">
+                <span class="mono" style="font-size:16px;font-weight:600;color:{{g.fg}};min-width:44px">{{g.count}}</span>
+                <div style="flex-grow:1;min-width:0;display:flex;flex-direction:column;gap:1px">
+                  <span style="font-size:12.5px">{{g.title}}</span>
+                  <span style="font-size:11.5px;color:var(--text-dim)">{{g.detail}}</span>
+                </div>
+                <span style="flex-shrink:0;font-size:11.5px;font-weight:560;color:var(--bg);background:var(--accent);border-radius:5px;padding:4px 11px">{{g.action}}</span>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <span style="font-size:10.5px;font-weight:640;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-faint)">Or try</span>
+            <div style="display:flex;flex-wrap:wrap;gap:7px">
+              <sc-for list="{{alts}}" as="a" hint-placeholder-count="3">
+                <span style="font-size:12px;color:var(--text-dim);border:1px solid var(--border-strong);border-radius:5px;padding:3px 9px">{{a.label}}</span>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="height:26px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 16px;border-top:1px solid var(--border);background:var(--bg-raised);font-size:10.5px;color:var(--text-faint)">
+        <span>0 results</span><span>·</span><span class="mono">6 ms</span>
+        <span style="flex-grow:1"></span>
+        <span>lexical + semantic</span>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light","section":"Theme"},"$preview":{"width":1180,"height":620}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      theme: this.props.theme ?? 'light',
+      gaps: [
+        { count:'58',  fg:'var(--warn)',
+          title:'cloud-only files in iCloud were not read',
+          detail:'Downloading them costs 1.35 GB.',
+          action:'Download' },
+        { count:'442', fg:'var(--warn)',
+          title:'spreadsheets hidden by .gitignore in melp',
+          detail:'Financial data often lives in ignored folders.',
+          action:'Include' },
+        { count:'17',  fg:'var(--text-dim)',
+          title:'files failed to parse',
+          detail:'Still findable by name, but their contents are not searchable.',
+          action:'Review' },
+      ],
+      alts: [
+        { label:'revenue' },
+        { label:'Q2 revenue' },
+        { label:'in:xlsx revenue' },
+        { label:'modified:<3mo revenue' },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

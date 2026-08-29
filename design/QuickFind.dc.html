@@ -1,0 +1,93 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0}
+    a{color:var(--accent)} a:hover{color:var(--accent)}
+    .t[data-theme="light"]{
+      --bg:#fdfdfd;--bg-raised:#f6f6f7;--bg-hover:#eeeef0;--bg-sel:#e8effc;
+      --border:#e4e4e7;--border-strong:#d4d4d8;
+      --text:#18181b;--text-dim:#6b6b73;--text-faint:#9b9ba3;
+      --accent:#2f6feb;--exact:#2f6feb;--semantic:#7c4dcc;
+      --panel:#fbfbfc;--desk1:#c8ccd4;--desk2:#aab0bd;
+    }
+    .t[data-theme="dark"]{
+      --bg:#161619;--bg-raised:#1c1c20;--bg-hover:#26262b;--bg-sel:#1e2c48;
+      --border:#2a2a30;--border-strong:#3a3a42;
+      --text:#e9e9ec;--text-dim:#9a9aa2;--text-faint:#6b6b74;
+      --accent:#4d8bff;--exact:#4d8bff;--semantic:#a78bfa;
+      --panel:#1e1e23;--desk1:#2b2f38;--desk2:#1b1e25;
+    }
+    .mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+  </style>
+</helmet>
+
+<div class="t" data-theme="{{theme}}" style="width:820px;height:520px;display:flex;align-items:center;justify-content:center;background:linear-gradient(140deg,var(--desk1),var(--desk2));font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;font-size:13px;line-height:1.45">
+
+  <div style="width:640px;background:var(--panel);border:1px solid var(--border-strong);border-radius:12px;overflow:hidden;color:var(--text);box-shadow:0 24px 60px rgba(0,0,0,0.28)">
+
+    <!-- query -->
+    <div style="display:flex;align-items:center;gap:10px;padding:0 16px;height:52px;border-bottom:1px solid var(--border)">
+      <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="var(--text-faint)" stroke-width="1.5" style="flex-shrink:0"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14" stroke-linecap="round"/></svg>
+      <span style="flex-grow:1;font-size:17px">auth refresh token</span>
+      <span style="width:1.5px;height:19px;background:var(--accent)"></span>
+    </div>
+
+    <!-- results -->
+    <div style="display:flex;flex-direction:column">
+      <sc-for list="{{hits}}" as="h" hint-placeholder-count="3">
+        <div style="display:flex;align-items:flex-start;gap:11px;padding:10px 16px;background:{{h.bg}};border-left:2px solid {{h.edge}}">
+          <span class="mono" style="flex-shrink:0;width:26px;font-size:10.5px;color:var(--text-faint);border:1px solid var(--border-strong);border-radius:3px;text-align:center;padding:1px 0;margin-top:1px">{{h.key}}</span>
+          <div style="flex-grow:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+            <div style="display:flex;align-items:baseline;gap:8px">
+              <span style="font-weight:590;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{h.name}}</span>
+              <span style="flex-grow:1"></span>
+              <span style="font-size:10.5px;color:{{h.badge}};font-weight:560">{{h.reason}}</span>
+              <span style="font-size:10.5px;color:var(--text-faint)">{{h.age}}</span>
+            </div>
+            <div class="mono" style="font-size:11px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{h.dir}}</div>
+            <div class="mono" style="font-size:11px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{h.snippet}}</div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+
+    <!-- footer -->
+    <div style="display:flex;align-items:center;gap:14px;height:32px;padding:0 16px;border-top:1px solid var(--border);background:var(--bg-raised);font-size:10.5px;color:var(--text-faint)">
+      <span style="display:flex;align-items:center;gap:5px"><span class="mono" style="border:1px solid var(--border-strong);border-radius:3px;padding:0 4px">↵</span>open</span>
+      <span style="display:flex;align-items:center;gap:5px"><span class="mono" style="border:1px solid var(--border-strong);border-radius:3px;padding:0 4px">⇧↵</span>reveal</span>
+      <span style="display:flex;align-items:center;gap:5px"><span class="mono" style="border:1px solid var(--border-strong);border-radius:3px;padding:0 4px">⌘↵</span>open in Marrow</span>
+      <span style="flex-grow:1"></span>
+      <span class="mono">17 · 8 ms</span>
+    </div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"dark","section":"Theme"},"$preview":{"width":820,"height":520}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const hits = [
+      { key:'⌘1', name:'token.rs', dir:'vault/src/auth/', reason:'exact', age:'2d',
+        snippet:'pub async fn refresh_token(&self, ctx: &Ctx)',
+        bg:'var(--bg-sel)', edge:'var(--accent)', badge:'var(--exact)' },
+      { key:'⌘2', name:'auth-design.md', dir:'docs/', reason:'semantic', age:'3w',
+        snippet:'## Refresh token rotation',
+        bg:'transparent', edge:'transparent', badge:'var(--semantic)' },
+      { key:'⌘3', name:'2026-06-standup.md', dir:'notes/', reason:'semantic', age:'8w',
+        snippet:'decided to move refresh tokens out of localStorage',
+        bg:'transparent', edge:'transparent', badge:'var(--semantic)' },
+    ];
+    return { theme: this.props.theme ?? 'dark', hits };
+  }
+}
+</script>
+</body>
+</html>

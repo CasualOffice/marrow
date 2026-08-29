@@ -112,9 +112,8 @@ impl AuthorizedRoot {
     /// root is better than a root that silently means the wrong tree.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let canonical = std::fs::canonicalize(path).map_err(|e| {
-            Error::from(e).with_context(format!("root {}", path.display()))
-        })?;
+        let canonical = std::fs::canonicalize(path)
+            .map_err(|e| Error::from(e).with_context(format!("root {}", path.display())))?;
         // `canonicalize` follows symlinks, so this is the real directory.
         let meta = std::fs::metadata(&canonical)?;
         if !meta.is_dir() {
@@ -183,7 +182,10 @@ impl AuthorizedRoot {
             .components()
             .any(|c| matches!(c, Component::ParentDir))
         {
-            return Err(escape_error(candidate, "the path contains a `..` component"));
+            return Err(escape_error(
+                candidate,
+                "the path contains a `..` component",
+            ));
         }
 
         let joined = if candidate.is_absolute() {
@@ -342,11 +344,7 @@ mod tests {
 
         // The "cloned repo with a symlink to ~/.ssh" case from invariant #7.
         std::os::unix::fs::symlink(base.join("secrets"), base.join("root/ssh")).unwrap();
-        std::os::unix::fs::symlink(
-            base.join("secrets/id_rsa"),
-            base.join("root/key.txt"),
-        )
-        .unwrap();
+        std::os::unix::fs::symlink(base.join("secrets/id_rsa"), base.join("root/key.txt")).unwrap();
 
         let root = AuthorizedRoot::open(base.join("root")).unwrap();
 

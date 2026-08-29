@@ -88,8 +88,9 @@ fn stream(path: &Path) -> Result<ContentHash> {
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => {
                 // FS-011: one unreadable file does not stop the workspace.
-                return Err(Error::from(e)
-                    .with_context(format!("{} after {total} bytes", path.display())));
+                return Err(
+                    Error::from(e).with_context(format!("{} after {total} bytes", path.display()))
+                );
             }
         }
     }

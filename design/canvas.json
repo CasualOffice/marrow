@@ -1,0 +1,20 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html",        "title": "Search — main window",   "x": 0,    "y": 0,    "w": 1180, "h": 760 },
+    { "file": "FileDetail.dc.html",  "title": "File intelligence",      "x": 1260, "y": 0,    "w": 1180, "h": 760 },
+    { "file": "Status.dc.html",      "title": "Index health",           "x": 2520, "y": 0,    "w": 1180, "h": 760 },
+    { "file": "QuickFind.dc.html",   "title": "Quick find — Opt+Space", "x": 0,    "y": 860,  "w": 820,  "h": 520 },
+    { "file": "ZeroResults.dc.html", "title": "No matches — diagnosis", "x": 900,  "y": 860,  "w": 1180, "h": 620 }
+  ],
+  "annotations": [
+    { "id": "note-density", "x": 0, "y": -170, "w": 420,
+      "text": "Marrow — desktop screens\n\nNear-monochrome, 28px rows, 13px base. Colour carries only state and match reason.\nSF Pro / SF Mono, borders not shadows, 6px radii.\n\nFlip light/dark with the Theme chip above each artboard." },
+    { "id": "note-provenance", "x": 1260, "y": -170, "w": 420,
+      "text": "Every derived fact shows its extraction method, and absent metadata renders as an em dash rather than blank. You can always tell parsed from inferred from missing." },
+    { "id": "note-degraded", "x": 2520, "y": -170, "w": 420,
+      "text": "Degraded state is loud and always carries its fix. A watcher that quietly stopped working produces an index that is quietly wrong — worse than one that is loudly broken." },
+    { "id": "note-zero", "x": 900, "y": 1520, "w": 520,
+      "text": "Zero results is a diagnosis, not a shrug. It names what is NOT indexed and offers the fix as a button — the state that caused the problem is the state that can fix it." }
+  ],
+  "launch": { "view": "canvas" }
+}
