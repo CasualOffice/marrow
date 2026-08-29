@@ -55,18 +55,22 @@ find ~ -flags dataless 2>/dev/null | wc -l
 **Exit:** beats current search on your corpus · survives `kill -9` mid-scan · zero reconciliation drift over 72 h.
 
 ### Foundation
-- [ ] Cargo workspace + crate layout
-- [ ] `tracing` to file; error taxonomy skeleton ([Part 6 §108](docs/Part_6_Engineering_Reference.md))
-- [ ] SQLite: M1 table subset, WAL pragmas, single-writer actor
-- [ ] Migration runner + `VACUUM INTO` backup before migrate
-- [ ] Job queue: idempotency keys, leases, backoff, resume-after-crash
+- [x] Cargo workspace + crate layout (`core`, `store`, `scan`, `cli`)
+- [x] Error taxonomy ([Part 6 §108](docs/Part_6_Engineering_Reference.md)) — 28 codes, `POL_*` never retryable
+- [x] Typed ULID IDs; `SourceSpan`, `TierState`, `Origin` encode invariants #1/#5/#13
+- [x] `check.sh` + CI — fmt, clippy -D warnings, test, named invariant tests
+- [~] SQLite: M1 table subset, WAL pragmas, single-writer actor
+- [~] Migration runner + `VACUUM INTO` backup before migrate
+- [~] Job queue: idempotency keys, leases, backoff, resume-after-crash
+- [ ] `tracing` subscriber wiring in the CLI
 
 ### Discovery
 - [ ] Workspace + root model with explicit consent
-- [ ] `ignore`-based scan, `.gitignore` aware, symlinks off
-- [ ] `blake3` content hashing
-- [ ] Stable `file_id` + path history (**path ≠ identity**)
-- [ ] **Cloud placeholder detection — never hydrate** ⚠️
+- [~] `ignore`-based scan, `.gitignore` **as per-root policy** (D47), symlinks off
+- [~] `blake3` content hashing — refuses non-Resident files
+- [~] Stable `file_id` + path history (**path ≠ identity**)
+- [~] **Cloud placeholder detection — never hydrate** ⚠️
+- [~] Path canonicalization + symlink escape + NFC/NFD identity
 - [ ] `notify` watcher with coalescing/debounce
 - [ ] Reconciliation loop; watcher-health reporting (`Live`/`Degraded`/`Poll-only`)
 - [ ] Unicode NFC/NFD normalization so macOS doesn't create duplicate identities
@@ -229,4 +233,6 @@ Short entries. What shipped, what surprised you, what changed.
 |---|---|
 | 2026-08-30 | Spec complete (7 parts). Re-scoped for solo/open-source in Part 7. Repo initialised. M0 started. |
 | 2026-08-30 | Named **Marrow** (D45). Docs renamed `Part_N_*.md`. Crate namespace left open as D46. |
+| 2026-08-30 | Reclaimed **64 GB** of Rust `target/` output (14→78 GB free). Build artifacts were 6.6× the entire knowledge corpus. M0 F11 superseded. |
+| 2026-08-30 | **M1 started.** Workspace + `marrow-core` committed: 17 tests, clippy clean. Found ULID ordering is ms-granular not total — doc corrected, limitation pinned by a test. `store` and `scan` building in parallel. |
 | 2026-08-30 | **M0 done.** Corpus is 9,435 files / 1 GB — 10× smaller than the spec assumed. Perf beats every target by 1–3 orders of magnitude. 14 PDFs total → PDF dropped from M3. Zero video/audio/email. See [bench/M0-corpus.md](bench/M0-corpus.md). |
