@@ -73,7 +73,7 @@ Two viable paths:
 - **Candle** — one crate for embeddings and generation, fewer binaries
 - **Call an installed Ollama** — zero size, zero maintenance, if you already run it
 
-Decide at M4. **Leaning Ollama-if-present, strongly** — M0 found only **17 GB free disk** (F11), and a 7B Q4 model is ~4.5 GB against a 5 MB index. Bundling weights is unattractive on this machine.
+Decide at M4. **Leaning Ollama-if-present** — not for disk reasons (M0's 17 GB figure was reclaimable build output; 78 GB free after cleanup), but because it is zero maintenance and already installed.
 
 Hardware is T-mid (16 GB unified): 7–8B @ Q4 comfortable, 13–14B tight, 30B+ out of reach.
 
@@ -103,7 +103,7 @@ Dropped from M3. If the corpus ever changes, this reverses cheaply — the parse
 
 Consequences: FSEvents watcher semantics with event-ID replay · native Vision framework for OCR if ever needed (0 MB) · NFD filename normalization is mandatory, not optional · `SF_DATALESS` / `.icloud` stubs are the placeholder detection path.
 
-**17 GB free disk** is the binding constraint on anything model-shaped (M0 F11).
+Disk was briefly a constraint at 17 GB free; 64 GB of that was reclaimable Rust `target/` output. Now 78 GB free — not a constraint.
 
 ### D45 — Product name → **Marrow**
 

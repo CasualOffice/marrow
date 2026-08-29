@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-30
 **Machine:** Mac16,12 (Apple Silicon), 10 cores, 16 GB unified memory, macOS 26.3
-**Disk:** 228 GB volume, 172 GB used, **17 GB free**
+**Disk:** 228 GB volume. **17 GB free at measurement time; 78 GB free after reclaiming 64 GB of Rust `target/` dirs (2026-08-30).** See F11.
 **Method:** `spike/` — `ignore` walk + blake3 + rusqlite, release build. Aggregates only; no filenames recorded.
 
 > **Purpose:** replace the specification's assumptions with facts. Several of them were wrong by an order of magnitude.
@@ -122,7 +122,7 @@ The entire corpus can be walked, hashed and persisted in under three seconds.
 | **F8** | **`.gitignore` does 97% of the exclusion work** | It's the single highest-leverage default. But see F9 |
 | **F9** | 442 of 475 `.xlsx` are hidden by `.gitignore` | **Risk.** Respecting gitignore globally makes real data invisible. It must be a **per-root policy**, not a global default (FS-002 says "where configured" — honour that) |
 | **F10** | 0 symlinks, 0 walk errors in the current corpus | Path-escape surface is empty *today*. Not a guarantee — one cloned repo changes it. Keep the defence (invariant #7); just don't expect it to fire during development |
-| **F11** | **17 GB free disk** | The binding constraint on local inference. A 7B Q4 model is ~4.5 GB. Index is ~5 MB, so models are 1000× the index. Prefer an already-installed Ollama (D2/D31 R1) or small models |
+| **F11** | ~~17 GB free disk~~ → **78 GB free** | **Superseded same day.** 64 GB was reclaimable Rust `target/` output (40 GB in one project). Disk is no longer a constraint: a 7B Q4 model is ~4.5 GB against 78 GB free. Ollama-if-present is still preferred, but on maintenance grounds, not space. **Real lesson: build artifacts were 6.6× the entire knowledge corpus** — which is exactly why noise exclusion is the highest-leverage default (F8) |
 | **F12** | 16 GB unified memory, M4-class | **T-mid** tier (§95.3). 7–8B @ Q4 comfortable, 13–14B tight, 30B+ out of reach |
 
 ---
@@ -135,7 +135,7 @@ The entire corpus can be walked, hashed and persisted in under three seconds.
 | **D3** — Tantivy vs SQLite FTS5 | Tantivy | **Reopen.** At 9.4k documents both are instant; FTS5 removes a dependency and a second index to keep consistent. Tantivy's win (tokenizers, field-aware BM25) is real but small at this scale. Lean FTS5, decide at M1 |
 | **D4** — PDF engine | PDFium | **Deferred indefinitely.** 14 files (F3) |
 | **D5** — platform | undecided | **macOS 26.3, Apple Silicon.** Recorded |
-| **D2/D31** — LLM runtime | Candle or Ollama | **Ollama-if-present strongly preferred.** 17 GB free disk (F11) makes bundling weights unattractive |
+| **D2/D31** — LLM runtime | Candle or Ollama | **Ollama-if-present preferred**, on maintenance grounds. The disk argument evaporated with F11 |
 | **New** — gitignore policy | global default | **Per-root policy** (F9) |
 
 ---

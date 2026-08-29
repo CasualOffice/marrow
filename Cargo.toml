@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/store", "crates/cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+marrow-core  = { path = "crates/core" }
+marrow-store = { path = "crates/store" }
+
+anyhow     = "1"
+thiserror  = "2"
+blake3     = "1"
+rusqlite   = { version = "0.32", features = ["bundled", "backup"] }
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing    = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ulid       = "1"
+
+[profile.release]
+opt-level = 3
