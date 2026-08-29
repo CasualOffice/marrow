@@ -42,9 +42,11 @@ pub mod path;
 pub mod probe;
 pub mod tier;
 pub mod walk;
+pub mod watch;
 
 pub use hash::{hash_file, hash_file_with_tier, HASH_BUFFER_BYTES};
 pub use path::{path_key, AuthorizedRoot, PathKey, SafePath};
 pub use probe::{mime_hint, probe, FileFacts, FsIdentity, MimeHint};
 pub use tier::{ensure_safe_to_read, tier_of};
 pub use walk::{walk, ScanEntry, ScanEvent, WalkPolicy, DEFAULT_NOISE_DIRS};
+pub use watch::{reconcile_interval, Health, Hints, Watcher};

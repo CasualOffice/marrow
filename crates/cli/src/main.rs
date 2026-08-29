@@ -78,6 +78,14 @@ enum Cmd {
     },
     /// Index health
     Status,
+    /// Watch workspaces and index changes as they happen
+    ///
+    /// Runs until interrupted. Watcher health is reported on start and whenever
+    /// it changes — a degraded watcher is never silent (WATCH-009).
+    Watch {
+        /// Workspace name. Omit to watch every workspace.
+        name: Option<String>,
+    },
     /// Serve the index over MCP on stdio
     ///
     /// Point an agent front-end at this. Protocol traffic uses stdout, so
@@ -204,6 +212,7 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
             search::run(&index, &q, *limit, &roots, cli.json, style, out)
         }
         Cmd::Status => status(cli.json, style, out),
+        Cmd::Watch { name } => watch(name.as_deref(), style, out),
         Cmd::Mcp => {
             let store = open_store()?;
             let server = marrow_mcp::Server::new(store)?;
@@ -561,6 +570,122 @@ fn status(json: bool, style: Style, out: &mut impl Write) -> Result<()> {
                 render::count(placeholders as u64)
             ))
         )?;
+    }
+    Ok(())
+}
+
+fn watch(only: Option<&str>, style: Style, out: &mut impl Write) -> Result<()> {
+    let store = open_store()?;
+    let conn = store.reader()?;
+    let targets: Vec<_> = list_workspaces(&conn)?
+        .into_iter()
+        .filter(|(n, _, _)| only.is_none_or(|o| o == n))
+        .collect();
+    drop(conn);
+
+    let Some((name, path, _)) = targets.into_iter().next() else {
+        return Err(Error::new(
+            marrow_core::Code::FsNotFound,
+            "No workspace to watch. Run `marrow workspace add <path>` first.",
+        ));
+    };
+
+    // One root for now. Watching several needs a thread per watcher and a
+    // shared cancel; that is worth doing when a second root exists.
+    let root = AuthorizedRoot::open(&path)?;
+    let conn = store.reader()?;
+    let (ws_id, root_id) = ids_for(&conn, &name)?;
+    drop(conn);
+
+    let mut watcher = marrow_scan::Watcher::open(&root)?;
+    let index = marrow_index::Fts5Index::open(&store)?;
+    let policy = IngestPolicy::default();
+    let cancel = Cancel::new();
+
+    writeln!(
+        out,
+        "{} {}  {}",
+        style.bold(&name),
+        style.dim(&path),
+        match watcher.health() {
+            marrow_scan::Health::Live => style.ok("live"),
+            h => style.warn(h.label()),
+        }
+    )?;
+    if let Some(reason) = watcher.health().reason() {
+        writeln!(out, "  {}", style.warn(reason))?;
+    }
+    writeln!(
+        out,
+        "  {}",
+        style.dim(&format!(
+            "sweeping every {}",
+            render::duration(marrow_scan::reconcile_interval(watcher.health()).as_millis())
+        ))
+    )?;
+    writeln!(out, "  {}", style.dim("Ctrl-C to stop"))?;
+
+    let mut last_health = watcher.health().clone();
+    while let Some(hints) = watcher.next_batch(std::time::Duration::from_secs(2)) {
+        // WATCH-009: a change in health is reported the moment it happens.
+        if *watcher.health() != last_health {
+            last_health = watcher.health().clone();
+            writeln!(
+                out,
+                "{} {}",
+                style.warn("⚠"),
+                style.bold(last_health.label())
+            )?;
+            if let Some(r) = last_health.reason() {
+                writeln!(out, "  {}", style.warn(r))?;
+            }
+        }
+        if hints.is_empty() {
+            continue;
+        }
+        if hints.rescan_required {
+            writeln!(out, "  {}", style.dim("events were lost — sweeping"))?;
+            let progress = Arc::new(Progress::new());
+            let o = marrow_ingest::ingest_root_with_index(
+                &store,
+                ws_id,
+                root_id,
+                &root,
+                &policy,
+                &progress,
+                &cancel,
+                Some(&index),
+            )?;
+            writeln!(
+                out,
+                "  {} {} changed",
+                style.dim("sweep:"),
+                render::count(o.stored)
+            )?;
+            continue;
+        }
+
+        let progress = Arc::new(Progress::new());
+        let o = marrow_ingest::apply_hints(
+            &store,
+            ws_id,
+            root_id,
+            &root,
+            &policy,
+            &hints.touched,
+            &progress,
+            &cancel,
+            Some(&index),
+        )?;
+        if o.stored > 0 {
+            writeln!(
+                out,
+                "  {} {} · {} chunks",
+                style.dim(&render::count(o.stored)),
+                style.dim("changed"),
+                render::count(o.chunks)
+            )?;
+        }
     }
     Ok(())
 }

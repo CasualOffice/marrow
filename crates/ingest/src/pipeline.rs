@@ -245,6 +245,118 @@ fn drain(inflight: &mut Vec<Pending<()>>, progress: &Progress, outcome: &mut Ing
     }
 }
 
+/// Re-examine a set of hinted paths.
+///
+/// **Invariant #6.** A hint says a path is worth looking at, not what happened
+/// to it. Every path is re-stated and re-fingerprinted here; the watcher's
+/// opinion of create-vs-modify-vs-delete is never believed.
+///
+/// A path that has vanished is marked deleted. A path outside the root is
+/// dropped — a watcher can report one, and acting on it would index a file the
+/// workspace grant never authorised.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_hints(
+    store: &Store,
+    workspace_id: WorkspaceId,
+    root_id: RootId,
+    root: &AuthorizedRoot,
+    policy: &IngestPolicy,
+    paths: &std::collections::BTreeSet<std::path::PathBuf>,
+    progress: &Arc<Progress>,
+    cancel: &Cancel,
+    index: Option<&dyn marrow_index::TextIndex>,
+) -> Result<IngestOutcome> {
+    let mut outcome = IngestOutcome::default();
+    let conn = store.reader()?;
+    let mut inflight: Vec<Pending<()>> = Vec::new();
+    let router = marrow_parse::ParserRouter::with_default_parsers();
+
+    for path in paths {
+        if cancel.is_cancelled() {
+            outcome.cancelled = true;
+            break;
+        }
+        // Containment is re-proved per path: a hint is untrusted input.
+        if !root.contains(path) {
+            debug!(path = %path.display(), "hint outside the root; ignored");
+            continue;
+        }
+
+        let facts = match marrow_scan::probe(path) {
+            Ok(f) => f,
+            Err(_) => {
+                // Gone since the hint fired. Mark it deleted rather than
+                // leaving a row pointing at nothing.
+                let p = path.to_string_lossy().into_owned();
+                if let Ok(Some(file)) = marrow_store::read::find_file_by_path(&conn, root_id, &p) {
+                    let id = file.file_id;
+                    inflight.push(store.writer().send(move |c| {
+                        c.execute(
+                            "UPDATE files SET status='DELETED', current_path=NULL, \
+                             updated_at=?2 WHERE file_id=?1",
+                            marrow_store::rusqlite::params![
+                                id.to_string(),
+                                Timestamp::now().as_millis()
+                            ],
+                        )
+                        .map(|_| ())
+                        .map_err(|e| marrow_store::map_sqlite(e, "marking a file deleted"))
+                    })?);
+                    outcome.stored += 1;
+                }
+                continue;
+            }
+        };
+        if facts.is_dir {
+            continue;
+        }
+        outcome.discovered += 1;
+        progress.bump(Stage::Discovered);
+
+        let entry = marrow_scan::ScanEntry {
+            path: path.clone(),
+            depth: 0,
+            facts,
+        };
+        let Some(h) = hash_one(&entry, policy.max_hash_bytes, progress) else {
+            continue;
+        };
+
+        match record(store, &conn, workspace_id, root_id, &h, &mut inflight) {
+            Ok(Some(ids)) => {
+                outcome.stored += 1;
+                progress.bump(Stage::Stored);
+                if policy.extract_content {
+                    if let Ok(n) = extract(
+                        store,
+                        index,
+                        &router,
+                        policy,
+                        workspace_id,
+                        &h,
+                        &ids,
+                        &mut inflight,
+                    ) {
+                        outcome.chunks += n as u64;
+                        if n > 0 {
+                            outcome.parsed += 1;
+                        }
+                    }
+                }
+            }
+            Ok(None) => outcome.unchanged += 1,
+            Err(e) => {
+                warn!(path = %h.path, error = %e, "failed to record file");
+                outcome.failed += 1;
+            }
+        }
+    }
+
+    drain(&mut inflight, progress, &mut outcome);
+    store.flush()?;
+    Ok(outcome)
+}
+
 fn spawn_walk(
     root: &AuthorizedRoot,
     policy: &WalkPolicy,

@@ -74,8 +74,11 @@ find ~ -flags dataless 2>/dev/null | wc -l
 - [x] Path canonicalization + symlink escape + NFC/NFD identity — component-wise, not string-prefix
 - [x] Lazy walk with per-entry error isolation (FS-011)
 - [x] Stable `file_id` + path history (**path ≠ identity**) — rename keeps its id; hardlinks stay distinct
-- [ ] `notify` watcher with coalescing/debounce
-- [ ] Reconciliation loop; watcher-health reporting (`Live`/`Degraded`/`Poll-only`)
+- [x] `notify` watcher with coalescing/debounce — 300 ms window, 4096-path batch cap
+- [x] Watcher health `live`/`degraded`/`poll-only`, never silent (WATCH-009)
+- [x] Adaptive sweep interval: 6 h live → 15 min degraded → 5 min poll-only (WATCH-010)
+- [x] `marrow watch` — incremental indexing; a new file is searchable seconds later
+- [ ] Watch several roots at once (one thread per watcher + a shared cancel)
 - [ ] Unicode NFC/NFD normalization so macOS doesn't create duplicate identities
 
 ### Parsing — ordered by M0 file counts, not by spec order
@@ -260,6 +263,7 @@ Short entries. What shipped, what surprised you, what changed.
 | 2026-08-30 | Spec complete (7 parts). Re-scoped for solo/open-source in Part 7. Repo initialised. M0 started. |
 | 2026-08-30 | Named **Marrow** (D45). Docs renamed `Part_N_*.md`. Crate namespace left open as D46. |
 | 2026-08-30 | Reclaimed **64 GB** of Rust `target/` output (14→78 GB free). Build artifacts were 6.6× the entire knowledge corpus. M0 F11 superseded. |
+| 2026-08-30 | **Watcher shipped** — the last real M1 gap. `marrow watch` indexes changes live; verified by creating a file and finding it seconds later without a manual index. Hints are re-stated and re-fingerprinted before anything is believed (invariant #6); a lost event demands a sweep rather than being swallowed. |
 | 2026-08-30 | **M3 started.** Tauri shell builds; five read-only commands, WebView granted no fs/shell/network (SEC-012). `marrow-query` landed. Fixed a real gap it found: **ingest never wrote `parse_results`**, so PAR-003's parser-version-driven reprocessing could not work. Then found a second bug in that fix — `format!("{:?}").to_uppercase()` gives `LOWYIELD`, not `LOW_YIELD`, so compound outcomes failed their CHECK silently into the error count while single-word ones passed on the real corpus. |
 | 2026-08-30 | **M1 complete.** `search` works: 35,119 files → 13,716 parsed → 54,498 chunks in 15.6 s, queries in 0–3 ms with jumpable `path:line` and heading breadcrumbs. Three of my own bugs found by running rather than testing: a char-boundary panic in the chunker (a box-drawing glyph), the ceiling only applying to code nodes so a huge paragraph became one chunk, and the blocking `submit` reintroduced in the content stage. |
 | 2026-08-30 | **End to end.** `marrow workspace add` → `index` → `status` works on the real corpus: **41,110 files in 3.6 s cold, ~1 s warm, 0 writes on re-run.** Three bugs found by running it rather than testing it: a reader connection opened per file; the blocking `submit` API (100 ms/file → ~57 min); and hardlinks fighting over `current_path` so the index never converged. |
