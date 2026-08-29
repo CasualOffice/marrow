@@ -304,7 +304,7 @@ fn centre_on_match(s: &marrow_index::Snippet) -> String {
         .iter()
         .skip(hit)
         .take(2)
-        .map(|l| l.replace(OPEN, "").replace(CLOSE, ""))
+        .map(|l| l.replace([OPEN, CLOSE], ""))
         .collect::<Vec<_>>()
         .join("\n")
 }
