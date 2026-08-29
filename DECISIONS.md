@@ -26,6 +26,16 @@ Options, in order of preference:
 
 ---
 
+### D47 — `.gitignore` respect: global default or per-root policy? — **raised by M0**
+
+M0 F9: `.gitignore` does 97% of the exclusion work, which is the single highest-leverage default in the system. But it also hides **442 of 475 `.xlsx` files** — real spreadsheets sitting in gitignored data directories.
+
+FS-002 already says "where configured", so the spec permits the right answer. Make it **per-root policy**, defaulting to on for roots that look like code and off elsewhere.
+
+- [ ] Implement as per-root in M1
+
+---
+
 ### D43 — Build the knowledge graph at all?
 
 **Gate, not a date.** Build it only when you can name **three questions you actually asked** that needed entity relationships and couldn't be answered by search + timeline.
@@ -45,9 +55,17 @@ Questions logged so far:
 
 ---
 
-### D1 — Vector store
+### D3 — Lexical index: Tantivy or SQLite FTS5? — **REOPENED by M0**
 
-**Deferred to M4.** Start with brute-force cosine; a few hundred thousand vectors is fine and has zero dependencies. Add LanceDB only when it measurably hurts. Decide with a benchmark on your own corpus, not a blog post.
+Was settled as Tantivy. M0 changes the input: the corpus is **9,435 files**, not 100k.
+
+At that scale both are instant. FTS5 removes a dependency and a second index to keep consistent with canonical state; Tantivy's advantages (per-field BM25, pluggable tokenizers, richer analyzers) are real but barely exercised by 9.4k documents.
+
+**Leaning FTS5.** Decide during M1 — the cost of being wrong is one rewrite of a small module, and Part 2 §36.3 already names "compact profile: SQLite FTS5 only" as a supported shape.
+
+- [ ] Decide at M1
+
+---
 
 ### D2 / D31 — Embedding and LLM runtime
 
@@ -55,17 +73,11 @@ Two viable paths:
 - **Candle** — one crate for embeddings and generation, fewer binaries
 - **Call an installed Ollama** — zero size, zero maintenance, if you already run it
 
-Decide at M4. Leaning Ollama-if-present, Candle as the fallback.
+Decide at M4. **Leaning Ollama-if-present, strongly** — M0 found only **17 GB free disk** (F11), and a 7B Q4 model is ~4.5 GB against a 5 MB index. Bundling weights is unattractive on this machine.
 
-### D4 — PDF engine
+Hardware is T-mid (16 GB unified): 7–8B @ Q4 comfortable, 13–14B tight, 30B+ out of reach.
 
-**PDFium**, unless M0 shows you barely have PDFs. Pure-Rust options aren't there for page + bbox provenance, which is the whole point.
-
-### D5 — Platform
-
-**Your daily driver.** Don't abstract for OSes you don't run. Affects: watcher semantics, OCR engine (native on macOS/Windows, Tesseract on Linux), path canonicalization.
-
-- [ ] Record which one: _—_
+---
 
 ### D44 — Single binary or daemon split?
 
@@ -74,6 +86,24 @@ Decide at M4. Leaning Ollama-if-present, Candle as the fallback.
 ---
 
 ## Settled
+
+### D1 — Vector store → **brute-force cosine, indefinitely** *(settled by M0)*
+
+Corpus is 9,435 files ≈ 30–60k chunks. Cosine over 60k × 384 floats is single-digit milliseconds in release mode. LanceDB would be a dependency, a storage format, a generation-migration mechanism and a failure mode, all serving nothing measurable.
+
+Revisit only if the corpus grows past ~500k chunks, which on this evidence it will not.
+
+### D4 — PDF engine → **deferred indefinitely** *(settled by M0)*
+
+**14 PDF files in the entire home directory.** PDFium plus page/bbox provenance, scanned-PDF detection, OCR routing and borderless-table reconstruction is roughly 15 weeks of spec'd work serving fourteen files.
+
+Dropped from M3. If the corpus ever changes, this reverses cheaply — the parser tier model (Part 3 §63) already has a slot for it.
+
+### D5 — Platform → **macOS 26.3, Apple Silicon (M4-class, 16 GB, 10 cores)** *(recorded by M0)*
+
+Consequences: FSEvents watcher semantics with event-ID replay · native Vision framework for OCR if ever needed (0 MB) · NFD filename normalization is mandatory, not optional · `SF_DATALESS` / `.icloud` stubs are the placeholder detection path.
+
+**17 GB free disk** is the binding constraint on anything model-shaped (M0 F11).
 
 ### D45 — Product name → **Marrow**
 
@@ -108,10 +138,6 @@ Free (0 MB) and better than bundled Tesseract on macOS and Windows. Tesseract on
 ### D17 — GPS/location extraction → **off by default**
 
 It's your own photo library; turn it on deliberately if you want it.
-
-### D3 — Lexical index → **Tantivy**
-
-BM25 and field-aware search without building it. SQLite FTS5 would be the fallback if Tantivy proves heavy, but there's no reason to expect that.
 
 ### D37 — Recipe format → **public, plain JSON**
 

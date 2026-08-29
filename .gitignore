@@ -44,3 +44,6 @@ dist/
 *.pem
 *.key
 secrets.*
+
+# Spike is throwaway; keep the source, drop the build
+/spike/target/

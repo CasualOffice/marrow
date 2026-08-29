@@ -1,6 +1,6 @@
 # Tracker
 
-**Current milestone:** M0 — Measure
+**Current milestone:** M1 — Index + query
 **Last updated:** 2026-08-30
 
 > This is the file that actually gets updated. [ROADMAP.md](ROADMAP.md) is the plan; this is the state.
@@ -12,8 +12,8 @@
 
 | M | Name | Status | Started | Done |
 |---|---|---|---|---|
-| M0 | Measure | `[~]` | 2026-08-30 | — |
-| M1 | Index + query | `[ ]` | — | — |
+| M0 | Measure | `[x]` | 2026-08-30 | 2026-08-30 |
+| M1 | Index + query | `[~]` | 2026-08-30 | — |
 | M2 | MCP server | `[ ]` | — | — |
 | M3 | PDF + tables | `[ ]` | — | — |
 | M4 | Semantic | `[ ]` | — | — |
@@ -27,16 +27,16 @@
 
 **Exit:** numbers written to `bench/M0-corpus.md`; first roots chosen.
 
-- [ ] Count files by extension across candidate roots
-- [ ] Count by size bucket (`<64KB`, `<1MB`, `<50MB`, `>50MB`)
-- [ ] Identify cloud-sync roots and count placeholder/dehydrated files
-- [ ] Note pathological cases: huge dirs, `node_modules`, build output, symlink loops
-- [ ] Spike: `ignore` walk over the real home dir — time it, count errors
-- [ ] Spike: `blake3` hash throughput on the same set
-- [ ] Spike: SQLite batched insert rate on this machine
-- [ ] Write `bench/M0-corpus.md`
-- [ ] Decide first two workspace roots
-- [ ] Record anything that contradicts the spec's assumptions in [DECISIONS.md](DECISIONS.md)
+- [x] Count files by extension across candidate roots — 189 exts, code+md+photos dominate
+- [x] Count by size bucket — 70.6% <64KB, nothing ≥500MB
+- [?] Identify cloud-sync roots and count placeholders — **roots found, count unresolved** (`find -flags dataless` timed out at 2 min). Blocks TIER work; re-measure scoped before touching those roots
+- [x] Note pathological cases — `node_modules` 76k files in 15 dirs; `~/Library` excluded by design; 0 symlinks
+- [x] Spike: `ignore` walk — **97,308 files/s**, 0 errors
+- [x] Spike: `blake3` — **417 MB/s**, 4,209 files/s, 3.6% dupes
+- [x] Spike: SQLite batched insert — **234,725 rows/s** (spec estimated 5–20k)
+- [x] Write [`bench/M0-corpus.md`](bench/M0-corpus.md)
+- [x] Decide first roots → `~/Desktop` (the whole corpus, effectively), `~/Pictures`
+- [x] Record contradictions → 12 findings F1–F12, 6 decisions moved
 
 **Useful one-liners for the counts:**
 ```sh
@@ -71,14 +71,20 @@ find ~ -flags dataless 2>/dev/null | wc -l
 - [ ] Reconciliation loop; watcher-health reporting (`Live`/`Degraded`/`Poll-only`)
 - [ ] Unicode NFC/NFD normalization so macOS doesn't create duplicate identities
 
-### Parsing
+### Parsing — ordered by M0 file counts, not by spec order
 - [ ] Parser trait + versioned IR with `source_span` on every node ⚠️
 - [ ] Parser subprocess with timeout + memory cap
-- [ ] Plain text, Markdown
-- [ ] Code via Tree-sitter (start with the 3 languages you actually use)
-- [ ] JSON / YAML / TOML
-- [ ] CSV with dialect + encoding detection
-- [ ] `META` extraction: EXIF, OOXML properties, download-origin xattr/ADS
+- [ ] Tree-sitter: Rust, TypeScript/TSX, JavaScript, Python, SQL (~1,300 files)
+- [ ] Plain text (449)
+- [ ] Markdown (289)
+- [ ] TOML / JSON / YAML (~165)
+- [ ] Image `META` — EXIF/XMP, metadata only, never decode pixels (3,478 files, 35% of corpus)
+- [ ] CSV with dialect + encoding detection (~90)
+- [ ] HTML / CSS (~94)
+- [ ] XLSX / DOCX (66 — low priority, may slip to M3)
+- [-] PDF — **dropped**, 14 files in the entire home dir (M0 F3)
+- [ ] Default-exclude app noise: `*.dat` `*.toc` `*.journal` `*.strings` `*.plist`, fonts (~2,700 files, 29%)
+- [ ] `.gitignore` respect as **per-root policy**, not global (M0 F9 — it hides 442 xlsx)
 
 ### Index + query
 - [ ] Tantivy schema and writer
@@ -223,3 +229,4 @@ Short entries. What shipped, what surprised you, what changed.
 |---|---|
 | 2026-08-30 | Spec complete (7 parts). Re-scoped for solo/open-source in Part 7. Repo initialised. M0 started. |
 | 2026-08-30 | Named **Marrow** (D45). Docs renamed `Part_N_*.md`. Crate namespace left open as D46. |
+| 2026-08-30 | **M0 done.** Corpus is 9,435 files / 1 GB — 10× smaller than the spec assumed. Perf beats every target by 1–3 orders of magnitude. 14 PDFs total → PDF dropped from M3. Zero video/audio/email. See [bench/M0-corpus.md](bench/M0-corpus.md). |
