@@ -1,4 +1,4 @@
-# LKAR — Master Specification, Part 7
+# Marrow — Master Specification, Part 7
 
 ## Solo / Self-Use / Open-Source Re-Scope
 
@@ -25,7 +25,7 @@ Three consequences change the *architecture*, not only the plan:
 
 | # | Consequence | Effect |
 |---|---|---|
-| **1** | **You already have agent front-ends.** Claude Code, Codex, Cursor are on your machine and are better at the agent loop than a solo build will be for years. | **LKAR does not need its own agent runtime, model gateway, approval UX or chat UI.** It needs to be an excellent index with an MCP server. That deletes roughly 60% of the spec — see §130. |
+| **1** | **You already have agent front-ends.** Claude Code, Codex, Cursor are on your machine and are better at the agent loop than a solo build will be for years. | **Marrow does not need its own agent runtime, model gateway, approval UX or chat UI.** It needs to be an excellent index with an MCP server. That deletes roughly 60% of the spec — see §130. |
 | **2** | **You are the operator, the threat model changes shape.** No untrusted second user, no fleet, no liability. But you still open hostile PDFs, and anything you wire to a write-capable agent has your whole home directory as its blast radius. | Some defences drop entirely; a small set gets *more* important, not less (§126). |
 | **3** | **GPL is now usable.** LIC-005 denied GPL/AGPL because of commercial redistribution. That constraint is gone. | Better libraries become available — GPL ffmpeg builds, GPL-licensed parsers and table tools (§128). |
 
@@ -177,7 +177,7 @@ This is the most important section in this part.
 
 ## 130.1 The insight
 
-Parts 1–6 assume LKAR must own the entire stack: index → retrieval → context → model → agent loop → approval UI → chat. That is correct for a product. For one user who already runs Claude Code, it is **building a worse copy of tools you already have.**
+Parts 1–6 assume Marrow must own the entire stack: index → retrieval → context → model → agent loop → approval UI → chat. That is correct for a product. For one user who already runs Claude Code, it is **building a worse copy of tools you already have.**
 
 ```text
   Spec'd architecture                     Solo architecture
@@ -186,7 +186,7 @@ Parts 1–6 assume LKAR must own the entire stack: index → retrieval → conte
   [ Approval UX ]                                    |
   [ Agent runtime ]                                  | MCP
   [ Model gateway ]                                  v
-  [ Context builder ]                     [ LKAR MCP server ]
+  [ Context builder ]                     [ Marrow MCP server ]
   [ Retrieval ]         ==>               [ Retrieval ]
   [ Knowledge substrate ]                 [ Knowledge substrate ]   ← the part only you can build
   [ Ingestion ]                           [ Ingestion ]
@@ -199,7 +199,7 @@ Parts 1–6 assume LKAR must own the entire stack: index → retrieval → conte
 | Chat / Ask UI (§16.4) | Months | **Delete.** Your agent front-end is the chat |
 | Approval UX, plan UI, live action UI (§16.7, §16.8) | Months | **Delete.** Claude Code already asks before it runs things |
 | Agent runtime: planner, tool selector, step executor, budget guard (§8.16) | Months | **Delete.** That is the front-end's job |
-| Model gateway + routing (§8.14, `MOD`) | Weeks–months | **Delete for v1.** Needed only when LKAR generates text itself — i.e. for summaries and Tier C, which are late |
+| Model gateway + routing (§8.14, `MOD`) | Weeks–months | **Delete for v1.** Needed only when Marrow generates text itself — i.e. for summaries and Tier C, which are late |
 | Context builder (§12.3, §114) | Weeks | **Reduce.** MCP tool results are the context; the envelope discipline (§114) still applies to what you return |
 | Tauri desktop shell (§8.1) | Months | **Defer.** A CLI plus the MCP server covers most of it. Build a UI when you miss one |
 | MCP server (§15.1) | Was P7 | **Promote to P1.** It is now the primary interface |
@@ -229,7 +229,7 @@ Milestones, not phases. Each one ends at something you actually use. **Ranges ar
 | **M2** | **MCP server** | Expose `search`, `read`, `file.intelligence`, `stat` over MCP stdio. Point Claude Code at it | **1–2 wk / 3–5 days** | **Your coding agent can search your whole corpus.** Highest value-per-hour in the entire plan |
 | **M3** | **PDF + tables** | PDFium text + page provenance; native table IR for CSV/XLSX/Markdown/HTML; `TBL` compute; expose via MCP | 4–7 wk / 2–3 wk | You can ask about spreadsheets and get cited numbers |
 | **M4** | **Semantic** | Chunking (§112), local embeddings, embedded vector store, RRF hybrid (§113) | 4–6 wk / 2–3 wk | Conceptual search beats lexical on your own queries |
-| **M5** | **Write tools** | `filesystem.patch` with stale-check, snapshots, undo, validators; E1 recipes | 4–6 wk / 2–3 wk | You let an agent edit through LKAR rather than directly |
+| **M5** | **Write tools** | `filesystem.patch` with stale-check, snapshots, undo, validators; E1 recipes | 4–6 wk / 2–3 wk | You let an agent edit through Marrow rather than directly |
 | **M6** | **Timeline** | File events, Git integration, "what changed" queries | 3–4 wk / 1.5–2 wk | You can reconstruct last month |
 | **M7+** | **Optional** | Graph + entities (highest risk, least certain payoff — §55 R2), OCR, local LLM for summaries, a UI, media | Open-ended | Only if you miss it |
 

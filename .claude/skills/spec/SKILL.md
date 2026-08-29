@@ -1,9 +1,9 @@
 ---
 name: spec
-description: Navigate the 7-part LKAR specification — find requirements by ID, resolve which part supersedes which, and locate the section covering a subsystem. Use whenever a question needs an answer from the spec, a requirement ID appears (like TIER-005, CHK-002, EXEC-007), or you are about to implement something the docs already specify.
+description: Navigate the 7-part Marrow specification — find requirements by ID, resolve which part supersedes which, and locate the section covering a subsystem. Use whenever a question needs an answer from the spec, a requirement ID appears (like TIER-005, CHK-002, EXEC-007), or you are about to implement something the docs already specify.
 ---
 
-# Navigating the LKAR spec
+# Navigating the Marrow spec
 
 ~7,900 lines across seven parts in `docs/`. Written in order over time, each part correcting the last.
 

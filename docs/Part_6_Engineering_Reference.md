@@ -1,8 +1,8 @@
-# LKAR — Master Specification, Part 6
+# Marrow — Master Specification, Part 6
 
 ## Engineering Reference: Schema, Contracts, Algorithms, Test and Release
 
-**Status:** Addendum to LKAR Master Specification Parts 1–5
+**Status:** Addendum to Marrow Master Specification Parts 1–5
 **Date:** 30 August 2026
 **Numbering:** Continues from §104 of Part 5
 **Format:** Reference material — DDL, contracts, algorithms, tables
@@ -749,7 +749,7 @@ Every error is `{code, category, severity, retryable, user_message, detail}`. `u
 
 # 109. Configuration reference
 
-`<AppData>/lkar/config/settings.json` — **non-secret only** (§19). Secrets live in the OS keyring (SEC-005), entitlement included (ENT-010).
+`<AppData>/marrow/config/settings.json` — **non-secret only** (§19). Secrets live in the OS keyring (SEC-005), entitlement included (ENT-010).
 
 ```jsonc
 {
@@ -1010,21 +1010,21 @@ This is the concrete mechanism behind ADR-007 and §6.2. Prose about "labelled u
 ## 114.2 Shape
 
 ```text
-<<<LKAR:SYS:7f3a91c4>>>
+<<<Marrow:SYS:7f3a91c4>>>
 role=system
 (runtime template only)
-<<<LKAR:END:7f3a91c4>>>
+<<<Marrow:END:7f3a91c4>>>
 
-<<<LKAR:FACT:7f3a91c4>>>
+<<<Marrow:FACT:7f3a91c4>>>
 id=F1  trust=DETERMINISTIC_RUNTIME  source=parser:xlsx@2.1  span={sheet:"Q2",range:"B4:B18"}
 sum(B4:B18) = 148320.00 USD
-<<<LKAR:END:7f3a91c4>>>
+<<<Marrow:END:7f3a91c4>>>
 
-<<<LKAR:EVIDENCE:7f3a91c4>>>
+<<<Marrow:EVIDENCE:7f3a91c4>>>
 id=E1  trust=UNTRUSTED_CONTENT  provenance=EXACT  external=false  origin=USER
 source=file:01J8.../v3  span={page:17,bbox:[72,410,520,566]}
 "...the agreement renews on 31 December 2026 unless either party..."
-<<<LKAR:END:7f3a91c4>>>
+<<<Marrow:END:7f3a91c4>>>
 ```
 
 | Field | Purpose |
@@ -1239,7 +1239,7 @@ Applied in order, each stage measured:
 | **Reconciliation** | Periodic full comparison of filesystem truth against the index; watchers are hints (§2.6) |
 | **Reversibility class** | `Reversible` \| `Compensatable` \| `Irreversible` \| `Unknown` (§47.1) |
 | **Risk class** | R0–R5, from metadata read to external side effect (§14.1) |
-| **`SELF` origin** | Content LKAR itself wrote; searchable but barred from supporting claims (§98.4) |
+| **`SELF` origin** | Content Marrow itself wrote; searchable but barred from supporting claims (§98.4) |
 | **Tier A/B/C** | Extraction tiers: deterministic / lightweight semantic / LLM (§11.1) |
 | **Tier E0–E4** | Execution tiers, from none to arbitrary shell (§97.1) |
 | **Tier T1–T5** | Parser tiers by provenance fidelity (§63) |

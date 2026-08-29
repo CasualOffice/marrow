@@ -1,8 +1,8 @@
-# LKAR — Master Specification, Part 3
+# Marrow — Master Specification, Part 3
 
 ## Conversion Pipeline, OCR, and Multimodal Understanding
 
-**Status:** Addendum to LKAR Master Specification Parts 1 and 2
+**Status:** Addendum to Marrow Master Specification Parts 1 and 2
 **Date:** 28 August 2026
 **Numbering:** Continues from §60 of Part 2
 **Format:** Tables and points only
@@ -13,7 +13,7 @@
 
 | Statement | Consequence |
 |---|---|
-| LKAR's moat = **provenance**. Every answer cites page / cell / line / bbox. | Requirements PAR-006, PAR-007, CHK-002, RET-010, UX-005 all depend on exact source location. |
+| Marrow's moat = **provenance**. Every answer cites page / cell / line / bbox. | Requirements PAR-006, PAR-007, CHK-002, RET-010, UX-005 all depend on exact source location. |
 | MarkItDown outputs **flat Markdown**. | Page numbers, cell addresses, bounding boxes, formula dependencies, comment anchors are **lost**. |
 | Therefore | MarkItDown **cannot be the primary parser** for high-value formats. |
 | But | It is excellent for **breadth**: long-tail formats, quick coverage, fallback when a native parser fails. |
@@ -30,7 +30,7 @@
 |---|---|
 | Owner | Microsoft (AutoGen team) |
 | Licence | MIT ✅ (commercial redistribution OK) |
-| Language | **Python** ⚠️ (LKAR core is Rust) |
+| Language | **Python** ⚠️ (Marrow core is Rust) |
 | Version | v0.1.7 (released 29 Jul 2026) |
 | Formats | 15+: PDF, DOCX, XLSX, PPTX, HTML, CSV, JSON, XML, ZIP, images, audio |
 | Architecture | Wrapper around third-party libs (mammoth, pandas, pdfminer, etc.) |
@@ -38,9 +38,9 @@
 | OCR | Only via **external LLM Vision client** — no built-in OCR engine |
 | Image description | Only via **external LLM client** |
 
-## 62.2 Scorecard against LKAR requirements
+## 62.2 Scorecard against Marrow requirements
 
-| LKAR requirement | MarkItDown | Verdict |
+| Marrow requirement | MarkItDown | Verdict |
 |---|---|---|
 | PAR-001 versioned IR | ✗ outputs Markdown string | Wrap in adapter |
 | PAR-004 preserve hierarchy | ~ headings survive | Partial |
@@ -58,7 +58,7 @@
 
 ## 62.3 Known weaknesses (documented)
 
-| Weakness | Impact on LKAR |
+| Weakness | Impact on Marrow |
 |---|---|
 | Cannot process PDFs lacking prior OCR | Scanned docs need our own OCR path |
 | Strips PDF formatting (headings, lists) | Loses hierarchy for chunking |
@@ -105,13 +105,13 @@
 
 # 64. Python sidecar architecture
 
-**Reason:** MarkItDown, and most OCR/VLM/ASR ecosystems, are Python. LKAR core is Rust. This needs an explicit design, not an accident.
+**Reason:** MarkItDown, and most OCR/VLM/ASR ecosystems, are Python. Marrow core is Rust. This needs an explicit design, not an accident.
 
 ## 64.1 Design
 
 | Item | Decision |
 |---|---|
-| Form | Separate frozen Python process (`lkar-convert`), not embedded interpreter |
+| Form | Separate frozen Python process (`marrow-convert`), not embedded interpreter |
 | Freezing | PyInstaller / PyOxidizer, one binary per platform |
 | Transport | Same local IPC as other workers (§49) — UDS / named pipe, length-prefixed |
 | Lifecycle | Spawned on demand, idle-timeout kill (60 s), max N concurrent |
@@ -423,7 +423,7 @@
 | M6 | **Codec exploit** — malformed video/image triggering RCE in ffmpeg/PDFium/image lib | **High** | Sandboxed worker mandatory (§51); resource limits; kill on timeout |
 | M7 | **Adversarial image against the VLM** | Low | Caption is lowest authority; no action can derive from it |
 | M8 | **Python sidecar dependency compromise** | Medium | Pinned deps, lockfile, CVE scanning in CI, sandboxed, no network |
-| M9 | **Zip-slip via ZIP conversion in MarkItDown** | Medium | Extraction handled by LKAR, not the sidecar; PAR-010 budgets apply |
+| M9 | **Zip-slip via ZIP conversion in MarkItDown** | Medium | Extraction handled by Marrow, not the sidecar; PAR-010 budgets apply |
 | M10 | **Steganographic payload** | Very low | Out of scope; declare as non-goal |
 
 ## 71.2 Rules

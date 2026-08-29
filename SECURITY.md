@@ -21,11 +21,11 @@ The design assumes this and defends against it structurally, not by asking the m
 
 An adversarial test corpus covers these paths and must pass before any write tool ships. It only grows.
 
-Details: [Part 1 §6](docs/Local_Knowledge_Agent_Runtime_Master_Specification.md), [Part 6 §114](docs/LKAR_Addendum_Part_6.md), [Part 7 §126](docs/LKAR_Addendum_Part_7.md).
+Details: [Part 1 §6](docs/Part_1_Master_Specification.md), [Part 6 §114](docs/Part_6_Engineering_Reference.md), [Part 7 §126](docs/Part_7_Solo_Rescope.md).
 
 ## What this project deliberately does not have
 
-- **An OS sandbox.** Shell execution runs with the invoking user's privileges. This is a single-operator tool and the author already runs arbitrary shell. Do not treat it as an isolation boundary ([Part 7 §129](docs/LKAR_Addendum_Part_7.md))
+- **An OS sandbox.** Shell execution runs with the invoking user's privileges. This is a single-operator tool and the author already runs arbitrary shell. Do not treat it as an isolation boundary ([Part 7 §129](docs/Part_7_Solo_Rescope.md))
 - **Multi-user isolation beyond OS file permissions.** Anyone with your account has your index
 - **Encryption at rest**, unless you enable it explicitly
 

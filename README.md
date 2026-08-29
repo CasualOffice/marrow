@@ -1,6 +1,4 @@
-# LKAR — Local Knowledge & Agent Runtime
-
-> **Working codename.** A real name is decision [D45](DECISIONS.md#d45--product-name) — candidates are listed there.
+# Marrow — Local Knowledge & Agent Runtime
 
 A local knowledge runtime. It indexes folders you point it at, understands their structure, answers questions with citations to the **exact page, cell or line**, and exposes all of it over MCP so the agent you already use — Claude Code, Codex, Cursor — can search everything you own.
 
@@ -30,18 +28,18 @@ And one that only applies because this is for personal use:
 ## What it will do
 
 ```
-$ lkar search "auth refresh token"                  # lexical + semantic, cited
-$ lkar ask "when does the Acme contract renew?"     # → contract.pdf p17, ¶Renewal
-$ lkar file ~/Projects/q2.xlsx                      # everything known about one file
-$ lkar table sum ~/Projects/q2.xlsx 'Q2!B4:B18'     # computed, not read by a model
-$ lkar mcp                                          # serve the index to Claude Code
+$ marrow search "auth refresh token"                  # lexical + semantic, cited
+$ marrow ask "when does the Acme contract renew?"     # → contract.pdf p17, ¶Renewal
+$ marrow file ~/Projects/q2.xlsx                      # everything known about one file
+$ marrow table sum ~/Projects/q2.xlsx 'Q2!B4:B18'     # computed, not read by a model
+$ marrow mcp                                          # serve the index to Claude Code
 ```
 
 ## What it will not do
 
 Index your whole OS without asking · take destructive actions on its own · record your screen · recognise faces or voices · sync across devices · ship a mobile app · replace Git or filesystem ACLs · treat embeddings as truth.
 
-It also deliberately does **not** build: an OS sandbox ([§129](docs/LKAR_Addendum_Part_7.md)), or its own chat UI and agent loop ([§130](docs/LKAR_Addendum_Part_7.md)).
+It also deliberately does **not** build: an OS sandbox ([§129](docs/Part_7_Solo_Rescope.md)), or its own chat UI and agent loop ([§130](docs/Part_7_Solo_Rescope.md)).
 
 ---
 
@@ -106,7 +104,7 @@ Cheap to build in from day one, expensive or impossible to retrofit:
 - Search works with no LLM, no GPU and no network
 - Unicode NFC/NFD normalization — a correctness bug wearing a locale costume
 
-Full list with reasoning: [Part 7 §126](docs/LKAR_Addendum_Part_7.md).
+Full list with reasoning: [Part 7 §126](docs/Part_7_Solo_Rescope.md).
 
 ---
 
@@ -114,7 +112,7 @@ Full list with reasoning: [Part 7 §126](docs/LKAR_Addendum_Part_7.md).
 
 **It indexes what you tell it to. Don't point it at anything you wouldn't want an LLM to read.**
 
-Once it's wired to a write-capable agent, a poisoned README in a cloned repo is aimed at your home directory. That's why the injection defences stay in even though this is a single-user project — see [Part 7 §126](docs/LKAR_Addendum_Part_7.md).
+Once it's wired to a write-capable agent, a poisoned README in a cloned repo is aimed at your home directory. That's why the injection defences stay in even though this is a single-user project — see [Part 7 §126](docs/Part_7_Solo_Rescope.md).
 
 ---
 

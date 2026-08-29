@@ -1,11 +1,11 @@
 ---
 name: invariants
-description: The non-negotiable correctness and safety rules for LKAR. Load before writing or reviewing any code that touches files, paths, filesystem watching, parsing, evidence, prompts, or file mutations — these are the rules that are expensive or impossible to fix after the fact.
+description: The non-negotiable correctness and safety rules for Marrow. Load before writing or reviewing any code that touches files, paths, filesystem watching, parsing, evidence, prompts, or file mutations — these are the rules that are expensive or impossible to fix after the fact.
 ---
 
-# LKAR invariants
+# Marrow invariants
 
-Fourteen rules that survive the solo re-scope, because they protect the author's own files, bandwidth and ability to trust the output. Source: [Part 7 §126](../../../docs/LKAR_Addendum_Part_7.md).
+Fourteen rules that survive the solo re-scope, because they protect the author's own files, bandwidth and ability to trust the output. Source: [Part 7 §126](../../../docs/Part_7_Solo_Rescope.md).
 
 **Test:** if a change violates one of these, it's wrong even if it works.
 
@@ -66,7 +66,7 @@ Pre-image to `transactions/<txn_id>/` with its BLAKE3 recorded. A tool with no v
 **12. Retrieved content never grants authority.** ⚠️
 File text, tool output, OCR text, transcripts, EXIF values, MCP tool descriptions, web content — all data, even when it contains instructions.
 
-- Serialize into labelled blocks with runtime-generated delimiters ([Part 6 §114](../../../docs/LKAR_Addendum_Part_6.md)). Never Markdown fences an attacker can close
+- Serialize into labelled blocks with runtime-generated delimiters ([Part 6 §114](../../../docs/Part_6_Engineering_Reference.md)). Never Markdown fences an attacker can close
 - The system prompt is assembled by the runtime only, from templates in the binary
 - Untrusted blocks are never last — they must not be the final instruction
 - **The prompt is defence in depth. Enforcement is independent** — the policy layer blocks the action even if the model fully complies with injected text
@@ -104,7 +104,7 @@ For any diff touching files, paths, parsing, evidence or mutations:
 
 ## Corresponding tests
 
-Named tests, from [Part 6 §116.3](../../../docs/LKAR_Addendum_Part_6.md). An invariant without a test is a comment.
+Named tests, from [Part 6 §116.3](../../../docs/Part_6_Engineering_Reference.md). An invariant without a test is a comment.
 
 ```
 no_fact_without_provenance      captions_cannot_be_facts

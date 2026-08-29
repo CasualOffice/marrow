@@ -56,7 +56,7 @@ find ~ -flags dataless 2>/dev/null | wc -l
 
 ### Foundation
 - [ ] Cargo workspace + crate layout
-- [ ] `tracing` to file; error taxonomy skeleton ([Part 6 §108](docs/LKAR_Addendum_Part_6.md))
+- [ ] `tracing` to file; error taxonomy skeleton ([Part 6 §108](docs/Part_6_Engineering_Reference.md))
 - [ ] SQLite: M1 table subset, WAL pragmas, single-writer actor
 - [ ] Migration runner + `VACUUM INTO` backup before migrate
 - [ ] Job queue: idempotency keys, leases, backoff, resume-after-crash
@@ -189,7 +189,7 @@ Re-verify at every milestone exit:
 
 ## Adversarial corpus
 
-Build these as fixtures. The set only grows — every security bug found adds a permanent case. Full list: [Part 6 §116.2](docs/LKAR_Addendum_Part_6.md).
+Build these as fixtures. The set only grows — every security bug found adds a permanent case. Full list: [Part 6 §116.2](docs/Part_6_Engineering_Reference.md).
 
 - [ ] Hostile instruction inside a PDF
 - [ ] README asking the agent to upload keys
@@ -222,3 +222,4 @@ Short entries. What shipped, what surprised you, what changed.
 | Date | Entry |
 |---|---|
 | 2026-08-30 | Spec complete (7 parts). Re-scoped for solo/open-source in Part 7. Repo initialised. M0 started. |
+| 2026-08-30 | Named **Marrow** (D45). Docs renamed `Part_N_*.md`. Crate namespace left open as D46. |

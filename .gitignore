@@ -5,7 +5,7 @@
 
 # Local runtime data — never commit an index or anything derived from personal files
 /data/
-/.lkar/
+/.marrow/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm

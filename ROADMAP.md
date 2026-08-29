@@ -1,6 +1,6 @@
 # Roadmap
 
-Milestones, not phases. Each one ends at something used daily. Derived from [Part 7 §131](docs/LKAR_Addendum_Part_7.md).
+Milestones, not phases. Each one ends at something used daily. Derived from [Part 7 §131](docs/Part_7_Solo_Rescope.md).
 
 **Estimates are solo: (part-time / focused full-time).** They are estimates, not commitments — see [Stop rules](#stop-rules).
 
@@ -15,7 +15,7 @@ Milestones, not phases. Each one ends at something used daily. Derived from [Par
 | **M2** | **MCP server** | **1–2 wk / 3–5 d** | **Your coding agent can search everything you own** |
 | **M3** | PDF + tables | 4–7 wk / 2–3 wk | Cited numbers out of spreadsheets and PDFs |
 | **M4** | Semantic | 4–6 wk / 2–3 wk | Conceptual search beats lexical on your own queries |
-| **M5** | Write tools | 4–6 wk / 2–3 wk | You let an agent edit *through* LKAR, not around it |
+| **M5** | Write tools | 4–6 wk / 2–3 wk | You let an agent edit *through* Marrow, not around it |
 | **M6** | Timeline | 3–4 wk / 1.5–2 wk | You can reconstruct last month |
 | **M7+** | Optional | open | Only what you actually miss |
 
@@ -107,7 +107,7 @@ Milestones, not phases. Each one ends at something used daily. Derived from [Par
 - Expose write tools over MCP behind confirmation
 - **Adversarial corpus wired into CI before any write tool ships**
 
-**Exit:** you let an agent edit files through LKAR because the undo is better than editing directly.
+**Exit:** you let an agent edit files through Marrow because the undo is better than editing directly.
 
 ---
 
@@ -139,7 +139,7 @@ Build only what you miss. In rough order of likely value:
 
 ## Schema staging
 
-Don't build all 40 tables from [Part 6 §106](docs/LKAR_Addendum_Part_6.md) up front. Carrying unused tables slows you down.
+Don't build all 40 tables from [Part 6 §106](docs/Part_6_Engineering_Reference.md) up front. Carrying unused tables slows you down.
 
 | Milestone | Tables |
 |---|---|

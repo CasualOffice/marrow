@@ -1,4 +1,4 @@
-LKAR — Local Knowledge & Agent Runtime
+Marrow — Local Knowledge & Agent Runtime
 Copyright 2026 Sachin Sarwa
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,7 +22,7 @@ Once dependencies exist, regenerate the section below with:
     cargo install cargo-about
     cargo about generate about.hbs >> NOTICE
 
-Dependency licence policy (docs/LKAR_Addendum_Part_7.md §128):
+Dependency licence policy (docs/Marrow_Addendum_Part_7.md §128):
 
   - This project is Apache-2.0. Avoid *linking* GPL/AGPL code.
   - GPL tools invoked as separate processes (e.g. ffmpeg via CLI, a Python

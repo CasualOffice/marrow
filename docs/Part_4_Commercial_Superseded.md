@@ -1,8 +1,8 @@
-# LKAR — Master Specification, Part 4
+# Marrow — Master Specification, Part 4
 
 ## Multi-User Behaviour, Commercial Model, Compliance, and Operations
 
-**Status:** ⚠️ **SUPERSEDED BY PART 7.** Retained, not deleted — the project is currently solo self-use and open source, so nothing here is in scope. Revisit only if that changes. See [Part 7 §124](LKAR_Addendum_Part_7.md) for the item-by-item disposition.
+**Status:** ⚠️ **SUPERSEDED BY PART 7.** Retained, not deleted — the project is currently solo self-use and open source, so nothing here is in scope. Revisit only if that changes. See [Part 7 §124](Part_7_Solo_Rescope.md) for the item-by-item disposition.
 **Still relevant under Part 7:** §78 (reduced to MULTI-002/007/011), §82 category map (build reference only), §83.3 launch gates (repurposed as personal quality bars).
 **Date:** 30 August 2026
 **Numbering:** Continues from §76 of Part 3
@@ -51,7 +51,7 @@ Part 2 §60 deferred this as an "edge case" to be added to P3 design. That asses
 |---|---|---|---|
 | S1 | One OS account, one human | Dominant | — |
 | S2 | Shared machine, separate OS accounts | Common (family, lab, small office) | Cross-account index and knowledge leakage |
-| S3 | Shared machine, **one shared OS account** | Common (lab, kiosk, small business, shift work) | Total knowledge leakage between humans; LKAR cannot detect it |
+| S3 | Shared machine, **one shared OS account** | Common (lab, kiosk, small business, shift work) | Total knowledge leakage between humans; Marrow cannot detect it |
 | S4 | macOS fast user switching with daemon running | Common | Daemon serves the wrong session; background indexing continues for an inactive user |
 | S5 | Windows multi-session / RDS / VDI | Enterprise | Named-pipe collision; multiple daemons contending for one data dir |
 | S6 | Roaming profiles / folder redirection | Enterprise Windows | SQLite and Tantivy on SMB — corruption risk, unreliable watchers |
@@ -69,7 +69,7 @@ Part 2 §60 deferred this as an "edge case" to be added to P3 design. That asses
 | MULTI-005 | macOS fast user switching: daemon suspends indexing on session deactivate, resumes on activate. Interactive queries only from the active session. | P3 |
 | MULTI-006 | Windows multi-session: pipe name includes the terminal session ID; one daemon per session; no shared mutex on the data dir. | P3 |
 | MULTI-007 | Detect index storage on a redirected/network profile path. **SQLite and Tantivy over SMB/NFS are unsafe.** Warn and offer a local-disk index location. | P1 |
-| MULTI-008 | Under a shared OS account (S3) LKAR **cannot** distinguish humans. Onboarding must state this plainly rather than imply protection that does not exist. | P1 |
+| MULTI-008 | Under a shared OS account (S3) Marrow **cannot** distinguish humans. Onboarding must state this plainly rather than imply protection that does not exist. | P1 |
 | MULTI-009 | Optional **workspace lock**: passphrase-gated workspace with index encrypted at rest (SEC-006), key in the OS keychain. Partially mitigates S3. | P3 / Enterprise |
 | MULTI-010 | Installation is machine-scoped; data is user-scoped. Uninstall by one user must never delete another user's index. | P1 |
 | MULTI-011 | Elevation is never required at runtime. An app that needs admin to index is a defect, not a configuration. | P1 |
@@ -80,7 +80,7 @@ Part 2 §60 deferred this as an "edge case" to be added to P3 design. That asses
 
 ## 78.3 Honest capability statement (must appear in onboarding and security docs)
 
-| LKAR protects against | LKAR does **not** protect against |
+| Marrow protects against | Marrow does **not** protect against |
 |---|---|
 | Another OS user reading your index through the app | Another human using **your** OS account |
 | Another OS user connecting to your daemon | An OS administrator with full disk access |
@@ -163,7 +163,7 @@ Part 2 §60 deferred this as an "edge case" to be added to P3 design. That asses
 | Why? | The index, the policy engine and the evidence live on one device by architectural choice (SYNC-001). A mobile client implies either syncing the corpus (contradicts local-first) or a hosted index (contradicts the entire product thesis). |
 | Is there a defensible version? | One: **read-only remote query against the user's own running desktop**, over a user-controlled relay, with no index leaving the device and answers rendered without file bodies. |
 | When? | V3 at the earliest, and only after P7. It is a distribution feature, not a product pivot. |
-| What it must never become | A hosted index. If the corpus lands on our servers, LKAR is a different product with a different threat model, different compliance surface (§86) and no moat (§82.2). |
+| What it must never become | A hosted index. If the corpus lands on our servers, Marrow is a different product with a different threat model, different compliance surface (§86) and no moat (§82.2). |
 
 ---
 
@@ -171,7 +171,7 @@ Part 2 §60 deferred this as an "edge case" to be added to P3 design. That asses
 
 ## 80.1 Models considered
 
-| Model | Fit with LKAR | Verdict |
+| Model | Fit with Marrow | Verdict |
 |---|---|---|
 | Perpetual licence + paid major upgrades | Matches local-first; poor for funding 40-month roadmap | Offer as an option, not the default |
 | Per-seat subscription | Standard, predictable, funds the roadmap | ✅ Core |
@@ -186,7 +186,7 @@ Part 2 §60 deferred this as an "edge case" to be added to P3 design. That asses
 
 | Principle | Consequence |
 |---|---|
-| **LKAR does not resell inference in Free/Pro/Team.** User supplies a provider key, or runs local models. | COGS per user ≈ $0. Gross margin ≈ software margin. The privacy story stays clean: we never hold the provider relationship over user content. |
+| **Marrow does not resell inference in Free/Pro/Team.** User supplies a provider key, or runs local models. | COGS per user ≈ $0. Gross margin ≈ software margin. The privacy story stays clean: we never hold the provider relationship over user content. |
 | Free tier is P1 in full, not a crippled demo. | P1 is genuinely useful (search that beats Spotlight on structure). It is also the cheapest possible distribution of the index format. |
 | Paid tiers begin at semantic + answers (P2) and actions (P3). | These are the capabilities users can feel the value of within one session. |
 | Managed inference is an **Enterprise add-on only**. | Where a compliance department wants a single contracted processor, not 400 individual API keys. This is the only place we take inference COGS, and it is priced with margin. |
@@ -277,7 +277,7 @@ The hard constraint: **enforcement must not break local-first, offline or air-ga
 
 ## 82.1 Category map
 
-| # | Category | Exemplars | What they do well | Structural gap LKAR fills |
+| # | Category | Exemplars | What they do well | Structural gap Marrow fills |
 |---|---|---|---|---|
 | C1 | OS search & launchers | Spotlight, Windows Search, Everything, Alfred, Raycast | Instant filename/metadata search; zero install cost | No semantics, no provenance, no cross-document reasoning, no actions |
 | C2 | Note tools with local AI | Obsidian + plugins, Logseq, Reor | Excellent inside their own vault; strong communities | Scoped to their own note format; the user's PDFs, spreadsheets, code and mail are outside |
@@ -299,7 +299,7 @@ The hard constraint: **enforcement must not break local-first, offline or air-ga
 | 6 | **Continuous ingestion without manual collections** | §10. Removes the setup tax that kills C3 adoption. |
 | 7 | **Reversible user corrections that change future answers** | §11.4, KG-005/007. Converts users into the quality mechanism (EVAL-007). |
 
-## 82.3 Where LKAR loses — state this internally and do not paper over it
+## 82.3 Where Marrow loses — state this internally and do not paper over it
 
 | Loss | Against | Reality |
 |---|---|---|
@@ -316,7 +316,7 @@ The hard constraint: **enforcement must not break local-first, offline or air-ga
 |---|---|
 | **For** | Knowledge workers and developers whose real corpus is on their own disk |
 | **Who** | Need to find, understand and act on it without uploading it |
-| **LKAR is** | A local knowledge runtime with a replaceable model |
+| **Marrow is** | A local knowledge runtime with a replaceable model |
 | **That** | Answers with citations to the exact page, cell or line — and takes actions it can show you, verify and undo |
 | **Unlike** | Cloud assistants that need your files, and local chat apps that need you to build collections by hand |
 | **Because** | The durable asset is your provenance-backed knowledge, not the model of the month |
@@ -576,7 +576,7 @@ A local-first product must be careful here. A remote kill switch is itself an at
 
 ## 86.1 The key structural insight
 
-Because processing happens on the user's device and the vendor never receives file content, LKAR's compliance surface is **far smaller than a SaaS product of equivalent capability — but it is not zero.**
+Because processing happens on the user's device and the vendor never receives file content, Marrow's compliance surface is **far smaller than a SaaS product of equivalent capability — but it is not zero.**
 
 | Component | Vendor receives | Vendor's likely role | In certification scope |
 |---|---|---|---|
@@ -589,7 +589,7 @@ Because processing happens on the user's device and the vendor never receives fi
 | **Enterprise managed-inference add-on** (§22.2, §80.2) | **Retrieved context and prompts** | **Processor** | ✅ **Highest scrutiny** |
 | BYO-key cloud inference | **Nothing — traffic is user → provider** | Neither | See §87.1 |
 
-**Consequence:** the managed-inference add-on is the single component that converts LKAR from a low-compliance product into a high-compliance one. Price and scope it with that in mind, and keep it optional and separable.
+**Consequence:** the managed-inference add-on is the single component that converts Marrow from a low-compliance product into a high-compliance one. Price and scope it with that in mind, and keep it optional and separable.
 
 ## 86.2 GDPR / UK GDPR checklist
 

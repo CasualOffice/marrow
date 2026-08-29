@@ -1,4 +1,4 @@
-# Local Knowledge & Agent Runtime (LKAR)
+# Marrow — Local Knowledge & Agent Runtime
 ## Product Requirements, Architecture, HLD, Data Flows, Security, Technology Stack, UX and Delivery Plan
 
 **Status:** Research-backed architecture baseline  
@@ -93,7 +93,7 @@ The earlier architecture direction was sound, but several gaps become important 
 
 The current MCP specification is **2026-07-28**. It formalizes a stateless core and removes protocol-level sessions/initialization from the base flow. MCP remains a host/client/server protocol based on JSON-RPC for exposing context and capabilities. The architecture should therefore avoid internal assumptions that MCP transport state is the agent's session or security context. [MCP 2026-07-28 Specification](https://modelcontextprotocol.io/specification/2026-07-28) and [MCP 2026-07-28 Key Changes](https://modelcontextprotocol.io/specification/2026-07-28/changelog).
 
-**Architectural consequence:** maintain conversation state, authorization state, workspace state, leases and transactions in LKAR's own domain model. MCP adapters translate that state into protocol requests but do not own it.
+**Architectural consequence:** maintain conversation state, authorization state, workspace state, leases and transactions in Marrow's own domain model. MCP adapters translate that state into protocol requests but do not own it.
 
 ## 2.2 Tool invocation requires a first-class human-control UX
 
@@ -105,7 +105,7 @@ The current MCP tool specification states that tools are model-controlled but re
 
 Tauri's security architecture constrains WebView access through IPC permissions/capabilities, while application core/plugin code itself has normal system access. [Tauri Security](https://v2.tauri.app/security/) and [Tauri Capabilities](https://v2.tauri.app/security/capabilities/).
 
-**Architectural consequence:** Tauri capabilities protect **WebView -> Rust**. LKAR needs a separate policy system to protect **Model/Plugin/MCP -> Device**.
+**Architectural consequence:** Tauri capabilities protect **WebView -> Rust**. Marrow needs a separate policy system to protect **Model/Plugin/MCP -> Device**.
 
 ## 2.4 Indirect prompt injection is a central threat
 
@@ -468,7 +468,7 @@ The model is **not** a trusted principal. It is a planner that can suggest an op
 
 ## 6.2 Indirect prompt-injection defense
 
-OWASP identifies files/web content as a source of indirect prompt injection. LKAR therefore uses these rules:
+OWASP identifies files/web content as a source of indirect prompt injection. Marrow therefore uses these rules:
 
 1. Retrieved file text enters model context under an explicit `UNTRUSTED_EVIDENCE` channel/serialization boundary.
 2. System policy tells the model that instructions appearing inside evidence are not authorization.
@@ -530,14 +530,14 @@ Never persist cloud API credentials in:
 
 ```text
 +------------------------+
-| lkar-desktop           |
+| marrow-desktop           |
 | Tauri/WebView UI       |
 +-----------+------------+
             |
         local IPC
             |
 +-----------v------------+
-| lkard                  |
+| marrowd                  |
 | trusted coordinator    |
 | policy + DB ownership  |
 +--+----------+---------+
@@ -776,7 +776,7 @@ Good default for V1 because it is embedded/in-process and Rust-native internally
 
 Strong alternative if its on-device feature set, filtering/quantization and operational characteristics fit benchmarks. Qdrant Edge is an embedded vector engine with Rust bindings. [Qdrant Edge Quickstart](https://qdrant.tech/documentation/edge/edge-quickstart/).
 
-**Decision:** benchmark both against LKAR workloads before freezing. The abstraction is more important than prematurely choosing one forever.
+**Decision:** benchmark both against Marrow workloads before freezing. The abstraction is more important than prematurely choosing one forever.
 
 ## 8.12 Graph store
 
@@ -904,11 +904,11 @@ Do not build “infinite autonomous loops.” Every run has step/time/token/cost
 MCP adapter roles:
 
 ```text
-External MCP Client -> LKAR MCP Server -> policy -> knowledge/tools
-LKAR Agent -> MCP Client -> approved third-party MCP Server
+External MCP Client -> Marrow MCP Server -> policy -> knowledge/tools
+Marrow Agent -> MCP Client -> approved third-party MCP Server
 ```
 
-Current MCP 2026-07-28 is stateless at the protocol core, so application state uses explicit LKAR handles/domain state. [MCP key changes](https://modelcontextprotocol.io/specification/2026-07-28/changelog).
+Current MCP 2026-07-28 is stateless at the protocol core, so application state uses explicit Marrow handles/domain state. [MCP key changes](https://modelcontextprotocol.io/specification/2026-07-28/changelog).
 
 ---
 
@@ -1335,7 +1335,7 @@ Before final answer:
 
 # 13. Community and summary architecture
 
-Microsoft GraphRAG shows the value of hierarchical communities and summaries for whole-corpus reasoning. LKAR should adapt this incrementally instead of periodically re-running a giant LLM pipeline. [GraphRAG dataflow](https://microsoft.github.io/graphrag/index/default_dataflow/).
+Microsoft GraphRAG shows the value of hierarchical communities and summaries for whole-corpus reasoning. Marrow should adapt this incrementally instead of periodically re-running a giant LLM pipeline. [GraphRAG dataflow](https://microsoft.github.io/graphrag/index/default_dataflow/).
 
 ## 13.1 Summary hierarchy
 
@@ -1441,7 +1441,7 @@ When enabled:
 
 # 15. MCP architecture
 
-## 15.1 MCP server exposed by LKAR
+## 15.1 MCP server exposed by Marrow
 
 Potential resources/tools:
 
@@ -1476,7 +1476,7 @@ git.history
 
 Do **not** export every internal tool automatically.
 
-## 15.2 MCP client inside LKAR
+## 15.2 MCP client inside Marrow
 
 Third-party servers can add:
 
@@ -1544,7 +1544,7 @@ Models, embeddings, privacy, indexing resources, security and enterprise policy 
 
 Screen 1: product promise.
 
-> “Choose folders LKAR may understand. Files stay on this device by default.”
+> “Choose folders Marrow may understand. Files stay on this device by default.”
 
 Screen 2: folder picker with recommended exclusions.
 
@@ -1762,7 +1762,7 @@ This avoids a rewrite when a faster embedded vector store or model runtime appea
 # 18. Repository / package structure
 
 ```text
-lkar/
+marrow/
 ├── apps/
 │   ├── desktop-tauri/
 │   ├── daemon/
@@ -1827,7 +1827,7 @@ lkar/
 # 19. Local storage layout
 
 ```text
-<ApplicationData>/lkar/
+<ApplicationData>/marrow/
 ├── config/
 │   └── settings.json          # non-secret config only
 ├── db/

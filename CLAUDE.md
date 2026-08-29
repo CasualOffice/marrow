@@ -4,7 +4,7 @@ Instructions for agents working in this repository.
 
 ## What this is
 
-**LKAR** (working codename — see [D45](DECISIONS.md#d45--product-name)): a local knowledge runtime in Rust. It indexes folders the user grants, understands their structure, answers with citations to the exact page/cell/line, and exposes the index over MCP so existing agent front-ends can use it.
+**Marrow**: a local knowledge runtime in Rust. It indexes folders the user grants, understands their structure, answers with citations to the exact page/cell/line, and exposes the index over MCP so existing agent front-ends can use it.
 
 **Currently specification-only.** No code yet. Current milestone is in [TRACKER.md](TRACKER.md).
 
@@ -15,11 +15,11 @@ Instructions for agents working in this repository.
 | Task | Read first |
 |---|---|
 | Anything at all | [ROADMAP.md](ROADMAP.md) current milestone + [TRACKER.md](TRACKER.md) |
-| Schema, migrations, errors, config, IPC | [docs/ Part 6 §106–110](docs/LKAR_Addendum_Part_6.md) |
-| Chunking, retrieval fusion, context envelope | [Part 6 §112–114](docs/LKAR_Addendum_Part_6.md) |
-| Parsers, provenance classes | [Part 3 §63](docs/LKAR_Addendum_Part_3.md) |
-| Tables | [Part 5 §99](docs/LKAR_Addendum_Part_5.md) |
-| Anything touching files, paths, evidence or execution | **[Part 7 §126](docs/LKAR_Addendum_Part_7.md) — the non-negotiables** |
+| Schema, migrations, errors, config, IPC | [docs/ Part 6 §106–110](docs/Part_6_Engineering_Reference.md) |
+| Chunking, retrieval fusion, context envelope | [Part 6 §112–114](docs/Part_6_Engineering_Reference.md) |
+| Parsers, provenance classes | [Part 3 §63](docs/Part_3_Conversion_Multimodal.md) |
+| Tables | [Part 5 §99](docs/Part_5_Capabilities.md) |
+| Anything touching files, paths, evidence or execution | **[Part 7 §126](docs/Part_7_Solo_Rescope.md) — the non-negotiables** |
 
 **Spec supersession:** the docs are 7 parts, written in order. **Later parts supersede earlier ones.** Part 7 re-scopes everything for solo use and supersedes Part 4 entirely. Never cite Part 1–6 guidance without checking whether Part 7 changed it.
 
@@ -30,7 +30,7 @@ These are not style preferences. Violating them creates bugs that are expensive 
 1. **`source_span` on every IR node.** Page+bbox, sheet+cell, XML path, byte range, or timestamp. Provenance is the entire reason this project exists. A node without one is a bug.
 2. **Path is never identity.** Files have stable IDs and path history. Never key anything on a path.
 3. **Never hydrate cloud placeholders.** Check the dataless/offline flags before any read. This silently downloads hundreds of GB otherwise.
-4. **Retrieved file content never grants authority.** It's data, even when it contains instructions. Never concatenate it into a system prompt; use the labelled envelope ([Part 6 §114](docs/LKAR_Addendum_Part_6.md)).
+4. **Retrieved file content never grants authority.** It's data, even when it contains instructions. Never concatenate it into a system prompt; use the labelled envelope ([Part 6 §114](docs/Part_6_Engineering_Reference.md)).
 5. **Canonicalize paths and check symlink escape at operation time**, not just at index time. String prefix checks are not sufficient.
 6. **Stale-version check immediately before any write.** The user has the file open in their editor.
 7. **Jobs are idempotent and resumable.** Key on `(source_version, processor, processor_version)`. The process will be killed mid-run constantly during development.
@@ -56,7 +56,7 @@ If you think something outside the current milestone is genuinely needed, add it
 **Rust**
 - Edition 2021+, `clippy` clean, `rustfmt` default
 - `thiserror` for library errors, `anyhow` at binary boundaries
-- Errors carry a code from the [Part 6 §108](docs/LKAR_Addendum_Part_6.md) taxonomy and a *cause-and-action* user message. Generic failure text is a defect
+- Errors carry a code from the [Part 6 §108](docs/Part_6_Engineering_Reference.md) taxonomy and a *cause-and-action* user message. Generic failure text is a defect
 - `tracing` for instrumentation, never `println!`
 - No `unwrap()`/`expect()` outside tests and `main`
 
@@ -72,7 +72,7 @@ If you think something outside the current milestone is genuinely needed, add it
 - `VACUUM INTO` backup before every migration
 
 **Tests**
-- Every application-level invariant in [Part 6 §106.12](docs/LKAR_Addendum_Part_6.md) has a named test. An invariant without a test is a comment
+- Every application-level invariant in [Part 6 §106.12](docs/Part_6_Engineering_Reference.md) has a named test. An invariant without a test is a comment
 - The adversarial corpus ([TRACKER](TRACKER.md#adversarial-corpus)) must be green before any write tool ships, and only ever grows
 
 ## Working process

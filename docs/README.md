@@ -1,11 +1,11 @@
-# LKAR — Local Knowledge & Agent Runtime
+# Marrow — Local Knowledge & Agent Runtime
 
 A local knowledge runtime: continuously indexes folders you point it at, understands their structure, answers questions with citations to the exact page / cell / line, and exposes all of it to whatever agent front-end you already use.
 
 **Status:** Specification only — no implementation yet.
 **Scope:** Personal project, single user, single machine, open source. **Not a product.**
 
-> **Read [Part 7](LKAR_Addendum_Part_7.md) first.** Parts 1–6 were written for a commercial multi-user product. Part 7 re-scopes everything for solo self-use and **supersedes Part 4 entirely**. Reading Parts 1–6 without it will send you building the wrong thing.
+> **Read [Part 7](Part_7_Solo_Rescope.md) first.** Parts 1–6 were written for a commercial multi-user product. Part 7 re-scopes everything for solo self-use and **supersedes Part 4 entirely**. Reading Parts 1–6 without it will send you building the wrong thing.
 
 ---
 
@@ -23,13 +23,13 @@ For solo use, one more: **don't rebuild the agent layer.** Claude Code and frien
 
 | Part | File | Covers | Solo relevance |
 |---|---|---|---|
-| **7** | [Part 7 — Solo Re-Scope](LKAR_Addendum_Part_7.md) | §123–135. What's cut (~140 reqs), what must not be cut (14 items), MCP-first inversion, revised build plan in weeks | **Start here.** Supersedes Part 4 |
-| **1** | [Master Specification](Local_Knowledge_Agent_Runtime_Master_Specification.md) | §1–43. Vision, requirements, trust model, architecture, data model, ingestion, retrieval, transactions, ADRs, threat model | **Core.** Read §1, §6, §10, §12 closely |
-| **2** | [Part 2 — Gap Closure](LKAR_Addendum_Part_2.md) | §44–60. Cloud placeholders, watcher limits, verification subsystem, reversibility, Tier C governor, SQLite writes, honest sandbox posture | **Core.** §45.1, §46, §47, §50 all still apply |
-| **3** | [Part 3 — Conversion & Multimodal](LKAR_Addendum_Part_3.md) | §61–76. Parser tiers, OCR, images, video, audio, embedded metadata | **Partial.** §61–63 and §69 matter; video/audio deferred |
-| **4** | [Part 4 — Commercial & Compliance](LKAR_Addendum_Part_4.md) | §77–92. SKUs, pricing, GTM, support, compliance, DPAs | ~~**Superseded by Part 7.**~~ Parked in case that changes |
-| **5** | [Part 5 — Capabilities](LKAR_Addendum_Part_5.md) | §93–104. Prior art, hardware probe, local LLM, execution tiers, generative media, file intelligence, tables, agent parity, answer coverage | **Core**, as amended by Part 7 §129 (execution) and §127 (hardware) |
-| **6** | [Part 6 — Engineering Reference](LKAR_Addendum_Part_6.md) | §105–122. SQLite DDL, migrations, errors, config, IPC, jobs, chunking, fusion, context envelope, tests, budgets, glossary, indexes | **Build from this.** Trim the DDL per Part 7 §135.1; §110 IPC is deferred |
+| **7** | [Part 7 — Solo Re-Scope](Part_7_Solo_Rescope.md) | §123–135. What's cut (~140 reqs), what must not be cut (14 items), MCP-first inversion, revised build plan in weeks | **Start here.** Supersedes Part 4 |
+| **1** | [Master Specification](Part_1_Master_Specification.md) | §1–43. Vision, requirements, trust model, architecture, data model, ingestion, retrieval, transactions, ADRs, threat model | **Core.** Read §1, §6, §10, §12 closely |
+| **2** | [Part 2 — Gap Closure](Part_2_Gap_Closure.md) | §44–60. Cloud placeholders, watcher limits, verification subsystem, reversibility, Tier C governor, SQLite writes, honest sandbox posture | **Core.** §45.1, §46, §47, §50 all still apply |
+| **3** | [Part 3 — Conversion & Multimodal](Part_3_Conversion_Multimodal.md) | §61–76. Parser tiers, OCR, images, video, audio, embedded metadata | **Partial.** §61–63 and §69 matter; video/audio deferred |
+| **4** | [Part 4 — Commercial & Compliance](Part_4_Commercial_Superseded.md) | §77–92. SKUs, pricing, GTM, support, compliance, DPAs | ~~**Superseded by Part 7.**~~ Parked in case that changes |
+| **5** | [Part 5 — Capabilities](Part_5_Capabilities.md) | §93–104. Prior art, hardware probe, local LLM, execution tiers, generative media, file intelligence, tables, agent parity, answer coverage | **Core**, as amended by Part 7 §129 (execution) and §127 (hardware) |
+| **6** | [Part 6 — Engineering Reference](Part_6_Engineering_Reference.md) | §105–122. SQLite DDL, migrations, errors, config, IPC, jobs, chunking, fusion, context envelope, tests, budgets, glossary, indexes | **Build from this.** Trim the DDL per Part 7 §135.1; §110 IPC is deferred |
 
 **Conflict rule:** later parts supersede earlier ones. Part 7 wins over everything.
 
@@ -58,7 +58,7 @@ For solo use, one more: **don't rebuild the agent layer.** Claude Code and frien
 | **M2** | **MCP server — search, read, file intelligence** | **1–2 wk** | **Your coding agent can search everything you own** |
 | M3 | PDF text + page provenance; native table IR + compute | 4–7 wk | Cited numbers from spreadsheets |
 | M4 | Chunking, local embeddings, vector search, RRF hybrid | 4–6 wk | Semantic beats lexical on your queries |
-| M5 | Write tools: patch, stale-check, snapshots, undo, E1 recipes | 4–6 wk | You let an agent edit *through* LKAR |
+| M5 | Write tools: patch, stale-check, snapshots, undo, E1 recipes | 4–6 wk | You let an agent edit *through* Marrow |
 | M6 | Timeline + Git integration | 3–4 wk | You can reconstruct last month |
 | M7+ | Graph, OCR, local LLM, UI — only if you miss them | open | — |
 

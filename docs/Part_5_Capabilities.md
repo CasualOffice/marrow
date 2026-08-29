@@ -1,8 +1,8 @@
-# LKAR — Master Specification, Part 5
+# Marrow — Master Specification, Part 5
 
 ## Execution, Local Inference, Generative Media, File Intelligence, and Agent Capability Parity
 
-**Status:** Addendum to LKAR Master Specification Parts 1–4
+**Status:** Addendum to Marrow Master Specification Parts 1–4
 **Date:** 30 August 2026
 **Numbering:** Continues from §92 of Part 4
 **Format:** Tables and points only
@@ -47,7 +47,7 @@ Surveyed for architecture decisions, not feature copying. Sources listed in §10
 |---|---|---|---|---|
 | **Spacedrive** | Rust + Tauri, "PRRTT" stack, single core crate, CQRS/DDD | Closest structural analogue: cross-platform Rust file explorer with a virtual index, BLAKE3 content identity, media-metadata module, durable task system, cross-platform fs-watcher | **CQRS action/query registry with auto-generated TypeScript types** — directly solves the §96 IPC contract problem in Part 6. Confirms BLAKE3 + CAS identity (§8.3) and a durable task engine (§20) | Its VDFS sync ambition. SYNC-001 already declares single-device; multi-device sync is what has historically consumed that project's roadmap |
 | **Khoj** | Python, multi-client (desktop, Obsidian, Emacs, browser, mobile) | Personal-corpus RAG over PDFs, Markdown, notes, repos | The multi-surface distribution insight — an Obsidian/editor plugin is a cheaper stage-1 wedge than a full desktop app (§83.2) | Server-process-per-user model; no provenance-to-location discipline |
-| **Onyx (ex-Danswer)** | Python, MIT core | 40+ connectors, agents, RAG, MCP, web search, code execution, deep research, file creation | Confirms the capability set users now expect by default — this is the §101 coverage bar | Server-side index and connector-centric design. It is C5 in §82.1, the category LKAR is explicitly not in |
+| **Onyx (ex-Danswer)** | Python, MIT core | 40+ connectors, agents, RAG, MCP, web search, code execution, deep research, file creation | Confirms the capability set users now expect by default — this is the §101 coverage bar | Server-side index and connector-centric design. It is C5 in §82.1, the category Marrow is explicitly not in |
 | **Codex CLI** | Rust | OS-native sandboxing: Seatbelt (macOS), Landlock (Linux), RestrictedToken (Windows) — reportedly **~17k lines for the sandbox alone**, plus a MITM proxy for network filtering | The cost signal. This validates §51's honesty and sizes §97's E3/E4 tiers realistically | Nothing — this is the reference implementation for §97 |
 | **Claude Code** | — | Deny-first permission model with allow/ask/deny rules; bubblewrap+seccomp on Linux with Landlock fallback; Seatbelt `.sbpl` on macOS; network reduced to loopback + proxy; layered defences that each can independently block | **Layered independent blockers** and **deny-first with human escalation** — exactly §6.1's trust model, validated in production. Read-before-edit guard and exact-string replacement (§100.3) | — |
 | **OpenHands** | Python | Docker isolation + triple analyzer stack (static + LLM risk scoring) | The idea of a **risk classifier in front of execution**, complementing policy | Docker as the isolation primitive — §64.3 already rejects containers for consumer desktop |
@@ -65,7 +65,7 @@ Surveyed for architecture decisions, not feature copying. Sources listed in §10
 |---|---|---|
 | A1 | Spacedrive's CQRS registry with generated TS types is a better IPC design than a hand-maintained message catalogue | Adopt in Part 6 §110; every command is a registered action/query, types generated, no drift |
 | A2 | Codex CLI's ~17k-line sandbox is the honest price of E4 shell execution | §97 tiers execution so that **useful** scripting (E1) ships without paying it |
-| A3 | Onyx ships code execution, file creation, web search and deep research as table stakes | §101 coverage matrix must be answered explicitly, tier by tier, or LKAR reads as underpowered |
+| A3 | Onyx ships code execution, file creation, web search and deep research as table stakes | §101 coverage matrix must be answered explicitly, tier by tier, or Marrow reads as underpowered |
 | A4 | Docling's memory profile shows high-fidelity table models are server-shaped | §99.7 routes tables through deterministic extraction first, ML layout second, and only on demand |
 | A5 | Ollama is already installed on many target machines | §96.4 makes "use what is already there" the first branch of the model-selection tree |
 | A6 | Candle can serve embeddings, LLM and diffusion | Resolves D2 in favour of Candle **if** benchmarks are close, on binary-size grounds alone |
@@ -124,7 +124,7 @@ Nothing in Parts 1–4 detects what the machine can do. Every local-inference de
 
 ## 96.1 Principle
 
-> **The machine decides what runs; the user decides whether it runs; policy decides where it may run.** LKAR recommends, never silently downloads, and never blocks on a model.
+> **The machine decides what runs; the user decides whether it runs; policy decides where it may run.** Marrow recommends, never silently downloads, and never blocks on a model.
 
 ## 96.2 Sizing rules
 
@@ -142,7 +142,7 @@ Derived from the standard memory arithmetic: roughly **2 GB per 1B parameters at
 
 ## 96.3 Task-to-model routing
 
-One model is the wrong answer. LKAR has four distinct inference jobs with different requirements:
+One model is the wrong answer. Marrow has four distinct inference jobs with different requirements:
 
 | Job | Needs | Local candidate class | Cloud acceptable? |
 |---|---|---|---|
@@ -198,7 +198,7 @@ The resolution is that "run a script" is four different requests with four diffe
 | Tier | What it is | Process spawned? | Sandbox required | Phase |
 |---|---|---|---|---|
 | **E0** | No execution | — | — | Default, always available |
-| **E1** | **Recipes** — deterministic pipelines over LKAR's own typed tools (§100.2). No interpreter, no OS process. | **No** | **None** — every step is already policy-gated | **P3** |
+| **E1** | **Recipes** — deterministic pipelines over Marrow's own typed tools (§100.2). No interpreter, no OS process. | **No** | **None** — every step is already policy-gated | **P3** |
 | **E2** | Allowlisted binaries, structured argv, no shell interpolation, workspace cwd, filtered env, resource limits | Yes | §51 V1 posture is sufficient | P3–P4 |
 | **E3** | User-authored scripts in a vetted interpreter (Python/Node/POSIX sh) | Yes | **§51 V2 posture required** | P6 |
 | **E4** | Arbitrary shell, model-generated command lines | Yes | V2 posture + explicit opt-in + per-invocation approval | P6, off by default |
@@ -340,13 +340,13 @@ Rationale: the differentiator is provenance (§82.2 #1). A rendered chart that l
 
 This is a gap in Parts 1–4 that generation makes acute, and it is not limited to images.
 
-> **Anything LKAR writes into a watched folder will be re-indexed by LKAR. Without marking, the system's own output becomes evidence that looks independent, and can corroborate the claim that produced it.**
+> **Anything Marrow writes into a watched folder will be re-indexed by Marrow. Without marking, the system's own output becomes evidence that looks independent, and can corroborate the claim that produced it.**
 
 | Rule |
 |---|
 | Every file created or modified by an agent action, recipe or generator is stamped with `provenance.origin = SELF`, the transaction ID, the model and the prompt/template version. |
 | `SELF`-origin content is indexed and searchable — the user must be able to find it — but is **excluded from evidence authority** for answer verification (§46.3 step 2). |
-| A claim cannot be supported by evidence whose sole origin is a prior LKAR output. Citation UX marks such sources distinctly. |
+| A claim cannot be supported by evidence whose sole origin is a prior Marrow output. Citation UX marks such sources distinctly. |
 | Generated images are `SYNTHETIC`: they never produce `DETERMINISTIC_FACT`s from their (absent) EXIF, and captions of them are not evidence at all. |
 | Where the platform supports it, apply durable content credentials (C2PA-class) to generated media, in addition to the internal flag. The internal flag is authoritative; the embedded credential is for the outside world. |
 | The `SELF` flag survives copy and move within watched roots (content-hash carried), and its loss on export is expected and documented. |
@@ -488,11 +488,11 @@ Parts 1–3 treat tables as chunking edge cases (CHK-005/006, PAR-007). That is 
 
 # 100. Agent capability parity — `CAP`
 
-The bar the user named: *"just like Claude CLI's and Codex and others."* Those systems converged on a small, well-understood tool set. LKAR must match it, and each tool must land inside the existing risk/reversibility/validator model rather than beside it.
+The bar the user named: *"just like Claude CLI's and Codex and others."* Those systems converged on a small, well-understood tool set. Marrow must match it, and each tool must land inside the existing risk/reversibility/validator model rather than beside it.
 
 ## 100.1 Parity catalogue
 
-| Capability | Coding-CLI norm | LKAR equivalent | Risk | Reversibility | Validator | Phase |
+| Capability | Coding-CLI norm | Marrow equivalent | Risk | Reversibility | Validator | Phase |
 |---|---|---|---|---|---|---|
 | Read file | `Read` with offset/limit | `filesystem.read` + IR-aware structural read | R1 | n/a | n/a | P1 |
 | Write new file | `Write` | `filesystem.create` | R2 | `Reversible` | exists + MIME | P3 |
@@ -513,7 +513,7 @@ The bar the user named: *"just like Claude CLI's and Codex and others."* Those s
 | **Provenance to location** | ✗ absent | Core (§61) | — | — | — | P2 |
 | **Persistent knowledge across sessions** | ✗ absent | The product (§1) | — | — | — | P1+ |
 
-## 100.2 What LKAR must adopt from that ecosystem
+## 100.2 What Marrow must adopt from that ecosystem
 
 | Practice | Why | Requirement |
 |---|---|---|

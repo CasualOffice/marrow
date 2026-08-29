@@ -1,8 +1,8 @@
-# LKAR — Master Specification, Part 2
+# Marrow — Master Specification, Part 2
 
 ## Gap Closure, Verification Subsystem, Cost Model, Revised Delivery Plan
 
-**Status:** Addendum to *Local Knowledge & Agent Runtime (LKAR) Master Specification*
+**Status:** Addendum to *Local Knowledge & Agent Runtime (Marrow) Master Specification*
 **Date:** 28 August 2026
 **Numbering:** Continues from §43 of Part 1
 **Format:** Tables and points only
@@ -314,7 +314,7 @@ trait Tool {
 
 | Item | Rule |
 |---|---|
-| Where | `<AppData>/lkar/transactions/<txn_id>/` |
+| Where | `<AppData>/marrow/transactions/<txn_id>/` |
 | What | Pre-image of every file to be modified or deleted |
 | Size cap | Per-transaction cap; exceed → warn and require explicit approval |
 | Retention | Configurable, default 7 days or until disk pressure |
@@ -434,7 +434,7 @@ trait Tool {
 | §15 — notifications | Change notifications via `subscriptions/listen`, opt-in per notification type. |
 | §17 — Rust SDK | Rust SDK support for 2026-07-28 was in beta at spec release. Verify GA status before Phase 6. |
 | MCP-001 | Amend: "Support MCP 2026-07-28, stateless mode only, no deprecated features." |
-| MCP-011 (new) | LKAR agent runs exposed via the Tasks extension, not custom polling. |
+| MCP-011 (new) | Marrow agent runs exposed via the Tasks extension, not custom polling. |
 | MCP-012 (new) | Deprecated-feature usage blocked in CI lint. |
 
 ---
