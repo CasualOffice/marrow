@@ -166,7 +166,7 @@ impl Supervisor {
             .iter()
             .map(|e| {
                 let cache_budget =
-                    Requirement::estimate(&machine, &e.shape(8192, KvPrecision::F16))
+                    Requirement::estimate(&machine, &e.shape(e.default_context, KvPrecision::F16))
                         .cache_budget();
                 (
                     e.id.clone(),
@@ -264,7 +264,10 @@ impl Supervisor {
                 overridable: false,
             };
         };
-        let shape = entry.shape(entry.context_limit, KvPrecision::F16);
+        // `default_context`, never `context_limit`. Qwen3.5-4B advertises
+        // 262144, which at its measured 128 KB/token asks for 34 GB of KV
+        // cache and refuses a model that runs comfortably at 8k.
+        let shape = entry.shape(entry.default_context, KvPrecision::F16);
         let decision = admission::admit(
             &entry,
             &request,
@@ -780,7 +783,7 @@ mod tests {
             Some(ModelState::Suspended { .. })
         ));
         assert_eq!(
-            s.state_of("granite-4-3b-mlx-q4"),
+            s.state_of("granite-4.1-3b-mlx-q4"),
             Some(&ModelState::Installed)
         );
     }

@@ -173,7 +173,15 @@ fn entry_from(runtime: Runtime, m: &serde_json::Value) -> Option<Entry> {
         // runs, and sizing against one it does not support would admit one
         // that OOMs.
         context_limit: 8192,
+        default_context: 4096,
+        // Neither server reports layer or head counts, so the conservative
+        // constant in `marrow_hw::sizing` applies. Over-estimating costs a
+        // refusal the user can override; under-estimating costs a crash.
         kv_bytes_per_token: None,
+        // Ollama reports the file size; LM Studio does not. `size` is already
+        // folded into `params_b` above, and claiming a weights figure we did
+        // not measure would defeat the point of measuring.
+        weights_bytes: None,
         // Not claimed, because neither server tells us. GEN-013 then shows the
         // Thorough switch disabled with a reason rather than silently dropping
         // the flag.
@@ -190,11 +198,12 @@ fn entry_from(runtime: Runtime, m: &serde_json::Value) -> Option<Entry> {
         source: Source::Detected {
             runtime: runtime_slug(runtime).into(),
         },
-        // No integrity claim: we did not fetch these bytes and cannot vouch
-        // for them (§138.2). `downloadable()` is false either way — it is
-        // already here.
-        sha256: None,
-        download_url: None,
+        // No manifest: we did not fetch these bytes and cannot vouch for them
+        // (§138.2). `downloadable()` is false either way — it is already here.
+        repo: None,
+        revision: None,
+        files: Vec::new(),
+        manifest_digest: None,
         installed: true,
         breaker: Default::default(),
     })
@@ -299,7 +308,8 @@ mod tests {
     fn a_detected_model_makes_no_integrity_claim() {
         // §138.2: we did not fetch these bytes and cannot vouch for them.
         for e in parse(Runtime::Ollama, OLLAMA).unwrap() {
-            assert_eq!(e.sha256, None);
+            assert_eq!(e.manifest_digest, None);
+            assert!(e.files.is_empty());
             assert!(!e.downloadable(), "it is already here");
             assert_eq!(e.licence.commercial_use, None, "we do not know");
         }

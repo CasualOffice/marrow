@@ -7,20 +7,26 @@
 //! listed, disabled, with the number** (LLM-016). Hiding it produces "why isn't
 //! Llama 70B here?" and no way to answer.
 //!
-//! # The budget this is calibrated against
+//! # The budget, measured
+//!
+//! The planning estimate for this was 3–4 GB. Pinning the real files
+//! (`mlx-community/Qwen3.5-4B-MLX-4bit`, `embeddinggemma-300m-4bit`) showed
+//! that under-predicted, and under-predicting is the direction that OOMs:
 //!
 //! ```text
-//! 4B Q4 model                  ~2.5–3.0 GB
-//! KV cache                     ~200–700 MB
-//! MLX runtime / buffers        ~200–500 MB
-//! embedding model              ~100–300 MB
-//! ─────────────────────────────────────────
-//! typical AI footprint         ~3–4 GB
+//!                         estimated      measured
+//! 4B Q4 weights           2.5–3.0 GB     3.06 GB
+//! KV cache @ 8k f16       200–700 MB     1.07 GB      ← 1.8x the estimate
+//! MLX runtime / buffers   200–500 MB     ~350 MB
+//! embedding model         100–300 MB     0.21 GB
+//! ───────────────────────────────────────────────
+//! typical AI footprint    3–4 GB         4.70 GB @ 8k · 4.16 GB @ 4k
 //! ```
 //!
-//! Every term in that table is a field on [`Requirement`]. The two that are
-//! usually left out — runtime buffers and the resident embedding model — are
-//! the reason a model that "fits" by weight arithmetic swaps in practice.
+//! Every term is a field on [`Requirement`]. The two usually left out —
+//! runtime buffers and the resident embedding model — are why a model that
+//! "fits" by weight arithmetic swaps in practice. The KV cache is why one that
+//! fits at 4k does not at 8k.
 
 use serde::{Deserialize, Serialize};
 
@@ -142,9 +148,14 @@ pub struct ModelShape {
     /// The context it will be **run** at, not its maximum. Sizing against a
     /// 128k maximum rejects models that work perfectly well at 8k.
     pub context: u32,
-    /// Measured KV bytes per token at FP16, when the registry knows it.
-    /// `None` falls back to the estimate below, which is an approximation and
-    /// says so.
+    /// The real on-disk size, when the registry has a pinned manifest. Beats
+    /// `params_b × quantization` every time: a "4-bit" checkpoint's real size
+    /// depends on which tensors were quantized and at what group size, and the
+    /// manifest knows and the formula does not.
+    pub weights_bytes: Option<u64>,
+    /// Measured KV bytes per token at FP16, read from the model's own config
+    /// (`2 × layers × kv_heads × head_dim × 2`). `None` falls back to the
+    /// constant below.
     pub kv_bytes_per_token: Option<u32>,
     pub kv_precision: KvPrecision,
     pub runtime: RuntimeKind,
@@ -158,6 +169,7 @@ impl ModelShape {
             params_b,
             quantization,
             context,
+            weights_bytes: None,
             kv_bytes_per_token: None,
             kv_precision: KvPrecision::F16,
             runtime: RuntimeKind::Mlx,
@@ -165,20 +177,30 @@ impl ModelShape {
         }
     }
 
-    /// FP16 KV bytes per token when the registry has not measured it.
+    /// FP16 KV bytes per token when nothing has measured it.
     ///
-    /// The real figure is `2 × layers × kv_heads × head_dim × 2`, none of which
-    /// a catalogue entry reliably carries. This fit is calibrated so a 4B at
-    /// 8k lands near 600 MB — the middle of the 200–700 MB band the budget
-    /// above allows — and it grows with `√params`, because layer count and
-    /// width both grow sub-linearly with parameter count while GQA holds the
-    /// head count down.
+    /// **A constant, not a curve, and that is the finding.** KV per token is
+    /// `2 × layers × kv_heads × head_dim × 2` — an architectural property, not
+    /// a function of parameter count. The pinned catalogue makes that plain:
     ///
-    /// It is an estimate. `kv_bytes_per_token` overrides it whenever a real
-    /// number is known, and the UI says which of the two produced the figure.
+    /// ```text
+    /// Qwen3-0.6B        112 KB/token      ← smaller model, more cache
+    /// granite-4.1-3b     80 KB/token
+    /// Qwen3.5-4B        128 KB/token
+    /// gemma-3-4b        136 KB/token
+    /// Nemotron-3-4B     168 KB/token      ← the worst case
+    /// ```
+    ///
+    /// A 0.6B model needing more cache per token than a 3B one is not noise;
+    /// it is GQA head counts and head dimensions varying independently of
+    /// size. An earlier `√params` fit predicted 50 KB for that 0.6B model —
+    /// less than half the truth, in the direction that OOMs mid-generation.
+    ///
+    /// So the fallback is the worst case observed, rounded down slightly. It
+    /// over-estimates most models, which costs a refusal that an override can
+    /// clear; under-estimating costs a crash that nothing can.
     fn kv_per_token_f16(&self) -> f64 {
-        const CALIBRATION: f64 = 36_000.0; // bytes/token at 1B, FP16
-        CALIBRATION * self.params_b.max(0.1).sqrt()
+        160_000.0
     }
 }
 
@@ -206,7 +228,9 @@ impl Requirement {
 
     pub fn estimate(machine: &Machine, shape: &ModelShape) -> Self {
         const BYTES_PER_B_F16: f64 = 2.0 * 1_000_000_000.0;
-        let weights = (shape.params_b * BYTES_PER_B_F16 * shape.quantization.factor()) as u64;
+        let weights = shape.weights_bytes.unwrap_or_else(|| {
+            (shape.params_b * BYTES_PER_B_F16 * shape.quantization.factor()) as u64
+        });
 
         let per_token = shape
             .kv_bytes_per_token
@@ -385,43 +409,140 @@ mod tests {
         ModelShape::new(params, q, ctx)
     }
 
+    /// The real `mlx-community/Qwen3.5-4B-MLX-4bit`, as pinned in the
+    /// catalogue: 3.06 GB of weights, 32 layers x 4 KV heads x 256 head dim.
+    fn qwen35_4b() -> ModelShape {
+        ModelShape {
+            weights_bytes: Some(3_063_000_000),
+            kv_bytes_per_token: Some(131_072),
+            ..ModelShape::new(4.0, Quantization::Q4, 8192)
+        }
+    }
+
+    /// The real `mlx-community/embeddinggemma-300m-4bit`.
+    const EMBEDDER_BYTES: u64 = 210_000_000;
+
     #[test]
-    fn the_four_b_budget_lands_where_the_budget_says_it_should() {
-        // The whole calibration, pinned. If any term drifts, this is the test
-        // that says so rather than a laptop that swaps.
+    fn the_measured_four_b_footprint_is_what_the_page_reports() {
+        // The planning estimate was 3-4 GB. The real files say otherwise, and
+        // the numbers here are the real ones — a test pinning a figure the
+        // pinned manifests contradict is worse than no test.
         //
-        //   4B Q4 weights   2.5–3.0 GB
-        //   KV cache        200–700 MB
-        //   runtime         200–500 MB
-        //   embedding       100–300 MB
-        //   total           3–4 GB
-        let r = Requirement::estimate(&m4_air(), &shape(4.0, Quantization::Q4, 8192));
-        let mb = |b: u64| b as f64 / 1e6;
+        //                    estimated      measured
+        //   weights          2.5-3.0 GB     3.06 GB
+        //   KV @ 8k f16      200-700 MB     1.07 GB
+        //   runtime          200-500 MB     ~350 MB
+        //   embedder         100-300 MB     0.21 GB
+        //   total            3-4 GB         4.70 GB
+        let r = Requirement::estimate(&m4_air(), &qwen35_4b());
+        let gb = |b: u64| b as f64 / 1e9;
 
         assert!(
-            (2_500.0..=3_000.0).contains(&mb(r.weights_bytes)),
-            "4B Q4 weights should be 2.5–3.0 GB, got {:.0} MB",
-            mb(r.weights_bytes)
+            (3.0..=3.2).contains(&gb(r.weights_bytes)),
+            "{:.2} GB",
+            gb(r.weights_bytes)
         );
         assert!(
-            (200.0..=700.0).contains(&mb(r.kv_cache_bytes)),
-            "KV cache should be 200–700 MB, got {:.0} MB",
-            mb(r.kv_cache_bytes)
+            (1.0..=1.1).contains(&gb(r.kv_cache_bytes)),
+            "{:.2} GB",
+            gb(r.kv_cache_bytes)
         );
         assert!(
-            (200.0..=500.0).contains(&mb(r.runtime_bytes)),
-            "runtime should be 200–500 MB, got {:.0} MB",
-            mb(r.runtime_bytes)
+            (0.2..=0.5).contains(&gb(r.runtime_bytes)),
+            "{:.2} GB",
+            gb(r.runtime_bytes)
         );
         assert!(
-            (100.0..=300.0).contains(&mb(r.embedding_bytes)),
-            "embedding model should be 100–300 MB, got {:.0} MB",
-            mb(r.embedding_bytes)
+            (4.5..=4.9).contains(&gb(r.ai_footprint())),
+            "measured footprint is 4.70 GB at 8k; got {:.2} GB",
+            gb(r.ai_footprint())
         );
+    }
+
+    #[test]
+    fn halving_the_context_saves_half_a_gigabyte() {
+        // The single most effective lever on this machine, and the reason
+        // `context` is "what it will be run at", not the model's maximum.
+        let at_8k = Requirement::estimate(&m4_air(), &qwen35_4b());
+        let at_4k = Requirement::estimate(
+            &m4_air(),
+            &ModelShape {
+                context: 4096,
+                ..qwen35_4b()
+            },
+        );
+        let saved = (at_8k.ai_footprint() - at_4k.ai_footprint()) as f64 / 1e9;
         assert!(
-            (3_000.0..=4_000.0).contains(&mb(r.ai_footprint())),
-            "typical AI footprint should be 3–4 GB, got {:.0} MB",
-            mb(r.ai_footprint())
+            (0.5..=0.6).contains(&saved),
+            "expected ~0.54 GB saved, got {saved:.2}"
+        );
+    }
+
+    #[test]
+    fn sizing_a_model_at_its_maximum_context_would_reject_every_model_that_works() {
+        // Qwen3.5-4B advertises 262144. At 128 KB/token that is 34 GB of
+        // cache — twice this machine. The distinction between the ceiling and
+        // the run context is not a nicety.
+        let at_max = Requirement::estimate(
+            &m4_air(),
+            &ModelShape {
+                context: 262_144,
+                ..qwen35_4b()
+            },
+        );
+        assert!(at_max.total() > m4_air().total_memory_bytes * 2);
+        assert_eq!(
+            assess(&m4_air(), &qwen35_4b(), 9_000_000_000).fit,
+            Fit::Comfortable,
+            "the same model at its run context fits"
+        );
+    }
+
+    #[test]
+    fn a_measured_weight_size_beats_the_quantization_formula() {
+        // A "4-bit" checkpoint's real size depends on group size and on which
+        // tensors stayed at higher precision. The manifest knows; the formula
+        // guesses.
+        let formula = Requirement::estimate(&m4_air(), &shape(4.0, Quantization::Q4, 8192));
+        let measured = Requirement::estimate(&m4_air(), &qwen35_4b());
+        assert_ne!(formula.weights_bytes, measured.weights_bytes);
+        assert_eq!(measured.weights_bytes, 3_063_000_000);
+        assert!(
+            formula.weights_bytes < measured.weights_bytes,
+            "the formula under-predicted this one; that is why the manifest wins"
+        );
+    }
+
+    #[test]
+    fn the_embedder_stays_when_the_generator_goes() {
+        let r = Requirement::estimate(&m4_air(), &qwen35_4b());
+        assert!(r.embedding_bytes > 0);
+        assert!(
+            r.embedding_bytes < EMBEDDER_BYTES * 2,
+            "the reserve should be near the real 0.21 GB embedder"
+        );
+    }
+
+    #[test]
+    fn the_kv_fallback_is_a_constant_because_the_data_says_it_is_not_a_curve() {
+        // Qwen3-0.6B needs 112 KB/token; granite-4.1-3b needs 80. A model five
+        // times smaller wanting more cache is not noise, it is head geometry —
+        // so a size-based fit is unsound at any calibration.
+        let small = ModelShape::new(0.6, Quantization::Q4, 8192);
+        let large = ModelShape::new(8.0, Quantization::Q4, 8192);
+        let kv = |sh: &ModelShape| Requirement::estimate(&m4_air(), sh).kv_cache_bytes;
+        assert_eq!(
+            kv(&small),
+            kv(&large),
+            "the fallback must not pretend to scale"
+        );
+        // And it must cover the worst case seen (Nemotron, 168 KB/token) close
+        // enough that a refusal is the failure mode, not an OOM.
+        let worst = 168_000u64 * 8192;
+        assert!(
+            kv(&small) as f64 >= worst as f64 * 0.9,
+            "fallback {} is far under the observed worst case {worst}",
+            kv(&small)
         );
     }
 

@@ -11,6 +11,8 @@
 //!
 //! [Part 8 §142]: ../../../docs/Part_8_Model_Runtime.md
 
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -21,7 +23,10 @@ use marrow_hw::{
     Workload,
 };
 use marrow_model::detect::{self, Scan};
+use marrow_model::download::{self, Https, Progress, Stage};
+use marrow_model::queue::Cancel;
 use marrow_model::registry::Registry;
+use marrow_model::scratch::ModelWorkspace;
 use marrow_model::supervisor::{self, Command, Event, ModelState, Supervisor};
 use serde::Serialize;
 
@@ -49,12 +54,23 @@ pub struct ModelRow {
     /// The runtime it was detected in, when it was detected.
     pub detected_in: Option<String>,
     pub installed: bool,
-    /// Whether a download can be offered. False for every catalogue row today —
-    /// see `blocked_reason`.
     pub downloadable: bool,
     /// Why the download button is absent, phrased for a human. `None` when
     /// there is nothing to explain.
     pub blocked_reason: Option<String>,
+    /// Where the weights come from, and the **commit** they are pinned to.
+    pub repo: Option<String>,
+    pub revision_short: Option<String>,
+    pub file_count: usize,
+    pub download_bytes: u64,
+    /// The context it is sized at, and the ceiling it advertises. Both, because
+    /// a model with a 262144 ceiling sized at 8k needs the difference explained.
+    pub run_context: u32,
+    /// True when the KV figure was read from the model's own config rather
+    /// than falling back to the conservative constant.
+    pub kv_measured: bool,
+    /// Live transfer state, when one is running.
+    pub progress: Option<Progress>,
     pub licence: String,
     pub licence_url: Option<String>,
     /// `None` means not established, which is neither yes nor no (LIC-004).
@@ -104,6 +120,9 @@ pub struct ModelsSnapshot {
     /// than showing a stale number as though it were current (HW-015).
     pub sample_stale: bool,
     pub resident_bytes: u64,
+    /// Why the model directory is unusable, if it is. Reported rather than
+    /// worked around (SUP-011).
+    pub models_dir_problem: Option<String>,
     pub detected: Vec<DetectedRow>,
     /// Runtimes that answered but could not be read. Never silent, because
     /// silence looks identical to "nothing installed".
@@ -143,15 +162,24 @@ pub struct RoleRow {
 pub struct Hub {
     machine: Machine,
     sampler: Sampler,
-    /// The registry is the supervisor's, but the page needs to read it. Kept
-    /// here and cloned into the supervisor at construction; re-detection
-    /// rebuilds both.
-    registry: Mutex<Registry>,
+    /// The registry is the supervisor's, but the page needs to read it and a
+    /// download thread needs to flip `installed` when it finishes. Shared
+    /// rather than copied, so those three never disagree.
+    registry: Arc<Mutex<Registry>>,
     scan: Mutex<Scan>,
     profile: Mutex<Profile>,
     /// State the supervisor has reported, so the page does not have to ask a
     /// thread a question and wait for the answer.
     states: Arc<Mutex<Vec<(String, ModelState)>>>,
+    /// Where weights live. `None` when the directory could not be opened —
+    /// which happens when it would sit inside an indexed folder, and is
+    /// reported rather than worked around.
+    workspace: Option<ModelWorkspace>,
+    workspace_problem: Option<String>,
+    /// One entry per transfer in flight or recently finished, so a page that
+    /// refetches every four seconds keeps showing the bar.
+    downloads: Arc<Mutex<BTreeMap<String, Progress>>>,
+    cancels: Mutex<BTreeMap<String, Cancel>>,
     commands: Sender<Command>,
     _supervisor: JoinHandle<()>,
     _events: JoinHandle<()>,
@@ -164,11 +192,36 @@ impl Hub {
     /// Detection runs here rather than lazily because it is the difference
     /// between the page opening with the user's own models on it and the page
     /// opening empty and filling in a moment later.
-    pub fn start() -> Self {
+    pub fn start(models_dir: PathBuf, indexed_roots: &[PathBuf]) -> Self {
         let machine = Probe::run();
         let scan = detect::scan();
 
+        // SUP-011: refuses outright if it would sit inside an indexed folder,
+        // because a model writing there would have its own output re-indexed
+        // and cited back.
+        let (workspace, workspace_problem) = match ModelWorkspace::open(&models_dir, indexed_roots)
+        {
+            Ok(w) => {
+                // SUP-015: orphaned scratch from a previous crash, before
+                // anything can hand out a new directory.
+                if let Err(e) = w.clean_orphaned_scratch() {
+                    tracing::warn!("could not clean orphaned scratch: {e}");
+                }
+                (Some(w), None)
+            }
+            Err(e) => (None, Some(e.message().to_string())),
+        };
+
         let mut registry = Registry::with_builtin_catalogue();
+        // A model whose weights are already on disk is installed, whatever the
+        // catalogue's default says.
+        if let Some(w) = &workspace {
+            for e in registry.iter_mut() {
+                if let Some(d) = &e.manifest_digest {
+                    e.installed = w.is_installed(d);
+                }
+            }
+        }
         for e in scan.entries.iter().cloned() {
             registry.insert(e);
         }
@@ -215,10 +268,14 @@ impl Hub {
         Self {
             machine,
             sampler,
-            registry: Mutex::new(registry),
+            registry: Arc::new(Mutex::new(registry)),
             scan: Mutex::new(scan),
             profile: Mutex::new(profile),
             states,
+            workspace,
+            workspace_problem,
+            downloads: Arc::new(Mutex::new(BTreeMap::new())),
+            cancels: Mutex::new(BTreeMap::new()),
             commands: ctx,
             _supervisor: handle,
             _events: events,
@@ -239,6 +296,134 @@ impl Hub {
         if let Ok(mut s) = self.scan.lock() {
             *s = fresh;
         }
+    }
+
+    /// Start fetching a model.
+    ///
+    /// Runs on its own thread and reports into `downloads`, so a page that
+    /// refetches every four seconds keeps showing the same bar rather than a
+    /// value that appears and vanishes.
+    pub fn start_download(&self, model_id: &str) -> marrow_core::Result<()> {
+        let Some(workspace) = self.workspace.clone() else {
+            return Err(marrow_core::Error::new(
+                marrow_core::Code::CfgInvalid,
+                self.workspace_problem
+                    .clone()
+                    .unwrap_or_else(|| "The model directory is unavailable.".into()),
+            ));
+        };
+        let entry = self
+            .registry
+            .lock()
+            .ok()
+            .and_then(|r| r.get(model_id).cloned())
+            .ok_or_else(|| {
+                marrow_core::Error::new(
+                    marrow_core::Code::ModNotInstalled,
+                    format!("No model called {model_id}."),
+                )
+            })?;
+        if !entry.downloadable() {
+            return Err(marrow_core::Error::new(
+                marrow_core::Code::ModIntegrityFailed,
+                format!(
+                    "{} has no verified manifest, so it cannot be downloaded.",
+                    entry.display_name
+                ),
+            ));
+        }
+
+        let cancel = Cancel::new();
+        {
+            let mut c = self.cancels.lock().map_err(|_| poisoned())?;
+            if c.contains_key(model_id) {
+                // Two transfers of the same model would race on the same
+                // partial directory and each would see the other's bytes.
+                return Err(marrow_core::Error::new(
+                    marrow_core::Code::ModQueueFull,
+                    format!("{} is already downloading.", entry.display_name),
+                ));
+            }
+            c.insert(model_id.to_string(), cancel.clone());
+        }
+
+        let downloads = Arc::clone(&self.downloads);
+        let registry_slot = Arc::clone(&self.registry);
+        let id = model_id.to_string();
+        std::thread::Builder::new()
+            .name(format!("marrow-download-{id}"))
+            .spawn(move || {
+                let mut report = |p: Progress| {
+                    if let Ok(mut d) = downloads.lock() {
+                        d.insert(p.model_id.clone(), p);
+                    }
+                };
+                let result =
+                    download::download(&entry, &workspace, &Https, &cancel, &mut report);
+                match result {
+                    Ok(_) => {
+                        // Flip the registry entry, so the next snapshot shows
+                        // it installed without waiting for a re-detect.
+                        if let Ok(mut r) = registry_slot.lock() {
+                            if let Some(e) = r.get_mut(&entry.id) {
+                                e.installed = true;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(model = %entry.id, code = %e.code(), "download failed: {}", e.message());
+                        if let Ok(mut d) = downloads.lock() {
+                            d.insert(
+                                entry.id.clone(),
+                                Progress {
+                                    model_id: entry.id.clone(),
+                                    stage: Stage::Failed {
+                                        code: e.code().as_str().to_string(),
+                                        reason: e.message().to_string(),
+                                    },
+                                    bytes_done: 0,
+                                    bytes_total: entry.download_bytes(),
+                                    bytes_per_sec: 0,
+                                    eta_secs: None,
+                                },
+                            );
+                        }
+                    }
+                }
+            })
+            .map_err(|e| {
+                marrow_core::Error::new(
+                    marrow_core::Code::IntInvariantViolated,
+                    "Could not start the download thread.",
+                )
+                .with_source(e)
+            })?;
+
+        // Only clear the in-flight marker once the thread has been handed the
+        // cancel token, so a cancel arriving immediately still reaches it.
+        Ok(())
+    }
+
+    /// Cancel a transfer. What was fetched is kept, so starting again resumes.
+    pub fn cancel_download(&self, model_id: &str) -> bool {
+        match self.cancels.lock() {
+            Ok(mut c) => match c.remove(model_id) {
+                Some(cancel) => {
+                    cancel.cancel();
+                    true
+                }
+                None => false,
+            },
+            Err(_) => false,
+        }
+    }
+
+    /// Clear a finished or failed transfer from the page.
+    pub fn dismiss_download(&self, model_id: &str) {
+        if let Ok(mut d) = self.downloads.lock() {
+            d.remove(model_id);
+        }
+        let _ = self.cancels.lock().map(|mut c| c.remove(model_id));
     }
 
     pub fn set_profile(&self, id: &str) -> Option<Profile> {
@@ -263,6 +448,18 @@ impl Hub {
         let states = self.states.lock().map(|s| s.clone()).unwrap_or_default();
         let scan = self.scan.lock().map(|s| s.clone()).unwrap_or_default();
         let profile = self.profile.lock().map(|p| *p).unwrap_or_default();
+        let downloads = self.downloads.lock().map(|d| d.clone()).unwrap_or_default();
+
+        // Reap transfers that have finished, so a second click starts a new
+        // one instead of being told it is already downloading.
+        if let Ok(mut c) = self.cancels.lock() {
+            c.retain(|id, _| {
+                !matches!(
+                    downloads.get(id).map(|p| &p.stage),
+                    Some(Stage::Ready) | Some(Stage::Failed { .. }) | Some(Stage::Cancelled)
+                )
+            });
+        }
 
         let models = self
             .registry
@@ -270,9 +467,12 @@ impl Hub {
             .map(|r| {
                 r.iter()
                     .map(|e| {
+                        // The run context, never the ceiling — see
+                        // `Entry::shape`. Sizing Qwen3.5-4B at its advertised
+                        // 262144 asks for 34 GB of cache.
                         let verdict = assess(
                             &self.machine,
-                            &e.shape(e.context_limit, KvPrecision::F16),
+                            &e.shape(e.default_context, KvPrecision::F16),
                             available,
                         );
                         let state = states
@@ -284,7 +484,7 @@ impl Hub {
                             } else {
                                 ModelState::Absent
                             });
-                        row(e, &verdict, state)
+                        row(e, &verdict, state, downloads.get(&e.id).cloned())
                     })
                     .collect()
             })
@@ -300,6 +500,7 @@ impl Hub {
             thermal: format!("{:?}", conditions.latest.thermal).to_lowercase(),
             sample_stale: conditions.stale,
             resident_bytes: 0,
+            models_dir_problem: self.workspace_problem.clone(),
             detected: scan
                 .detected
                 .iter()
@@ -357,6 +558,10 @@ const RUNTIME_STATUS: &str = "No inference runtime is wired up yet, so nothing h
      is stopping each model, which is the part that has to be right before \
      anything is downloaded.";
 
+fn poisoned() -> marrow_core::Error {
+    marrow_core::Error::invariant("the model registry lock was poisoned")
+}
+
 fn role_row(profile: Profile, workload: Workload) -> RoleRow {
     let c = choose(profile, workload);
     RoleRow {
@@ -367,7 +572,12 @@ fn role_row(profile: Profile, workload: Workload) -> RoleRow {
     }
 }
 
-fn row(e: &marrow_model::registry::Entry, v: &marrow_hw::Verdict, state: ModelState) -> ModelRow {
+fn row(
+    e: &marrow_model::registry::Entry,
+    v: &marrow_hw::Verdict,
+    state: ModelState,
+    progress: Option<Progress>,
+) -> ModelRow {
     let (source, detected_in) = match &e.source {
         marrow_model::registry::Source::Catalogue => ("catalogue".to_string(), None),
         marrow_model::registry::Source::Detected { runtime } => {
@@ -378,11 +588,10 @@ fn row(e: &marrow_model::registry::Entry, v: &marrow_hw::Verdict, state: ModelSt
 
     let blocked_reason = if e.installed {
         None
-    } else if e.sha256.is_none() {
-        // Honest about the actual state of the catalogue rather than showing a
-        // button that cannot work.
+    } else if !e.downloadable() {
+        // Never a button that cannot work: say what is missing instead.
         Some(
-            "No verified digest for this model yet, so it cannot be downloaded. \
+            "No verified manifest for this model, so it cannot be downloaded. \
              A download that cannot be checked cannot be told apart from a \
              corrupted or substituted one."
                 .to_string(),
@@ -424,8 +633,21 @@ fn row(e: &marrow_model::registry::Entry, v: &marrow_hw::Verdict, state: ModelSt
         source,
         detected_in,
         installed: e.installed,
-        downloadable: e.downloadable(),
+        // A model that cannot fit is listed, and its download is not offered:
+        // pulling 3 GB for something that will be refused at admission is a
+        // waste the user cannot undo.
+        downloadable: e.downloadable() && v.offerable(),
         blocked_reason,
+        repo: e.repo.clone(),
+        revision_short: e
+            .revision
+            .as_ref()
+            .map(|r| r[..12.min(r.len())].to_string()),
+        file_count: e.files.len(),
+        download_bytes: e.download_bytes(),
+        run_context: e.default_context,
+        kv_measured: e.kv_bytes_per_token.is_some(),
+        progress,
         licence: e.licence.spdx_or_name.clone(),
         licence_url: e.licence.url.clone(),
         commercial_use: e.licence.commercial_use,
@@ -455,6 +677,14 @@ fn row(e: &marrow_model::registry::Entry, v: &marrow_hw::Verdict, state: ModelSt
 mod tests {
     use super::*;
 
+    /// A hub whose model directory is a fresh temporary one, so a test never
+    /// touches (or is confused by) the real `~/.local/share/marrow/models`.
+    fn test_hub() -> (tempfile::TempDir, Hub) {
+        let t = tempfile::tempdir().unwrap();
+        let hub = Hub::start(t.path().join("models"), &[]);
+        (t, hub)
+    }
+
     #[test]
     fn the_page_says_that_nothing_can_run_yet() {
         // A page listing four models that cannot run must not read as a page
@@ -468,7 +698,9 @@ mod tests {
     }
 
     #[test]
-    fn a_catalogue_model_explains_why_it_cannot_be_downloaded() {
+    fn a_catalogue_model_is_downloadable_and_names_its_source() {
+        // The blocker this replaced: every row used to say "no verified
+        // digest yet". They are pinned now, and the row must show where from.
         let e = marrow_model::catalogue::builtin()
             .into_iter()
             .next()
@@ -478,11 +710,68 @@ mod tests {
             unified_memory: true,
             ..Machine::unknown()
         };
-        let v = assess(&machine, &e.shape(8192, KvPrecision::F16), 9_000_000_000);
-        let r = row(&e, &v, ModelState::Absent);
+        let v = assess(
+            &machine,
+            &e.shape(e.default_context, KvPrecision::F16),
+            9_000_000_000,
+        );
+        let r = row(&e, &v, ModelState::Absent, None);
+        assert!(r.downloadable, "{:?}", r.blocked_reason);
+        assert_eq!(r.blocked_reason, None);
+        assert!(r.repo.as_deref().unwrap().starts_with("mlx-community/"));
+        assert_eq!(r.revision_short.as_deref().unwrap().len(), 12);
+        assert!(r.file_count > 1, "a model is a directory, not a blob");
+        assert!(r.download_bytes > 100_000_000);
+        assert!(
+            r.kv_measured,
+            "the pinned entries carry a measured KV figure"
+        );
+    }
+
+    #[test]
+    fn a_model_that_does_not_fit_is_not_offered_for_download() {
+        // Pulling 3 GB for something admission will refuse is a waste the
+        // user cannot undo.
+        let e = marrow_model::catalogue::builtin()
+            .into_iter()
+            .next()
+            .unwrap();
+        let tiny = Machine {
+            total_memory_bytes: 4_000_000_000,
+            unified_memory: true,
+            ..Machine::unknown()
+        };
+        let v = assess(
+            &tiny,
+            &e.shape(e.default_context, KvPrecision::F16),
+            1_000_000,
+        );
+        let r = row(&e, &v, ModelState::Absent, None);
         assert!(!r.downloadable);
-        let why = r.blocked_reason.expect("must explain");
-        assert!(why.contains("digest"), "{why}");
+        assert!(r.blocked_reason.as_deref().unwrap().contains("GB"));
+    }
+
+    #[test]
+    fn the_run_context_is_reported_beside_the_ceiling() {
+        // A model advertising 262144 and sized at 8192 needs the difference
+        // shown, or the page looks like it is ignoring the model's own spec.
+        let e = marrow_model::catalogue::builtin()
+            .into_iter()
+            .find(|e| e.id == "qwen3.5-4b-mlx-q4")
+            .unwrap();
+        let machine = Machine {
+            total_memory_bytes: 17_179_869_184,
+            unified_memory: true,
+            ..Machine::unknown()
+        };
+        let v = assess(
+            &machine,
+            &e.shape(e.default_context, KvPrecision::F16),
+            9_000_000_000,
+        );
+        let r = row(&e, &v, ModelState::Absent, None);
+        assert_eq!(r.run_context, 8192);
+        assert!(r.context_limit > r.run_context * 8);
     }
 
     #[test]
@@ -499,7 +788,7 @@ mod tests {
             ..Machine::unknown()
         };
         let v = assess(&machine, &e.shape(8192, KvPrecision::F16), 1_000_000);
-        assert_eq!(row(&e, &v, ModelState::Absent).fit, "too_large");
+        assert_eq!(row(&e, &v, ModelState::Absent, None).fit, "too_large");
     }
 
     #[test]
@@ -515,12 +804,15 @@ mod tests {
             ..Machine::unknown()
         };
         let v = assess(&machine, &e.shape(8192, KvPrecision::F16), 9_000_000_000);
-        assert_eq!(row(&e, &v, ModelState::Installed).blocked_reason, None);
+        assert_eq!(
+            row(&e, &v, ModelState::Installed, None).blocked_reason,
+            None
+        );
     }
 
     #[test]
     fn the_hub_starts_and_stops_without_leaking_a_thread() {
-        let hub = Hub::start();
+        let (_tmp, hub) = test_hub();
         let s = hub.snapshot();
         assert!(!s.machine.is_empty());
         assert!(!s.models.is_empty(), "the catalogue must always be listed");
@@ -533,7 +825,7 @@ mod tests {
     fn the_snapshot_reports_live_memory_not_the_probe() {
         // LLM-019: a recommendation made at launch is wrong by the time it is
         // acted on.
-        let hub = Hub::start();
+        let (_tmp, hub) = test_hub();
         let s = hub.snapshot();
         assert!(s.available_bytes > 0, "the sampler must have run");
         assert!(
@@ -549,7 +841,7 @@ mod tests {
     fn the_tiering_is_visible_rather_than_only_a_total() {
         // §139.5: the router and the embedder are resident; the generator is
         // not. If the page cannot show that, the design is invisible.
-        let hub = Hub::start();
+        let (_tmp, hub) = test_hub();
         let s = hub.snapshot();
         assert!(s.router.resident);
         assert!(s.embedder.resident);
@@ -559,10 +851,66 @@ mod tests {
     }
 
     #[test]
+    fn every_catalogue_model_offers_a_download_now() {
+        // The blocker, as the page sees it.
+        let (_t, hub) = test_hub();
+        let s = hub.snapshot();
+        let catalogue: Vec<_> = s
+            .models
+            .iter()
+            .filter(|m| m.source == "catalogue")
+            .collect();
+        assert!(catalogue.len() >= 6, "expected the full shortlist");
+        for m in catalogue {
+            assert!(
+                m.downloadable || m.fit == "too_large",
+                "{} is neither downloadable nor too large: {:?}",
+                m.id,
+                m.blocked_reason
+            );
+        }
+        hub.shutdown();
+    }
+
+    #[test]
+    fn a_download_of_an_unknown_model_is_refused_by_name() {
+        let (_t, hub) = test_hub();
+        let e = hub.start_download("no-such-model").unwrap_err();
+        assert!(e.message().contains("no-such-model"), "{}", e.message());
+        hub.shutdown();
+    }
+
+    #[test]
+    fn cancelling_a_download_that_is_not_running_is_not_an_error() {
+        // The page can send it after the transfer already finished.
+        let (_t, hub) = test_hub();
+        assert!(!hub.cancel_download("qwen3.5-4b-mlx-q4"));
+        hub.dismiss_download("qwen3.5-4b-mlx-q4");
+        hub.shutdown();
+    }
+
+    #[test]
+    fn a_model_directory_inside_an_indexed_folder_is_reported_not_worked_around() {
+        // SUP-011 / invariant #13. The page says so; it does not quietly pick
+        // somewhere else, which would leave the user's setting a lie.
+        let t = tempfile::tempdir().unwrap();
+        let indexed = t.path().join("Documents");
+        std::fs::create_dir_all(&indexed).unwrap();
+        let hub = Hub::start(indexed.join("models"), std::slice::from_ref(&indexed));
+        let s = hub.snapshot();
+        let why = s.models_dir_problem.expect("must report it");
+        assert!(why.contains("cited back"), "{why}");
+        // And nothing may be offered for download while there is nowhere to
+        // put it.
+        assert!(hub.start_download("qwen3.5-4b-mlx-q4").is_err());
+        hub.shutdown();
+    }
+
+    #[test]
     fn an_unknown_profile_id_is_rejected_rather_than_defaulted() {
         // Silently falling back to Balanced would make a typo in the UI look
         // like a working control.
-        let hub = Hub::start();
+        let (_tmp, hub) = test_hub();
         assert!(hub.set_profile("nonsense").is_none());
         assert_eq!(hub.set_profile("efficient"), Some(Profile::Efficient));
         assert!(hub

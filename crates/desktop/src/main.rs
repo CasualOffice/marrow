@@ -53,7 +53,19 @@ fn main() {
 
     // Probes the machine, detects any local runtime and starts the supervisor
     // thread. Nothing is loaded — that is the point of LLM-047.
-    let hub = Arc::new(models::Hub::start());
+    //
+    // The indexed roots are passed so the model directory can refuse to sit
+    // inside one: a model writing into an indexed folder would have its own
+    // output re-indexed and cited back (SUP-011, invariant #13).
+    let indexed_roots: Vec<std::path::PathBuf> = core
+        .workspaces()
+        .map(|ws| {
+            ws.iter()
+                .map(|w| std::path::PathBuf::from(&w.path))
+                .collect()
+        })
+        .unwrap_or_default();
+    let hub = Arc::new(models::Hub::start(dir.join("models"), &indexed_roots));
 
     tauri::Builder::default()
         .manage(core)
@@ -70,6 +82,9 @@ fn main() {
             commands::models_overview,
             commands::refresh_model_detection,
             commands::set_ai_profile,
+            commands::download_model,
+            commands::cancel_model_download,
+            commands::dismiss_model_download,
         ])
         .build(tauri::generate_context!())
         .expect("failed to start the Marrow window")

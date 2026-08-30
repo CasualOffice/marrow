@@ -13,6 +13,12 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 blake3.workspace = true
+# HTTPS for model downloads. Blocking on purpose: the supervisor is one
+# synchronous thread, and pulling in an async runtime for a file transfer would
+# make every caller async to save nothing. rustls rather than OpenSSL so there
+# is no system TLS library to go missing.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

@@ -23,8 +23,12 @@ import { Icon } from "./Icon";
 import { useModels } from "../queries";
 import {
   asUiError,
+  cancelModelDownload,
+  dismissModelDownload,
+  downloadModel,
   refreshModelDetection,
   setAiProfile,
+  type DownloadProgress,
   type ModelRow,
   type ModelState,
 } from "../api";
@@ -41,6 +45,99 @@ function fitVerdict(m: ModelRow): { tone: StateTone; word: string } {
     case "too_large":
       return { tone: "error", word: "too large" };
   }
+}
+
+/** `4212` seconds reads as nothing; `1h 10m` reads as an answer. */
+function duration(secs: number): string {
+  if (secs < 60) return `${Math.max(1, Math.round(secs))}s`;
+  if (secs < 3600) return `${Math.round(secs / 60)}m`;
+  const h = Math.floor(secs / 3600);
+  return `${h}h ${Math.round((secs - h * 3600) / 60)}m`;
+}
+
+/**
+ * SKEL-005: real bytes and a real ETA, never an indeterminate bar.
+ *
+ * The stage names the file, so a transfer that stalls is attributable to
+ * something rather than to "downloading".
+ */
+function DownloadBar({
+  p,
+  onCancel,
+  onDismiss,
+}: {
+  p: DownloadProgress;
+  onCancel: () => void;
+  onDismiss: () => void;
+}) {
+  const pct = p.bytesTotal > 0 ? (p.bytesDone / p.bytesTotal) * 100 : 0;
+  const done = p.stage.stage === "ready";
+  const failed = p.stage.stage === "failed";
+  const stopped = failed || p.stage.stage === "cancelled";
+
+  let line: string;
+  switch (p.stage.stage) {
+    case "downloading":
+      line = `${p.stage.file} · file ${p.stage.index} of ${p.stage.of}`;
+      break;
+    case "verifying":
+      line = `checking ${p.stage.file}`;
+      break;
+    case "ready":
+      line = "ready";
+      break;
+    case "cancelled":
+      line = "cancelled — what was fetched is kept, so starting again resumes";
+      break;
+    case "failed":
+      line = p.stage.reason;
+      break;
+  }
+
+  return (
+    <div className={styles.progress}>
+      <div
+        className={styles.bar}
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(pct)}
+        aria-label="Download progress"
+      >
+        <div
+          className={cx(styles.barFill, done && styles.barDone, stopped && styles.barStopped)}
+          style={{ width: `${done ? 100 : pct}%` }}
+        />
+      </div>
+      <div className={styles.progressLine}>
+        <span className={failed ? styles.progressFailed : styles.progressStage}>{line}</span>
+        <span className={styles.grow} />
+        {!stopped && !done && (
+          <>
+            <span className={styles.progressNums}>
+              {bytes(p.bytesDone)} of {bytes(p.bytesTotal)}
+            </span>
+            {p.bytesPerSec > 0 && (
+              <span className={styles.progressNums}>{bytes(p.bytesPerSec)}/s</span>
+            )}
+            {/* No ETA until there is a rate worth dividing by. An ETA
+                invented from one chunk is worse than none. */}
+            {p.etaSecs !== null && (
+              <span className={styles.progressNums}>{duration(p.etaSecs)} left</span>
+            )}
+            <button type="button" className={styles.linkBtn} onClick={onCancel}>
+              Cancel
+            </button>
+          </>
+        )}
+        {stopped && (
+          <button type="button" className={styles.linkBtn} onClick={onDismiss}>
+            Dismiss
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 /** `32768` reads as nothing; `32k context` reads as a fact. */
@@ -88,7 +185,19 @@ function Licence({ m }: { m: ModelRow }) {
   );
 }
 
-function ModelCard({ m }: { m: ModelRow }) {
+function ModelCard({
+  m,
+  onDownload,
+  onCancel,
+  onDismiss,
+  busy,
+}: {
+  m: ModelRow;
+  onDownload: (id: string) => void;
+  onCancel: (id: string) => void;
+  onDismiss: (id: string) => void;
+  busy: boolean;
+}) {
   const v = fitVerdict(m);
   const blocked = m.fit === "too_large" || m.blockedReason !== null;
   const blockedNote =
@@ -114,8 +223,43 @@ function ModelCard({ m }: { m: ModelRow }) {
 
       <p className={styles.role}>{m.role}</p>
 
-      <p className={styles.fitReason}>{m.fitReason}</p>
+      <p className={styles.fitReason}>
+        {m.fitReason}
+        {/* Only when the gap is large enough to be surprising, and phrased
+            with the real factor — "many times this machine" is false for a
+            model whose ceiling is merely twice its run context. */}
+        {m.contextLimit >= m.runContext * 4 && (
+          <span className={styles.ctxNote}>
+            {" "}
+            Sized at {Math.round(m.runContext / 1024)}k of the{" "}
+            {Math.round(m.contextLimit / 1024)}k it supports; the full window
+            would need about {Math.round(m.contextLimit / m.runContext)}× this
+            model's cache.
+          </span>
+        )}
+      </p>
       <p className={styles.breakdown}>{m.breakdown}</p>
+      {m.repo && (
+        <p className={styles.source}>
+          <a
+            href={`https://huggingface.co/${m.repo}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {m.repo}
+          </a>
+          <span className={styles.licenceDot}>·</span>
+          <span className={styles.mono}>{m.revisionShort}</span>
+          <span className={styles.licenceDot}>·</span>
+          {m.fileCount} files, {bytes(m.downloadBytes)}
+          {!m.kvMeasured && (
+            <>
+              <span className={styles.licenceDot}>·</span>
+              cache size estimated
+            </>
+          )}
+        </p>
+      )}
 
       <div className={styles.tags}>
         {m.capabilities.map((c) => (
@@ -142,8 +286,17 @@ function ModelCard({ m }: { m: ModelRow }) {
         </p>
       )}
 
+      {m.progress && (
+        <DownloadBar
+          p={m.progress}
+          onCancel={() => onCancel(m.id)}
+          onDismiss={() => onDismiss(m.id)}
+        />
+      )}
+
       <div className={styles.actions}>
-        {m.installed ? (
+        {m.progress && m.progress.stage.stage !== "failed" &&
+        m.progress.stage.stage !== "cancelled" ? null : m.installed ? (
           // The badge already says "installed", so repeating it here would be
           // two words for one fact. Show the lifecycle state only when it is
           // more than that, and the context window otherwise.
@@ -151,8 +304,13 @@ function ModelCard({ m }: { m: ModelRow }) {
             {m.state.state === "installed" ? contextWindow(m) : stateWord(m.state)}
           </span>
         ) : m.downloadable ? (
-          <button type="button" className={styles.get}>
-            Download {bytes(m.requiredBytes)}
+          <button
+            type="button"
+            className={styles.get}
+            disabled={busy}
+            onClick={() => onDownload(m.id)}
+          >
+            {m.progress ? "Resume" : "Download"} {bytes(m.downloadBytes)}
           </button>
         ) : (
           // A too-large row's blocking reason *is* its fit reason, and the fit
@@ -192,6 +350,9 @@ export function ModelsView() {
   const q = useModels();
   const client = useQueryClient();
   const [busy, setBusy] = useState(false);
+  // Kept beside the page rather than thrown: a failed download must say why,
+  // and the query itself succeeded.
+  const [actionError, setActionError] = useState<ReturnType<typeof asUiError> | null>(null);
 
   const choose = useCallback(
     async (id: string) => {
@@ -199,6 +360,20 @@ export function ModelsView() {
       try {
         const next = await setAiProfile(id);
         client.setQueryData(["models"], next);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [client],
+  );
+
+  const act = useCallback(
+    async (fn: (id: string) => Promise<typeof s>, id: string) => {
+      setBusy(true);
+      try {
+        client.setQueryData(["models"], await fn(id));
+      } catch (e) {
+        setActionError(asUiError(e));
       } finally {
         setBusy(false);
       }
@@ -221,12 +396,19 @@ export function ModelsView() {
     <section className={styles.view} aria-label="Models">
       <div className={styles.scroll}>
         {q.error && <ErrorNotice error={asUiError(q.error)} action={null} />}
+        {actionError && <ErrorNotice error={actionError} action={null} />}
 
         {!s ? (
           <SkeletonPage />
         ) : (
           <>
             <p className={styles.status}>{s.runtimeStatus}</p>
+            {s.modelsDirProblem && (
+              <p className={styles.dirProblem}>
+                <Icon name="warning" size={11} />
+                {s.modelsDirProblem}
+              </p>
+            )}
 
             <section className={styles.machine}>
               <h2 className={styles.machineName}>{s.machine}</h2>
@@ -342,7 +524,14 @@ export function ModelsView() {
               <h2 className={styles.heading}>Models</h2>
               <ul className={styles.cards}>
                 {s.models.map((m) => (
-                  <ModelCard key={m.id} m={m} />
+                  <ModelCard
+                    key={m.id}
+                    m={m}
+                    busy={busy}
+                    onDownload={(id) => void act(downloadModel, id)}
+                    onCancel={(id) => void act(cancelModelDownload, id)}
+                    onDismiss={(id) => void act(dismissModelDownload, id)}
+                  />
                 ))}
               </ul>
             </section>

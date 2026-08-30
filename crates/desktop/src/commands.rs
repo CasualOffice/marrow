@@ -361,6 +361,9 @@ const COMMAND_NAMES: &[&str] = &[
     "models_overview",
     "refresh_model_detection",
     "set_ai_profile",
+    "download_model",
+    "cancel_model_download",
+    "dismiss_model_download",
 ];
 
 #[cfg(test)]
@@ -384,7 +387,7 @@ mod tests {
     fn the_command_surface_is_small_and_read_only() {
         // Every name here is a hole in the WebView sandbox. M1 exposes no
         // mutation at all; when one arrives it needs a deliberate addition.
-        assert_eq!(COMMAND_NAMES.len(), 11);
+        assert_eq!(COMMAND_NAMES.len(), 14);
         for n in COMMAND_NAMES {
             assert!(
                 !n.contains("write") && !n.contains("delete") && !n.contains("exec"),
@@ -442,6 +445,51 @@ pub async fn set_ai_profile(
                  Balanced, Larger local model or Cloud.",
             )
         })?;
+        Ok(hub.snapshot())
+    })
+    .await
+}
+
+/// Start fetching a model's weights.
+///
+/// Returns immediately with a fresh snapshot; the transfer runs on its own
+/// thread and its progress arrives through `models_overview`.
+#[tauri::command]
+pub async fn download_model(
+    hub: State<'_, Arc<crate::models::Hub>>,
+    model_id: String,
+) -> Result<crate::models::ModelsSnapshot, UiError> {
+    let hub = Arc::clone(&hub);
+    blocking(move || {
+        hub.start_download(&model_id)?;
+        Ok(hub.snapshot())
+    })
+    .await
+}
+
+/// Cancel a transfer. What was fetched is kept, so starting again resumes.
+#[tauri::command]
+pub async fn cancel_model_download(
+    hub: State<'_, Arc<crate::models::Hub>>,
+    model_id: String,
+) -> Result<crate::models::ModelsSnapshot, UiError> {
+    let hub = Arc::clone(&hub);
+    blocking(move || {
+        hub.cancel_download(&model_id);
+        Ok(hub.snapshot())
+    })
+    .await
+}
+
+/// Clear a finished or failed transfer from the page.
+#[tauri::command]
+pub async fn dismiss_model_download(
+    hub: State<'_, Arc<crate::models::Hub>>,
+    model_id: String,
+) -> Result<crate::models::ModelsSnapshot, UiError> {
+    let hub = Arc::clone(&hub);
+    blocking(move || {
+        hub.dismiss_download(&model_id);
         Ok(hub.snapshot())
     })
     .await

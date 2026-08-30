@@ -317,6 +317,24 @@ export type ModelState =
   | { readonly state: "unloading" }
   | { readonly state: "suspended"; readonly reason: string };
 
+/** Where a transfer is, in the words SKEL-006 requires. */
+export type DownloadStage =
+  | { readonly stage: "downloading"; readonly file: string; readonly index: number; readonly of: number }
+  | { readonly stage: "verifying"; readonly file: string }
+  | { readonly stage: "ready" }
+  | { readonly stage: "cancelled" }
+  | { readonly stage: "failed"; readonly code: string; readonly reason: string };
+
+export interface DownloadProgress {
+  readonly modelId: string;
+  readonly stage: DownloadStage;
+  readonly bytesDone: number;
+  readonly bytesTotal: number;
+  readonly bytesPerSec: number;
+  /** `null` until there is a rate worth dividing by (SKEL-005). */
+  readonly etaSecs: number | null;
+}
+
 export interface ModelRow {
   readonly id: string;
   readonly displayName: string;
@@ -331,13 +349,21 @@ export interface ModelRow {
   readonly installed: boolean;
   readonly downloadable: boolean;
   /**
-   * Why there is no download button, phrased for a human.
-   *
-   * Every catalogue row carries one today: no digest has been pinned, and a
-   * download that cannot be verified cannot be told apart from a substituted
-   * one. Rendering the button anyway would be the Settings bug again.
+   * Why there is no download button, phrased for a human. `null` when there is
+   * nothing to explain — rendering a button that cannot work would be the
+   * Settings bug in a different costume.
    */
   readonly blockedReason: string | null;
+  /** Where the weights come from, and the commit they are pinned to. */
+  readonly repo: string | null;
+  readonly revisionShort: string | null;
+  readonly fileCount: number;
+  readonly downloadBytes: number;
+  /** What it is sized at. `contextLimit` is what it advertises. */
+  readonly runContext: number;
+  /** True when the KV figure was read from the model's config, not guessed. */
+  readonly kvMeasured: boolean;
+  readonly progress: DownloadProgress | null;
   readonly licence: string;
   readonly licenceUrl: string | null;
   /** `null` is "not established" — neither yes nor no (LIC-004). */
@@ -367,6 +393,8 @@ export interface ModelsSnapshot {
   /** True when the sampler has stopped reporting (HW-015). */
   readonly sampleStale: boolean;
   readonly residentBytes: number;
+  /** Why the model directory is unusable, if it is (SUP-011). */
+  readonly modelsDirProblem: string | null;
   readonly detected: readonly DetectedRow[];
   readonly detectionProblems: readonly string[];
   readonly profiles: readonly ProfileRow[];
@@ -387,4 +415,16 @@ export function refreshModelDetection(): Promise<ModelsSnapshot> {
 
 export function setAiProfile(profile: string): Promise<ModelsSnapshot> {
   return call<ModelsSnapshot>("set_ai_profile", { profile });
+}
+
+export function downloadModel(modelId: string): Promise<ModelsSnapshot> {
+  return call<ModelsSnapshot>("download_model", { modelId });
+}
+
+export function cancelModelDownload(modelId: string): Promise<ModelsSnapshot> {
+  return call<ModelsSnapshot>("cancel_model_download", { modelId });
+}
+
+export function dismissModelDownload(modelId: string): Promise<ModelsSnapshot> {
+  return call<ModelsSnapshot>("dismiss_model_download", { modelId });
 }
