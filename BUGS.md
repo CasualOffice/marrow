@@ -37,3 +37,48 @@ Fixed items move to the TRACKER Log and come off this list.
 | No text was selectable anywhere | `e883546` |
 | No way to add a folder from the app | `cd9b50f` |
 | Switching tabs destroyed the Ask conversation and orphaned a running generation | `cd9b50f` |
+
+
+---
+
+## B6 / B7 — the design, before it is built
+
+Studied against Gemini, ChatGPT and Claude. What all three do that this window
+does not, and why each one matters here.
+
+**1. The sidebar holds conversations, not modes.** All three give that column to
+*content*: a "New chat" button and a reverse-chronological list of threads.
+Ours spends 176px on six app sections (Search / Ask / Files / Models / Status /
+Settings) plus a workspace list. That is an IDE shape, not a chat shape. Modes
+that are visited once a week do not deserve permanent width; the thing you
+return to constantly does.
+
+→ Sidebar becomes: **New conversation**, then the thread list, then workspaces.
+The six sections move to a compact switcher — Search and Ask are the two real
+surfaces, and Files/Models/Status/Settings are settings-shaped.
+
+**2. The composer is centred when the thread is empty.** Gemini, ChatGPT and
+Claude all open with the input in the middle of the screen under a short
+greeting, and drop it to the bottom once the first answer exists. Ours pins it
+to the bottom from the start, leaving a large void with three lines of grey
+text floating in it — which is exactly the wasted space that was reported.
+
+**3. Mode is a compact control inside the composer.** Ours renders Fast and
+Thorough as two ~280×56px cards on their own row. All three put the equivalent
+(model picker, tools, reasoning toggle) as a small control in or beside the
+input. The row should collapse into one segmented control on the composer's
+left, beside Ask.
+
+**4. The rail collapses.** All three can hide the sidebar. Ours has the grid
+column already (`--shell-nav-w` → 0), so this is exposure, not construction.
+
+**5. Threads persist.** B7. Nothing survives a restart, and there is no way back
+to yesterday's question. Storage exists — SQLite, one writer — so this is a
+table and a list, not an architecture. It is what makes the sidebar worth its
+width, so B6 and B7 ship together.
+
+Not adopted: the three products stream into a full-width column with a model
+picker at top-centre. Marrow's answers carry citations and an evidence list,
+which those products do not have, and the existing `--prose-measure` column
+plus the sources disclosure is the better fit. Copying their chrome wholesale
+would cost the thing that makes this different.
