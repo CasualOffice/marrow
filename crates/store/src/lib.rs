@@ -273,6 +273,17 @@ impl Store {
             .submit(move |c| read::mark_reconciled(c, root_id, health, at))
     }
 
+    /// Record watcher health without claiming a reconciliation.
+    /// See [`read::mark_watcher_health`].
+    pub fn mark_watcher_health(
+        &self,
+        root_id: marrow_core::RootId,
+        health: read::WatcherHealth,
+    ) -> Result<()> {
+        self.handle
+            .submit(move |c| read::mark_watcher_health(c, root_id, health))
+    }
+
     pub fn insert_file(&self, f: NewFile) -> Result<FileId> {
         self.handle.submit(move |c| read::insert_file(c, &f))
     }

@@ -82,6 +82,17 @@ fn data_dir() -> PathBuf {
     PathBuf::from(std::env::var_os("HOME").expect("HOME")).join(".local/share/marrow")
 }
 
+/// The one root in a `watchable_workspace`.
+fn first_root(core: &Core) -> marrow_core::RootId {
+    let conn = core.store().reader().expect("reader");
+    let id: String = conn
+        .query_row("SELECT root_id FROM workspace_roots LIMIT 1", [], |r| {
+            r.get(0)
+        })
+        .expect("a root");
+    id.parse().expect("a well-formed root id")
+}
+
 /// An empty, authorized workspace with nothing indexed yet.
 ///
 /// Deliberately empty: the point of the watcher tests is what happens to files
@@ -781,6 +792,42 @@ mod watching {
         assert!(
             found,
             "opening the app did not reconcile what changed while it was shut"
+        );
+    }
+
+    /// **Freshness must mean a walk finished, not that a watcher said hello.**
+    ///
+    /// `mark_reconciled` wrote health and the timestamp together, and the
+    /// timestamp is the sole input to `may_be_stale`. So reporting for duty
+    /// stamped "just now" before the first sweep had walked anything: open the
+    /// app over a folder nobody has scanned, kill it two seconds later, and the
+    /// database claims the index agrees with a disk it never looked at.
+    #[test]
+    fn reporting_health_does_not_claim_the_index_was_checked() {
+        let (dir, core) = super::watchable_workspace();
+        let core = Arc::new(core);
+        std::fs::write(dir.path().join("a.md"), "anything\n").unwrap();
+
+        let before = marrow_query::catalog::index_stats(&core.store().reader().unwrap()).unwrap();
+        assert!(before.last_reconciled_ms.is_none(), "nothing has swept yet");
+
+        // Health, with no sweep behind it — the state a watcher is in for the
+        // moment between opening and its first walk.
+        core.store()
+            .mark_watcher_health(
+                super::first_root(&core),
+                marrow_store::read::WatcherHealth::Live,
+            )
+            .expect("record health");
+
+        let after = marrow_query::catalog::index_stats(&core.store().reader().unwrap()).unwrap();
+        assert!(
+            after.last_reconciled_ms.is_none(),
+            "health alone stamped a reconciliation that never happened"
+        );
+        assert!(
+            after.may_be_stale(),
+            "an index nothing has walked must not report itself current"
         );
     }
 

@@ -423,13 +423,21 @@ fn record(
     match outcome {
         Ok(o) => {
             let now = Timestamp::now();
-            state
-                .last_change_ms
-                .store(now.as_millis(), Ordering::Relaxed);
             if o.stored > 0 {
                 state.files_applied.fetch_add(o.stored, Ordering::Relaxed);
                 tracing::info!(root = %t.name, files = o.stored, reason = why, "index updated");
             }
+            // **Only a walk that finished may claim freshness.** A sweep
+            // stopped part way has seen some of the disk, and "some" is
+            // indistinguishable from "none" to a reader deciding whether to
+            // trust an answer. The same guard is applied in `marrow index`.
+            if o.cancelled {
+                tracing::info!(root = %t.name, "the sweep stopped early; freshness not recorded");
+                return;
+            }
+            state
+                .last_change_ms
+                .store(now.as_millis(), Ordering::Relaxed);
             if let Err(e) = core
                 .store()
                 .mark_reconciled(t.root_id, sql_health(health), now)
@@ -448,9 +456,12 @@ fn set_health(core: &Core, t: &Target, state: &Arc<RootState>, health: &Health) 
             health.reason().map(str::to_string),
         );
     }
+    // Health only. Stamping `last_reconciled_at` here would say the index
+    // agrees with the disk because a watcher reported for duty, which is the
+    // opposite of what a watcher reporting *degraded* means.
     if let Err(e) = core
         .store()
-        .mark_reconciled(t.root_id, sql_health(health), Timestamp::now())
+        .mark_watcher_health(t.root_id, sql_health(health))
     {
         tracing::warn!(error = %e, "could not record watcher health");
     }
@@ -464,9 +475,13 @@ fn stopped(core: &Core, t: &Target, state: &Arc<RootState>, why: &str) {
     // UNAVAILABLE, not LIVE. The column's schema default says LIVE, which is
     // what made "nobody is watching" indistinguishable from "everything is
     // fine" for every reader of this database.
-    if let Err(e) =
-        core.store()
-            .mark_reconciled(t.root_id, WatcherHealth::Unavailable, Timestamp::now())
+    //
+    // Health only: a watcher stopping says nothing new about when the index
+    // last agreed with the disk, and refreshing that timestamp would make the
+    // index look freshly checked at the exact moment it stopped being watched.
+    if let Err(e) = core
+        .store()
+        .mark_watcher_health(t.root_id, WatcherHealth::Unavailable)
     {
         tracing::warn!(error = %e, "could not record that a watcher stopped");
     }

@@ -327,6 +327,32 @@ pub fn mark_reconciled(
     Ok(())
 }
 
+/// Record what the watcher can see, **without** claiming a reconciliation.
+///
+/// These were one call, and conflating them recreated the bug they were written
+/// to fix. `last_reconciled_at` is the sole input to `may_be_stale`, so writing
+/// it whenever a watcher reported its health meant: opening the app stamped
+/// "just now" before the first sweep had walked anything; a sweep the user
+/// cancelled eight seconds into a 41,000-file walk recorded a full
+/// reconciliation; and a watcher degrading from `LIVE` to `POLL_ONLY` refreshed
+/// the timestamp, so the index looked *fresher* at the moment its coverage got
+/// worse.
+///
+/// Health is what the watcher can see. Freshness is what the walk established.
+/// Only a completed walk may write the second.
+pub fn mark_watcher_health(
+    conn: &Connection,
+    root_id: RootId,
+    health: WatcherHealth,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE workspace_roots SET watcher_health = ?2 WHERE root_id = ?1",
+        rusqlite::params![root_id.to_string(), health.as_sql()],
+    )
+    .map_err(|e| crate::map_sqlite(e, "recording watcher health"))?;
+    Ok(())
+}
+
 /// What a watcher can currently see, as the schema spells it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WatcherHealth {
