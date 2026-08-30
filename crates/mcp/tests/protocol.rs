@@ -730,3 +730,377 @@ mod literal {
         assert_eq!(re["matches"], json!(2), "{re}");
     }
 }
+
+/// The read tools against an index that actually has content in it.
+///
+/// `fixture` has a workspace and no files; `literal::scannable` has files on
+/// disk but nothing in the lexical index or the chunk table. Every claim these
+/// tools make about what is *searchable* needs all three, and the absence of a
+/// fixture carrying all three is why nothing here was ever tested.
+mod indexed {
+    use super::*;
+    use marrow_core::{
+        ChunkId, ContentHash, FileId, FileStatus, Origin, ProvenanceClass, SourceSpan, TierState,
+    };
+    use marrow_index::{Fts5Index, TextDoc, TextIndex};
+    use marrow_store::read::NewChunk;
+    use marrow_store::{NewFile, NewVersion};
+
+    /// One file as the fixture takes it: name, contents, and whether its text
+    /// was extracted. `false` is a photo — recorded, findable by name, with
+    /// nothing to search.
+    struct Doc<'a> {
+        name: &'a str,
+        body: &'a str,
+        parsed: bool,
+    }
+
+    fn doc<'a>(name: &'a str, body: &'a str, parsed: bool) -> Doc<'a> {
+        Doc { name, body, parsed }
+    }
+
+    /// Files on disk, in `files`/`file_versions`, and — when `parsed` — in the
+    /// chunk table and the lexical index too.
+    fn corpus(docs: &[Doc<'_>]) -> (tempfile::TempDir, Server) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store =
+            Store::open_with_migrations(dir.path().join("marrow.sqlite"), marrow_index::MIGRATIONS)
+                .expect("store");
+        let now = Timestamp::now();
+        let ws = store
+            .upsert_workspace(NewWorkspace {
+                workspace_id: marrow_core::WorkspaceId::new(),
+                name: "notes".into(),
+                at: now,
+            })
+            .expect("workspace");
+        let root = store
+            .upsert_root(NewRoot {
+                root_id: marrow_core::RootId::new(),
+                workspace_id: ws,
+                canonical_path: dir.path().to_string_lossy().into_owned(),
+                volume_identity: None,
+                grant_token: None,
+                storage_kind: StorageKind::Local,
+                cloud_provider: None,
+                at: now,
+            })
+            .expect("root");
+
+        let index = Fts5Index::open(&store).expect("index");
+        for d in docs {
+            let path = dir.path().join(d.name);
+            std::fs::write(&path, d.body).expect("write");
+            let path = path.to_string_lossy().into_owned();
+            let file = FileId::new();
+            let f = NewFile {
+                file_id: file,
+                workspace_id: ws,
+                root_id: root,
+                current_path: Some(path.clone()),
+                fs_identity: Some(d.name.to_string()),
+                tier_state: TierState::Resident,
+                origin: Origin::User,
+                origin_txn_id: None,
+                external_source_url: None,
+                status: FileStatus::Active,
+                at: now,
+            };
+            let v = NewVersion::new(
+                file,
+                d.name,
+                d.body.len() as i64,
+                ContentHash::of(d.body.as_bytes()),
+            );
+            let version = v.version_id;
+            store
+                .writer()
+                .submit(move |c| {
+                    marrow_store::read::insert_file_with_version(c, &f, &v).map(|_| ())
+                })
+                .expect("insert");
+            if !d.parsed {
+                continue;
+            }
+            let chunk = ChunkId::new();
+            let text = d.body.to_string();
+            let hash = ContentHash::of(d.body.as_bytes());
+            store
+                .writer()
+                .submit(move |c| {
+                    marrow_store::read::replace_chunks(
+                        c,
+                        version,
+                        &[NewChunk {
+                            chunk_id: chunk,
+                            version_id: version,
+                            chunk_kind: "TEXT".into(),
+                            text,
+                            context_prefix: None,
+                            token_count: 8,
+                            text_hash: hash,
+                            chunker_version: "test".into(),
+                            provenance_class: "EXACT".into(),
+                        }],
+                    )
+                })
+                .expect("chunks");
+            index
+                .upsert(&[TextDoc {
+                    chunk_id: chunk,
+                    file_id: file,
+                    version_id: version,
+                    workspace_id: ws,
+                    path,
+                    title: String::new(),
+                    body: d.body.to_string(),
+                    span: SourceSpan::Lines { start: 1, end: 1 },
+                    provenance: ProvenanceClass::Exact,
+                    origin: Origin::User,
+                    modified: now,
+                }])
+                .expect("index");
+        }
+        store.flush().expect("flush");
+        (dir, Server::new(store).expect("server"))
+    }
+
+    fn call(server: &Server, tool: &str, args: Value) -> Value {
+        let out = exchange(
+            server,
+            &[json!({
+                "jsonrpc":"2.0","id":1,"method":"tools/call",
+                "params": { "name": tool, "arguments": args }
+            })],
+        );
+        out.into_iter().next().expect("a call gets a response")
+    }
+
+    fn payload(v: &Value) -> Value {
+        let text = v["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no text in {v}"));
+        serde_json::from_str(text).expect("the payload must be JSON")
+    }
+
+    /// A lease that "renews", and a question that says "renew".
+    fn lease() -> (tempfile::TempDir, Server) {
+        corpus(&[
+            doc(
+                "lease.md",
+                "The tenant renews this agreement every January.\n",
+                true,
+            ),
+            doc("holiday.jpg", "\u{fffd}not text\n", false),
+        ])
+    }
+
+    /// **C12.** The document is right there and the old default returned
+    /// nothing, because `MatchMode::Terms` wanted a file containing *when*,
+    /// *does*, *the*, *lease* and *renew* — and the lease says "renews".
+    #[test]
+    fn a_natural_language_question_finds_the_document_that_answers_it() {
+        let (_d, s) = lease();
+        let v = payload(&call(
+            &s,
+            "search",
+            json!({ "query": "when does the lease renew" }),
+        ));
+        assert_eq!(v["match"], json!("any"), "the default must be `any`: {v}");
+        assert_eq!(v["total"], json!(1), "{v}");
+        assert!(v["results"][0]["path"]
+            .as_str()
+            .expect("a path")
+            .ends_with("lease.md"));
+    }
+
+    /// The other half of the same fact: conjunction is still available, and it
+    /// is still the mode that answers nothing here.
+    #[test]
+    fn requiring_every_word_is_asked_for_rather_than_assumed() {
+        let (_d, s) = lease();
+        let all = payload(&call(
+            &s,
+            "search",
+            json!({ "query": "when does the lease renew", "match": "all" }),
+        ));
+        assert_eq!(all["match"], json!("all"));
+        assert_eq!(all["total"], json!(0), "{all}");
+
+        let phrase = payload(&call(
+            &s,
+            "search",
+            json!({ "query": "renews this agreement", "match": "phrase" }),
+        ));
+        assert_eq!(phrase["match"], json!("phrase"));
+        assert_eq!(phrase["total"], json!(1), "{phrase}");
+    }
+
+    /// A mode this build does not have must not quietly become the default.
+    /// Silently running a different query than the caller asked for is how a
+    /// caller believes it constrained a search that it did not.
+    #[test]
+    fn an_unknown_match_mode_is_refused_and_names_the_ones_that_exist() {
+        let (_d, s) = lease();
+        let out = call(&s, "search", json!({ "query": "lease", "match": "fuzzy" }));
+        assert_eq!(out["result"]["isError"], json!(true));
+        let msg = out["result"]["content"][0]["text"]
+            .as_str()
+            .expect("a message");
+        assert!(msg.contains("fuzzy"), "must name what was sent: {msg}");
+        for mode in ["any", "all", "phrase"] {
+            assert!(msg.contains(mode), "must name `{mode}`: {msg}");
+        }
+    }
+
+    /// **F8.** `files_indexed: 3` beside `searchable_chunks: 1` reads as "all
+    /// three are searchable". Only one of them has any text in the index, and
+    /// the payload has to say which number is which.
+    #[test]
+    fn index_status_separates_what_is_searchable_from_what_is_merely_indexed() {
+        let (_d, s) = corpus(&[
+            doc("notes.md", "the finding\n", true),
+            doc("a.jpg", "binary\n", false),
+            doc("b.jpg", "binary\n", false),
+        ]);
+        let v = payload(&call(&s, "index_status", json!({})));
+        assert_eq!(v["files_indexed"], json!(3), "{v}");
+        assert_eq!(v["files_searchable"], json!(1), "{v}");
+
+        let not = &v["files_not_searchable"];
+        assert_eq!(not["total"], json!(2), "{v}");
+        // The three reasons must account for the total exactly, or the payload
+        // shows a number nobody can explain.
+        let parts: i64 = ["no_parser", "parse_failed", "not_processed"]
+            .iter()
+            .map(|k| {
+                not[*k]
+                    .as_i64()
+                    .unwrap_or_else(|| panic!("{k} missing: {v}"))
+            })
+            .sum();
+        assert_eq!(parts, 2, "the reasons must sum to the total: {v}");
+    }
+
+    /// The description promised "how many were deliberately skipped" and the
+    /// payload had no such field. Every one of these is a claim the
+    /// description now makes, so every one has to exist even at zero.
+    #[test]
+    fn index_status_returns_every_field_its_description_promises() {
+        let (_d, s) = corpus(&[doc("notes.md", "the finding\n", true)]);
+        let v = payload(&call(&s, "index_status", json!({})));
+        for field in [
+            "files_indexed",
+            "files_searchable",
+            "files_not_searchable",
+            "searchable_chunks",
+            "cloud_only_not_read",
+            "content_bytes",
+            "workspaces",
+            "schema_version",
+            "last_indexed_ms",
+            "watcher",
+            "may_be_stale",
+            "freshness",
+        ] {
+            assert!(v.get(field).is_some(), "`{field}` is promised: {v}");
+        }
+    }
+
+    /// **C17.** "with file counts and index freshness" — and the payload had
+    /// no freshness field of any kind. It must also be the *same* freshness
+    /// `index_status` reports, or two tools answer one question differently.
+    #[test]
+    fn list_workspaces_returns_the_freshness_it_promises_and_agrees_with_index_status() {
+        let (_d, s) = corpus(&[doc("notes.md", "the finding\n", true)]);
+        let ws = payload(&call(&s, "list_workspaces", json!({})));
+        let st = payload(&call(&s, "index_status", json!({})));
+        for field in ["last_indexed_ms", "watcher", "may_be_stale", "freshness"] {
+            assert!(ws.get(field).is_some(), "`{field}` is promised: {ws}");
+            assert_eq!(
+                ws[field], st[field],
+                "`{field}` differs between the two tools"
+            );
+        }
+        assert_eq!(ws["workspaces"][0]["name"], json!("notes"), "{ws}");
+    }
+
+    /// **F9.** The index says a file is here; the disk says it is gone.
+    ///
+    /// `read_file` found out because it opened the file. `file_info` never
+    /// touched the disk, so it answered `citable: true, indexed_for_search:
+    /// true, tier_state: "resident"` about a file that no longer exists —
+    /// which is the one question an agent calls it to settle.
+    #[test]
+    fn file_info_does_not_call_a_file_that_is_gone_citable() {
+        let (dir, s) = corpus(&[doc("notes.md", "the finding\n", true)]);
+        let path = dir.path().join("notes.md");
+
+        let before = payload(&call(&s, "file_info", json!({ "path": path })));
+        assert_eq!(before["present_on_disk"], json!(true));
+        assert_eq!(before["citable"], json!(true));
+        assert_eq!(before["indexed_for_search"], json!(true));
+        assert_eq!(before["tier_state"], json!("resident"));
+        assert_eq!(
+            before["note"],
+            Value::Null,
+            "nothing to warn about: {before}"
+        );
+
+        // The index is not reconciled: the row still says ACTIVE and RESIDENT,
+        // which is exactly the window this bug lived in.
+        std::fs::remove_file(&path).expect("remove");
+
+        let after = payload(&call(&s, "file_info", json!({ "path": path })));
+        assert_eq!(after["present_on_disk"], json!(false), "{after}");
+        assert_eq!(after["citable"], json!(false), "{after}");
+        assert_eq!(after["indexed_for_search"], json!(false), "{after}");
+        assert_eq!(after["tier_state"], json!("missing"), "{after}");
+        assert_eq!(
+            after["recorded_tier_state"],
+            json!("resident"),
+            "what the last scan saw is still a fact worth keeping: {after}"
+        );
+    }
+
+    /// Reported, not refused — and the reason is what is still in the payload.
+    /// A refusal would read as "no such path in the index", and would discard
+    /// the hash and the path history that say whether the content moved.
+    #[test]
+    fn a_file_that_is_gone_keeps_the_metadata_that_says_where_it_went() {
+        let (dir, s) = corpus(&[doc("notes.md", "the finding\n", true)]);
+        let path = dir.path().join("notes.md");
+        std::fs::remove_file(&path).expect("remove");
+
+        let out = call(&s, "file_info", json!({ "path": path }));
+        assert!(
+            out["result"]["isError"].as_bool() != Some(true),
+            "must be answered, not refused: {out}"
+        );
+        let v = payload(&out);
+        assert!(v["content_hash"].is_string(), "{v}");
+        assert!(v["file_id"].is_string(), "{v}");
+        assert!(v.get("previous_paths").is_some(), "{v}");
+        let note = v["note"].as_str().unwrap_or_else(|| panic!("a note: {v}"));
+        assert!(
+            note.contains("previous_paths") && note.contains("marrow index"),
+            "the note must name a cause and an action: {note}"
+        );
+    }
+
+    /// The two tools have to agree. `read_file` reporting "gone" while
+    /// `file_info` reports "resident, indexed, citable" about the same path is
+    /// the contradiction that made this worth fixing.
+    #[test]
+    fn file_info_and_read_file_agree_about_a_file_that_is_gone() {
+        let (dir, s) = corpus(&[doc("notes.md", "the finding\n", true)]);
+        let path = dir.path().join("notes.md");
+        std::fs::remove_file(&path).expect("remove");
+
+        let read = call(&s, "read_file", json!({ "path": path }));
+        assert_eq!(read["result"]["isError"], json!(true), "{read}");
+
+        let info = payload(&call(&s, "file_info", json!({ "path": path })));
+        assert_eq!(info["citable"], json!(false), "{info}");
+    }
+}

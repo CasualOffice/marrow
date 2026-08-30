@@ -116,6 +116,24 @@ enum Cmd {
         /// Match whole words only (with --literal)
         #[arg(short = 'w', long, requires = "literal")]
         whole_word: bool,
+        /// Only scan files whose path contains this (with --literal)
+        ///
+        /// A substring of the whole path, case-blind: `--path crates/model`,
+        /// `--path .rs`. The counterpart of MCP's `path_contains`, which the
+        /// incomplete-scan advice used to name on a CLI that had no such flag.
+        #[arg(long, value_name = "SUBSTRING", requires = "literal")]
+        path: Option<String>,
+        /// Only scan this workspace (with --literal)
+        #[arg(long, value_name = "NAME", requires = "literal")]
+        workspace: Option<String>,
+        /// Seconds to scan before reporting a partial result; 0 for no limit
+        ///
+        /// A literal scan reads files, so a large corpus does not finish
+        /// quickly. When the limit runs out the result says so and says how
+        /// much of the scope it never reached — it is never presented as
+        /// "not found".
+        #[arg(long, value_name = "SECONDS", requires = "literal")]
+        time_limit: Option<u64>,
         /// Also search by meaning, not only by words
         ///
         /// Off by default because it starts an embedding model, which costs
@@ -266,6 +284,9 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
             regex,
             ignore_case,
             whole_word,
+            path,
+            workspace,
+            time_limit,
             semantic,
         } => {
             let q = query.join(" ");
@@ -276,27 +297,29 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
                 ));
             }
             let store = open_store()?;
+            if *literal {
+                let cancel = waiting::install_interrupt_handler();
+                let req = literal::Request {
+                    pattern: &q,
+                    regex: *regex,
+                    ignore_case: *ignore_case,
+                    whole_word: *whole_word,
+                    limit: *limit,
+                    workspace: workspace.as_deref(),
+                    path_contains: path.as_deref(),
+                    time_limit: time_limit.map(std::time::Duration::from_secs),
+                };
+                // The literal scan establishes its own scope by walking the
+                // granted folders, so it does not want the index's idea of the
+                // roots — it wants the folders themselves.
+                return literal::run(&store, &req, cli.json, style, out, cancel.as_flag());
+            }
             let conn = store.reader()?;
             let roots: Vec<String> = list_workspaces(&conn)?
                 .into_iter()
                 .map(|(_, p, _)| p)
                 .collect();
             drop(conn);
-            if *literal {
-                let cancel = waiting::install_interrupt_handler();
-                return literal::run(
-                    &store,
-                    &q,
-                    *regex,
-                    *ignore_case,
-                    *whole_word,
-                    *limit,
-                    cli.json,
-                    style,
-                    out,
-                    cancel.as_flag(),
-                );
-            }
             let index = marrow_index::Fts5Index::open(&store)?;
             // **Opt-in, because it costs seconds.** Starting the embedder took
             // a 40 ms search to 4.7 s on this machine, and a search you type is
@@ -938,5 +961,44 @@ mod tests {
         assert!(line.contains("3 hours ago"), "{line}");
         assert!(line.contains("marrow index"), "{line}");
         assert!(line.contains("marrow watch"), "{line}");
+    }
+    /// The incomplete-scan advice names flags. This is the test that keeps
+    /// those names true: F5 was, in part, a message that told the user to
+    /// "narrow it with a workspace or a path" on a command line that parsed
+    /// neither. An action the user cannot take is not an action.
+    #[test]
+    fn literal_flags_named_in_the_advice_are_flags_the_parser_accepts() {
+        for args in [
+            vec!["marrow", "search", "--literal", "x", "--time-limit", "90"],
+            vec!["marrow", "search", "--literal", "x", "--time-limit", "0"],
+            vec!["marrow", "search", "--literal", "x", "--path", "crates/model"],
+            vec!["marrow", "search", "--literal", "x", "--workspace", "melp"],
+            vec!["marrow", "search", "--literal", "x", "-n", "5"],
+        ] {
+            let cli = Cli::try_parse_from(&args).unwrap_or_else(|e| panic!("{args:?}: {e}"));
+            let Cmd::Search { literal, .. } = cli.cmd else {
+                panic!("{args:?} did not parse as a search")
+            };
+            assert!(literal, "{args:?}");
+        }
+    }
+
+    /// The three narrowing flags only mean anything to the literal scan, and
+    /// clap has to say so rather than accepting them and ignoring them — "a
+    /// parameter declared but ignored is the worst kind of bug".
+    #[test]
+    fn the_literal_only_flags_are_refused_without_literal() {
+        for flag in [
+            vec!["--path", "src"],
+            vec!["--workspace", "melp"],
+            vec!["--time-limit", "10"],
+        ] {
+            let mut args = vec!["marrow", "search", "x"];
+            args.extend(flag.iter().copied());
+            assert!(
+                Cli::try_parse_from(&args).is_err(),
+                "{args:?} should not parse without --literal"
+            );
+        }
     }
 }
