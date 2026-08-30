@@ -1103,4 +1103,64 @@ mod indexed {
         let info = payload(&call(&s, "file_info", json!({ "path": path })));
         assert_eq!(info["citable"], json!(false), "{info}");
     }
+
+    /// **A limit the schema declares and the code ignores is decorative.**
+    ///
+    /// `minimum: 1, maximum: 100` were both advertised and both clamped, so
+    /// asking for 100,000 returned 100 and asking for 0 returned one — neither
+    /// what was requested, neither reported. A caller that receives fewer rows
+    /// than it asked for and no error draws the wrong conclusion about the
+    /// corpus.
+    #[test]
+    fn a_limit_outside_the_advertised_bounds_is_refused_not_quietly_adjusted() {
+        let (_d, s) = corpus(&[doc("a.md", "needle", true)]);
+        for bad in [json!(0), json!(100_000)] {
+            let out = call(&s, "search", json!({ "query": "needle", "limit": bad }));
+            assert_eq!(
+                out["result"]["isError"],
+                json!(true),
+                "limit {bad} was silently adjusted instead of refused"
+            );
+            let msg = out["result"]["content"][0]["text"].as_str().unwrap_or("");
+            assert!(
+                msg.contains("between 1 and"),
+                "the refusal must name the bounds: {msg}"
+            );
+        }
+    }
+
+    /// **`total` is what came back, not what exists.**
+    ///
+    /// A caller asking for N and receiving N cannot tell a corpus with exactly
+    /// N matches from one with thousands. "These are the results" and "these
+    /// are the first N" are different claims.
+    #[test]
+    fn a_full_page_says_there_may_be_more() {
+        let (_d, s) = corpus(&[
+            doc("a.md", "needle one", true),
+            doc("b.md", "needle two", true),
+        ]);
+        let full = payload(&call(
+            &s,
+            "search",
+            json!({ "query": "needle", "limit": 1 }),
+        ));
+        assert_eq!(full["total"], json!(1));
+        assert_eq!(
+            full["more_available"],
+            json!(true),
+            "a page that filled its limit must say so: {full}"
+        );
+
+        let all = payload(&call(
+            &s,
+            "search",
+            json!({ "query": "needle", "limit": 10 }),
+        ));
+        assert_eq!(
+            all["more_available"],
+            json!(false),
+            "a page with room to spare must not claim there is more: {all}"
+        );
+    }
 }

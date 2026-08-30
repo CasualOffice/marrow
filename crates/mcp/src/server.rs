@@ -145,11 +145,12 @@ impl Server {
                  the files themselves and matches punctuation exactly.",
             ));
         }
-        let limit = args
-            .get("limit")
-            .and_then(Value::as_u64)
-            .map(|n| (n as usize).clamp(1, MAX_LIMIT))
-            .unwrap_or(DEFAULT_LIMIT);
+        // Clamping silently made the schema's `minimum`/`maximum` decorative:
+        // `limit: 100000` returned 100 results and `limit: 0` returned one,
+        // neither of them what was asked for and neither of them said so. A
+        // caller that gets fewer rows than it asked for and no error draws the
+        // wrong conclusion about the corpus.
+        let limit = bounded_limit(args)?;
 
         // Filters go INTO the query, not onto its results. Filtering afterwards
         // means the index applies `limit` first and the filter then discards
@@ -207,6 +208,11 @@ impl Server {
             // asked of the index.
             "match": mode_name(mode),
             "total": results.len(),
+            // `total` is what came back, not what exists. Without this a caller
+            // asking for 20 and receiving 20 cannot tell a corpus with exactly
+            // twenty matches from one with thousands, and "these are the
+            // results" is a different claim from "these are the first twenty".
+            "more_available": results.len() == limit,
             "results": results,
         }))
     }
@@ -232,11 +238,7 @@ impl Server {
             return Err(bad("`pattern` is required and must not be empty."));
         }
         let flag = |k: &str| args.get(k).and_then(Value::as_bool).unwrap_or(false);
-        let limit = args
-            .get("limit")
-            .and_then(Value::as_u64)
-            .map(|n| (n as usize).clamp(1, MAX_LIMIT))
-            .unwrap_or(DEFAULT_LIMIT);
+        let limit = bounded_limit(args)?;
 
         let workspace = match args.get("workspace").and_then(Value::as_str) {
             Some(name) => Some(self.workspace_by_name(name)?),
@@ -455,12 +457,28 @@ impl Server {
             last = n;
         }
 
+        // **An empty read has two very different causes.** Asking for line 9,999
+        // of a 105-line file returned `content: ""` with `truncated: false`,
+        // which reads as "that region is blank" — so a model concludes the file
+        // has nothing there rather than that it asked past the end. Saying how
+        // long the file is turns a dead end into the next call.
+        let total_lines = body.lines().count();
+        let past_end = start > total_lines;
         Ok(json!({
             "path": path,
             "start_line": start,
             "end_line": last,
+            "total_lines": total_lines,
             "truncated": truncated,
             "content": text,
+            "note": if past_end {
+                Some(format!(
+                    "This file has {total_lines} lines, so there is nothing at line {start}. \
+                     Ask for a range inside it."
+                ))
+            } else {
+                None
+            },
         }))
     }
 
@@ -844,6 +862,29 @@ fn coverage(o: &marrow_index::LiteralOutcome, in_scope: usize) -> Value {
             "Every file in scope was read."
         },
     })
+}
+
+/// The caller's `limit`, refused rather than quietly adjusted.
+///
+/// The schema declares `minimum: 1, maximum: 100` and the code clamped, so both
+/// bounds were decorative: asking for 100,000 got 100 and asking for 0 got 1.
+/// Silently returning a different number of rows than requested is how a caller
+/// mistakes a truncated page for the whole answer.
+fn bounded_limit(args: &Value) -> Result<usize> {
+    let Some(raw) = args.get("limit") else {
+        return Ok(DEFAULT_LIMIT);
+    };
+    let Some(n) = raw.as_u64() else {
+        return Err(bad("`limit` must be a whole number."));
+    };
+    if n == 0 || n as usize > MAX_LIMIT {
+        return Err(bad(&format!(
+            "`limit` must be between 1 and {MAX_LIMIT}; {n} was asked for. A large \
+             limit fills the context window with excerpts and produces a worse \
+             answer than a small one."
+        )));
+    }
+    Ok(n as usize)
 }
 
 fn bad(msg: &str) -> marrow_core::Error {
