@@ -131,38 +131,109 @@ function Diagram({ source }: { source: string }) {
 }
 
 /**
+ * The last version of a source that stopped changing.
+ *
+ * Assigning `srcDoc` reloads the frame from scratch, so following the token
+ * stream directly would mean a hundred reloads of a document that is
+ * half-written in every one of them. Waiting for a pause costs a moment and
+ * buys a frame that renders a page the model has at least finished a thought
+ * in, once.
+ */
+function useQuiet(source: string, streaming: boolean): string {
+  const [quiet, setQuiet] = useState(streaming ? "" : source);
+  useEffect(() => {
+    if (!streaming) {
+      setQuiet(source);
+      return;
+    }
+    const t = window.setTimeout(() => setQuiet(source), 500);
+    return () => window.clearTimeout(t);
+  }, [source, streaming]);
+  return quiet;
+}
+
+/**
  * A generated page, shown without being trusted.
  *
  * `sandbox` without `allow-same-origin` gives the frame an opaque origin: no
  * access to this document, no cookies, no storage, no network under our
  * identity. Scripts are allowed because a page with none is not the thing the
  * user asked to see — but they run somewhere that cannot reach anything.
+ *
+ * The page leads, the markup follows. Someone who asked for a page wants to
+ * look at the page; opening on a wall of angle brackets makes them do the
+ * rendering in their head to find out whether the model understood them.
  */
-function Preview({ source }: { source: string }) {
-  const [open, setOpen] = useState(false);
-  const frame = useRef<HTMLIFrameElement>(null);
+function Preview({ source, streaming }: { source: string; streaming: boolean }) {
+  const [showSource, setShowSource] = useState(false);
+  const rendered = useQuiet(source, streaming);
+  const sourceEl = useRef<HTMLPreElement>(null);
+  /**
+   * Whether the source block is still where we put it. Anything that grows a
+   * scroller mid-stream can drag its offset along, and the user then meets the
+   * document at a random line in its middle. We put it back — but only while
+   * they have not scrolled it themselves, because overriding a deliberate
+   * scroll is the more annoying of the two failures.
+   */
+  const atTop = useRef(true);
+
+  useEffect(() => {
+    if (!showSource) {
+      atTop.current = true;
+      return;
+    }
+    const el = sourceEl.current;
+    if (el && atTop.current) el.scrollTop = 0;
+  }, [showSource, source, streaming]);
+
+  const lines = useMemo(() => source.split("\n").length, [source]);
 
   return (
     <figure className={styles.preview}>
       <figcaption className={styles.previewHead}>
-        <span>Generated page</span>
+        <div className={styles.previewTitle}>
+          <span>Generated page</span>
+          <span className={styles.previewSize}>
+            {lines} {lines === 1 ? "line" : "lines"} of HTML
+          </span>
+          <button
+            type="button"
+            className={styles.previewToggle}
+            onClick={() => setShowSource((s) => !s)}
+          >
+            {showSource ? "Run the page here" : "Show the HTML"}
+          </button>
+        </div>
+        {/* The isolation and the destination, stated. A preview that says
+            neither what it can reach nor where it will appear is a preview the
+            user has to guess about. */}
         <span className={styles.previewNote}>
-          runs isolated — no access to your files or this window
+          {showSource
+            ? "The HTML the model wrote. Run it to render the page below, sealed off from your files, your index and this window."
+            : "Running below in a sealed frame — no access to your files, your index or this window."}
         </span>
-        <button type="button" className={styles.previewToggle} onClick={() => setOpen((o) => !o)}>
-          {open ? "Show source" : "Run it"}
-        </button>
       </figcaption>
-      {open ? (
+      {showSource ? (
+        <pre
+          ref={sourceEl}
+          className={styles.previewSource}
+          onScroll={(e) => {
+            atTop.current = e.currentTarget.scrollTop === 0;
+          }}
+        >
+          {source}
+        </pre>
+      ) : rendered ? (
         <iframe
-          ref={frame}
           className={styles.previewFrame}
           title="Generated page"
           sandbox="allow-scripts"
-          srcDoc={source}
+          srcDoc={rendered}
         />
       ) : (
-        <pre className={styles.previewSource}>{source}</pre>
+        <div className={styles.previewPending} aria-busy="true">
+          Writing the page…
+        </div>
       )}
     </figure>
   );
@@ -225,7 +296,7 @@ export function Answer({
           case "mermaid":
             return <Diagram key={i} source={b.source} />;
           case "html":
-            return <Preview key={i} source={b.source} />;
+            return <Preview key={i} source={b.source} streaming={streaming} />;
         }
       })}
       {/* A caret while tokens are still arriving. It is the only motion on the

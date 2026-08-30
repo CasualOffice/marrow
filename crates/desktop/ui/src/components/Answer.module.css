@@ -193,21 +193,35 @@
 
 .previewHead {
   display: flex;
-  align-items: center;
-  gap: var(--sp-4);
-  padding: var(--sp-3) var(--sp-5);
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4) var(--sp-5);
   background: var(--sheet);
   box-shadow: var(--el1);
   font-size: var(--fs-xs);
   font-weight: 500;
 }
 
-/* The isolation, stated. A preview that does not say what it can reach is a
-   preview the user has to guess about. */
-.previewNote {
+.previewTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+}
+
+/* How much markup is behind the toggle, so the size of the thing is known
+   without having to look at it. */
+.previewSize {
   flex: 1;
   color: var(--fg3);
   font-weight: 400;
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+}
+
+.previewNote {
+  color: var(--fg3);
+  font-weight: 400;
+  line-height: var(--lh-body);
 }
 
 .previewToggle {
@@ -226,23 +240,53 @@
   background: var(--hover);
 }
 
+/* The two bodies are the same height, so switching between them moves the
+   toggle you just pressed nowhere and the answer below it does not jump. */
+.previewFrame,
+.previewSource,
+.previewPending {
+  height: 340px;
+}
+
 .previewFrame {
   display: block;
   width: 100%;
-  height: 260px;
   border: 0;
+  /* A generated page assumes a page's background and rarely sets one. The
+     literal is the paper it was written for, not a theme colour: rendering it
+     on a dark surface would show it as it will never be seen. */
   background: #fff;
 }
 
 .previewSource {
   margin: 0;
-  max-height: 260px;
   padding: var(--sp-5);
   background: var(--sunken);
   font-family: var(--mono);
   font-size: var(--fs-xs);
   line-height: var(--lh-body);
   overflow: auto;
+  /* The browser keeps a scroller's contents visually still as they grow, which
+     during a stream means silently scrolling away from the top. A document is
+     read from its first line; opting out is what keeps it there. */
+  overflow-anchor: none;
+}
+
+/* Streaming: the page is not renderable yet, and a blank white frame reads as
+   a page that failed rather than one still being written. */
+.previewPending {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sunken);
+  color: var(--fg3);
+  font-size: var(--fs-xs);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .previewPending {
+    animation: diagramPulse 1.4s var(--ease) infinite;
+  }
 }
 
 /* ── streaming ──────────────────────────────────────────────────────── */
