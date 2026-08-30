@@ -174,14 +174,20 @@ fn tokenize<'a>(src: &'a str, mut on: impl FnMut(Token<'a>) -> Result<()>) -> Re
                 let after_name = lt + 1 + name.len();
                 let close = end.saturating_sub(1).max(after_name);
                 let attrs = src.get(after_name..close).unwrap_or("");
-                let self_closing = attrs.trim_end().ends_with('/') || VOID.contains(&name);
-                if RAW.contains(&name) && !self_closing {
-                    // Skip the element's contents wholesale.
-                    let needle = format!("</{name}");
-                    i = src[end..]
-                        .to_ascii_lowercase()
-                        .find(&needle)
-                        .map(|p| tag_end(src, end + p))
+                // Case-insensitive membership. `name_at` returns the name as
+                // written, so an exact `contains` missed `<SCRIPT>` and
+                // `<STYLE>` entirely and indexed their bodies as prose -- and
+                // uppercase tags are exactly what a Word "Save as Web Page"
+                // export produces.
+                let self_closing = attrs.trim_end().ends_with('/') || is_one_of(VOID, name);
+                if is_one_of(RAW, name) && !self_closing {
+                    // Skip the element's contents wholesale, scanning in place.
+                    // Lowercasing the remainder of the document made this
+                    // quadratic: with one raw element per 15 bytes, a 4 MB file
+                    // took 16 s and a 50 MB one would take about three quarters
+                    // of an hour, allocating a copy of the tail each time.
+                    i = find_close(src, end, name)
+                        .map(|p| tag_end(src, p))
                         .unwrap_or(src.len());
                     continue;
                 }
@@ -218,6 +224,35 @@ fn tag_end(src: &str, lt: usize) -> usize {
         i += 1;
     }
     src.len()
+}
+
+/// Whether `name` is in `set`, ignoring ASCII case.
+///
+/// The sets hold lowercase names and `name_at` returns the name as written, so
+/// a plain `contains` silently disagreed with itself on `<SCRIPT>`.
+fn is_one_of(set: &[&str], name: &str) -> bool {
+    set.iter().any(|n| n.eq_ignore_ascii_case(name))
+}
+
+/// Byte offset of `</name` at or after `from`, ignoring ASCII case.
+///
+/// Scans in place. The previous version lowercased everything from `from` to
+/// the end of the document on *every* raw element, which is O(n*k) in the
+/// number of raw elements and allocates a fresh copy of the tail each time.
+fn find_close(src: &str, from: usize, name: &str) -> Option<usize> {
+    let b = src.as_bytes();
+    let n = name.as_bytes();
+    let mut i = from;
+    while i + 2 + n.len() <= b.len() {
+        if b[i] == b'<' && b[i + 1] == b'/' {
+            let candidate = &b[i + 2..i + 2 + n.len()];
+            if candidate.eq_ignore_ascii_case(n) {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
 }
 
 /// The lowercase-insensitive tag name at `at`. Returned as a slice of `src`, so
@@ -276,7 +311,17 @@ fn decode_entities(s: &str) -> String {
     while let Some(amp) = rest.find('&') {
         out.push_str(&rest[..amp]);
         let tail = &rest[amp..];
-        let Some(semi) = tail[..tail.len().min(12)].find(';') else {
+        // **Floored to a character boundary.** Slicing at a fixed byte offset
+        // panics whenever a multi-byte character straddles it, and the input is
+        // arbitrary web text: `Tom & Jerry café` is enough, because `é` starts
+        // at byte 11 of the tail and byte 12 lands inside it. An entity name is
+        // ASCII, so trimming back to the previous boundary can only shorten the
+        // window past the end of one, never hide a `;` that mattered.
+        let mut cap = tail.len().min(12);
+        while cap > 0 && !tail.is_char_boundary(cap) {
+            cap -= 1;
+        }
+        let Some(semi) = tail[..cap].find(';') else {
             out.push('&');
             rest = &tail[1..];
             continue;
@@ -400,8 +445,15 @@ impl<'a> Walker<'a> {
         // Collected first so the borrow of `self` in the callback does not
         // fight the mutation. The document is already in memory; the tokens are
         // ranges and short name slices, not copies of it.
+        //
+        // The budget is checked *here*, inside the callback. Checking only in
+        // the loop below meant the wall clock could never fire during
+        // tokenizing, so a pathological document ran to completion however long
+        // it took -- the one phase that most needed a deadline was the one
+        // phase that had none.
         let mut tokens: Vec<Token<'a>> = Vec::new();
         tokenize(self.src, |t| {
+            b.budget().check_time()?;
             tokens.push(t);
             Ok(())
         })?;
@@ -870,6 +922,15 @@ mod tests {
     use crate::budget::{BudgetGuard, Budgets};
     use crate::table::{tables_in, ColumnType, Reconstruction};
 
+    /// Every node's text, joined. What actually lands in the index.
+    fn all_text(a: &ParsedArtifact) -> String {
+        a.nodes
+            .iter()
+            .filter_map(|n| n.text())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     fn parse(src: &str) -> ParsedArtifact {
         let probe = FileProbe::new("page.html", src.len() as u64);
         HtmlParser
@@ -879,6 +940,64 @@ mod tests {
                 budget: BudgetGuard::new(Budgets::default()),
             })
             .expect("fixture must parse")
+    }
+
+    #[test]
+    fn an_ampersand_before_a_multi_byte_character_does_not_panic() {
+        // `decode_entities` looked for the `;` in a fixed 12-byte window after
+        // the `&`. "Tom & Jerry café" puts the é's first byte at exactly 12, so
+        // slicing there split a character and panicked -- on ordinary web prose
+        // with a stray ampersand, which is most of the web.
+        let a = parse("<html><body><p>Tom & Jerry caf\u{e9}</p></body></html>");
+        a.validate().unwrap();
+        assert!(
+            all_text(&a).contains("Tom & Jerry caf\u{e9}"),
+            "text was lost: {:?}",
+            all_text(&a)
+        );
+    }
+
+    #[test]
+    fn an_uppercase_script_body_is_not_indexed_as_prose() {
+        // `name_at` returns the name as written and the RAW set is lowercase,
+        // so an exact `contains` skipped `<script>` and indexed `<SCRIPT>`.
+        // Searching for a function name then hit every page that called it.
+        for (open, close) in [("SCRIPT", "SCRIPT"), ("Script", "script"), ("STYLE", "STYLE")] {
+            let src = format!(
+                "<html><body><p>keepme</p><{open}>secret_token_xyz</{close}></body></html>"
+            );
+            let a = parse(&src);
+            a.validate().unwrap();
+            assert!(all_text(&a).contains("keepme"), "prose was dropped for <{open}>");
+            assert!(
+                !all_text(&a).contains("secret_token_xyz"),
+                "<{open}> body was indexed as prose: {:?}",
+                all_text(&a)
+            );
+        }
+    }
+
+    #[test]
+    fn many_raw_elements_do_not_take_quadratic_time() {
+        // Skipping a raw element used to lowercase the whole remainder of the
+        // document, allocating a copy of the tail per element. At 4 MB with one
+        // script per 15 bytes that measured 16 s -- and `tokenize` ran to
+        // completion before anything checked the clock, so the budget could not
+        // stop it.
+        let src = format!(
+            "<html><body>{}</body></html>",
+            "<p>x</p><script>y</script>".repeat(40_000)
+        );
+        let started = std::time::Instant::now();
+        let a = parse(&src);
+        a.validate().unwrap();
+        let took = started.elapsed();
+        assert!(
+            took < std::time::Duration::from_secs(5),
+            "tokenizing {} bytes took {took:?}; the skip is quadratic again",
+            src.len()
+        );
+        assert!(!all_text(&a).contains('y'), "raw bodies leaked into the text");
     }
 
     #[test]
