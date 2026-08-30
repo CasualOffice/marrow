@@ -259,3 +259,33 @@ initialised from `default_profile(&machine)` at startup; `set_profile` writes
 only to that mutex. Choosing Efficient or LargerLocal survives until the next
 launch and then silently reverts to the hardware default — a setting that
 appears to work and undoes itself is worse than one that is not offered.
+
+
+---
+
+## Verified after the big index changes (2026-08-30)
+
+Reconciliation marked 53,814 files DELETED on the author's real index. Checked
+that nothing real was caught: of a 400-path sample, **240 still exist on disk
+and every one of them is inside a pruned or hidden directory** (`target/`,
+`.git/`, `node_modules/`, and so on). Zero real files were dropped.
+
+### But this exposes a gap worth naming
+
+**A file inside a pruned directory can no longer be indexed at all, and there is
+no per-root way to say otherwise.** The walk now defines the scope, which is
+what makes deletion detection possible — but `DEFAULT_NOISE_DIRS` is a constant,
+and D47 resolved that `.gitignore` respect should be *per-root policy*, defaulting
+on for roots that look like code. What shipped is a per-**run** `marrow index
+--gitignore` flag, off by default, with no column in `workspace_roots` to hold a
+per-root choice. So `watch` and the desktop can never honour it either.
+
+The consequence today is small — nobody has asked for a file in `vendor/` — but
+it is a real limit stated nowhere in the product: a folder the user genuinely
+wants indexed, that happens to be called `dist` or `build`, is silently invisible
+and will now also be actively marked deleted. D47's own measurement is the reason
+it matters: the noise list removes 62% of files on this corpus, so the exclusions
+are doing a great deal of work with no per-root override.
+
+Needs: a `walk_policy` column on `workspace_roots`, a way to see what a root
+excludes, and a way to override it. Not urgent; not invisible either.
