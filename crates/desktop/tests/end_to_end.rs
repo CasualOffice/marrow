@@ -72,8 +72,8 @@ fn indexed_corpus() -> (tempfile::TempDir, tempfile::TempDir, PathBuf) {
     let db_dir = tempfile::tempdir().expect("db dir");
     let db = db_dir.path().join("marrow.db");
 
-    let store = Store::open_with_migrations(db.clone(), &[marrow_index::fts5::MIGRATION])
-        .expect("open store");
+    let store =
+        Store::open_with_migrations(db.clone(), marrow_index::MIGRATIONS).expect("open store");
     let now = Timestamp::now();
     let ws = store
         .upsert_workspace(NewWorkspace {

@@ -9,6 +9,7 @@
 
 #![forbid(unsafe_code)]
 
+mod embed;
 mod literal;
 mod render;
 mod search;
@@ -103,6 +104,12 @@ enum Cmd {
         #[arg(short = 'w', long, requires = "literal")]
         whole_word: bool,
     },
+    /// Build semantic search over what is already indexed
+    ///
+    /// Needs the embedding model on disk. Keyword search never does — it works
+    /// with no model, no GPU and no network. This adds the meaning-based half
+    /// on top, and it is resumable: interrupt it and run it again.
+    Embed,
     /// Index health
     Status,
     /// Watch workspaces and index changes as they happen
@@ -218,7 +225,7 @@ fn data_dir() -> Result<PathBuf> {
 fn open_store() -> Result<Store> {
     Store::open_with_migrations(
         data_dir()?.join(marrow_store::DB_FILE_NAME),
-        &[marrow_index::fts5::MIGRATION],
+        marrow_index::MIGRATIONS,
     )
 }
 
@@ -269,6 +276,10 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
             }
             let index = marrow_index::Fts5Index::open(&store)?;
             search::run(&store, &index, &q, *limit, &roots, cli.json, style, out)
+        }
+        Cmd::Embed => {
+            let store = open_store()?;
+            embed::run(&store, &data_dir()?, style, out)
         }
         Cmd::Status => status(cli.json, style, out),
         Cmd::Watch { name } => watch(name.as_deref(), style, out),

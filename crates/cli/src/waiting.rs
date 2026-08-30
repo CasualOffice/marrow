@@ -40,9 +40,26 @@ const TICK: Duration = Duration::from_millis(100);
 /// second call is a no-op that logs.
 pub fn install_interrupt_handler() -> Cancel {
     let cancel = Cancel::new();
-    let armed = Arc::new(AtomicBool::new(false));
-
     let c = cancel.clone();
+    install(move || c.cancel());
+    cancel
+}
+
+/// The same, for the model runtime's cancellation token.
+///
+/// `marrow_ingest::Cancel` and `marrow_model::Cancel` are the same three lines
+/// in two crates that do not depend on each other. Collapsing them into
+/// `marrow-core` is worth doing; until then this is the seam, and it is one
+/// handler either way — `ctrlc::set_handler` may only be called once.
+pub fn install_model_interrupt_handler() -> marrow_model::Cancel {
+    let cancel = marrow_model::Cancel::new();
+    let c = cancel.clone();
+    install(move || c.cancel());
+    cancel
+}
+
+fn install(on_first_press: impl Fn() + Send + 'static) {
+    let armed = Arc::new(AtomicBool::new(false));
     let a = Arc::clone(&armed);
     let installed = ctrlc::set_handler(move || {
         if a.swap(true, Ordering::SeqCst) {
@@ -54,7 +71,7 @@ pub fn install_interrupt_handler() -> Cancel {
             std::io::stderr(),
             "\nstopping — finishing the current file, then leaving the index consistent"
         );
-        c.cancel();
+        on_first_press();
     });
 
     if installed.is_err() {
@@ -63,7 +80,6 @@ pub fn install_interrupt_handler() -> Cancel {
         // than pretending cancellation works.
         tracing::warn!("could not install a Ctrl-C handler; interrupt will terminate abruptly");
     }
-    cancel
 }
 
 /// A live counter the pipeline updates and the renderer reads.

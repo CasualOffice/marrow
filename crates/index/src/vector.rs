@@ -357,7 +357,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open_with_migrations(
             dir.path().join(marrow_store::DB_FILE_NAME),
-            &[crate::fts5::MIGRATION, MIGRATION],
+            crate::MIGRATIONS,
         )
         .unwrap();
         let now = Timestamp::now();

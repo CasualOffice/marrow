@@ -381,6 +381,19 @@ export interface ModelRow {
   readonly suspendedReason: string | null;
 }
 
+/** Whether semantic search is on, and how far along building it is. */
+export interface SemanticStatus {
+  /** True once an embedder has actually loaded. */
+  readonly ready: boolean;
+  readonly embedded: number;
+  readonly remaining: number;
+  readonly failed: number;
+  readonly running: boolean;
+  /** Why it is unavailable. `null` when it is fine. */
+  readonly problem: string | null;
+  readonly model: string | null;
+}
+
 export interface ModelsSnapshot {
   readonly machine: string;
   readonly tierHeadline: string;
@@ -392,6 +405,8 @@ export interface ModelsSnapshot {
   readonly thermal: string;
   /** True when the sampler has stopped reporting (HW-015). */
   readonly sampleStale: boolean;
+  /** How much of the index semantic search actually covers. */
+  readonly semantic: SemanticStatus;
   readonly residentBytes: number;
   /** Why the model directory is unusable, if it is (SUP-011). */
   readonly modelsDirProblem: string | null;
@@ -408,6 +423,21 @@ export interface ModelsSnapshot {
   /** The commands that would create a runtime. Named, because "MLX is not
    *  available" is a dead end and this is something the user can do. */
   readonly runtimeSetup: string | null;
+}
+
+/**
+ * Build semantic search over everything already indexed.
+ *
+ * Deliberately a button rather than something that happens on its own: it
+ * loads a model and runs for minutes. Keyword search never needs it — that is
+ * the half that works with no model, no GPU and no network.
+ */
+export function startSemanticBackfill(): Promise<ModelsSnapshot> {
+  return call<ModelsSnapshot>("start_semantic_backfill", {});
+}
+
+export function stopSemanticBackfill(): Promise<ModelsSnapshot> {
+  return call<ModelsSnapshot>("stop_semantic_backfill", {});
 }
 
 export function modelsOverview(): Promise<ModelsSnapshot> {

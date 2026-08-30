@@ -11,6 +11,23 @@ cargo clippy --workspace --all-targets -- -D warnings
 echo "→ test"
 cargo test --workspace
 
+# One migration chain, one list. `Store::compose` rejects a chain that is
+# unsorted, clashing or gapped, but a chain that merely stops early is
+# well-formed — so a composition root that names a subset of the extensions
+# compiles, passes its tests, and then refuses to open the database the other
+# root wrote. That shipped: the CLI passed `fts5::MIGRATION` alone, and every
+# `marrow search`, `marrow status` and `marrow mcp` against a real index died
+# with CFG_UNSUPPORTED_VERSION while the suite stayed green.
+echo "→ one migration chain"
+stray=$(grep -rn 'fts5::MIGRATION\|vector::MIGRATION' crates --include='*.rs' \
+        | grep -v '^crates/index/src/lib.rs:' | grep -v ':[0-9]*: *//' || true)
+if [ -n "$stray" ]; then
+    echo "  a migration chain is being assembled outside marrow_index::MIGRATIONS:" >&2
+    echo "$stray" >&2
+    exit 1
+fi
+echo "  ok"
+
 # Invariant tests are the ones that must never be allowed to rot (Part 6 §116.3).
 # Named explicitly so a rename or accidental #[ignore] shows up as a failure here
 # rather than silently reducing coverage.
@@ -103,6 +120,7 @@ the_line_can_never_leave_the_chunk_it_came_from
 the_answer_budget_is_what_the_window_has_left_not_a_flat_number
 a_long_prompt_shrinks_the_answer_but_never_below_a_usable_floor
 the_current_question_is_marked_and_earlier_ones_are_not
+the_migration_is_idempotent_and_records_its_version
 "
 missing=0
 for name in $INVARIANTS; do

@@ -16,6 +16,7 @@ marrow-store.workspace = true
 marrow-scan.workspace = true
 marrow-ingest.workspace = true
 marrow-index.workspace = true
+marrow-model.workspace = true
 marrow-mcp.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

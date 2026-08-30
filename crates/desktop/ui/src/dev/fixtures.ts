@@ -265,6 +265,17 @@ function devModels(): ModelsSnapshot {
     sustainedLoad: 0.31,
     thermal: "unknown",
     sampleStale: false,
+    // Part-built on purpose: the state worth looking at in dev is the one
+    // where coverage is neither 0 nor 100.
+    semantic: {
+      ready: true,
+      embedded: 12_400,
+      remaining: 42_287,
+      failed: 3,
+      running: false,
+      problem: null,
+      model: "EmbeddingGemma 300M",
+    },
     residentBytes: 0,
     modelsDirProblem: null,
     detected: [{ runtime: "Ollama", port: 11434, modelCount: 1 }],
@@ -626,6 +637,9 @@ export async function mockInvoke<T>(
       devProfile = String((args as { profile?: unknown }).profile ?? "balanced");
       return devModels() as T;
     }
+    case "start_semantic_backfill":
+    case "stop_semantic_backfill":
+      return devModels() as T;
     case "cancel_ask":
       return true as T;
     case "forget_conversation":

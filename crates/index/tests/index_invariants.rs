@@ -986,10 +986,7 @@ fn the_migration_is_idempotent_and_records_its_version() {
     let mut composed: Vec<i64> = marrow_store::migrate::MIGRATIONS
         .iter()
         .map(|m| m.version)
-        .chain([
-            fts5::MIGRATION.version,
-            marrow_index::vector::MIGRATION.version,
-        ])
+        .chain(marrow_index::MIGRATIONS.iter().map(|m| m.version))
         .collect();
     composed.sort_unstable();
     assert_eq!(
@@ -997,7 +994,13 @@ fn the_migration_is_idempotent_and_records_its_version() {
         (1..=composed.len() as i64).collect::<Vec<_>>(),
         "the composed migration chain must be contiguous from 1: {composed:?}"
     );
-    for m in [fts5::MIGRATION, marrow_index::vector::MIGRATION] {
+    assert_eq!(
+        composed.iter().copied().max(),
+        Some(marrow_index::SCHEMA_VERSION),
+        "SCHEMA_VERSION must be what the composed chain actually reaches, or a \
+         binary declares a version it does not write"
+    );
+    for m in marrow_index::MIGRATIONS.iter().copied() {
         assert!(
             !marrow_store::migrate::MIGRATIONS
                 .iter()

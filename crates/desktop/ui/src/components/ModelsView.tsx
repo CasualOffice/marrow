@@ -12,7 +12,7 @@
  * recommendation made at launch is wrong by the time it is acted on (LLM-019).
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import styles from "./ModelsView.module.css";
 import { cx } from "../lib/cx";
@@ -28,9 +28,12 @@ import {
   downloadModel,
   refreshModelDetection,
   setAiProfile,
+  startSemanticBackfill,
+  stopSemanticBackfill,
   type DownloadProgress,
   type ModelRow,
   type ModelState,
+  type SemanticStatus,
 } from "../api";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -381,6 +384,20 @@ export function ModelsView() {
     [client],
   );
 
+  const run = useCallback(
+    async (fn: () => Promise<typeof s>) => {
+      setBusy(true);
+      try {
+        client.setQueryData(["models"], await fn());
+      } catch (e) {
+        setActionError(asUiError(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [client],
+  );
+
   const rescan = useCallback(async () => {
     setBusy(true);
     try {
@@ -527,6 +544,13 @@ export function ModelsView() {
               ))}
             </section>
 
+            <Semantic
+              status={s.semantic}
+              busy={busy}
+              onStart={() => void run(startSemanticBackfill)}
+              onStop={() => void run(stopSemanticBackfill)}
+            />
+
             <section className={styles.section}>
               <h2 className={styles.heading}>Models</h2>
               <ul className={styles.cards}>
@@ -545,6 +569,141 @@ export function ModelsView() {
           </>
         )}
       </div>
+    </section>
+  );
+}
+
+/**
+ * How long the rest of the backfill will take, in words, or `null`.
+ *
+ * Measured here rather than guessed on the backend, from the figures two polls
+ * apart — the rate depends on the machine, what else it is doing, and how long
+ * the chunks are, so a constant baked into the app would be wrong everywhere
+ * except where it was measured. Before it has two samples it says nothing;
+ * `MEASURED_RATE` only carries the not-yet-running case, and it is labelled an
+ * estimate because that is what it is.
+ */
+function useEta(status: SemanticStatus): string | null {
+  // ~6.4 chunks/s, measured over a 54,687-chunk index with EmbeddingGemma 300M
+  // on an M4 Pro. Only used before the first two samples exist.
+  const MEASURED_RATE = 6.4;
+  const last = useRef<{ embedded: number; at: number } | null>(null);
+  const [rate, setRate] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!status.running) {
+      last.current = null;
+      setRate(null);
+      return;
+    }
+    const now = Date.now();
+    const prev = last.current;
+    last.current = { embedded: status.embedded, at: now };
+    if (!prev || now === prev.at) return;
+    const observed = ((status.embedded - prev.embedded) * 1000) / (now - prev.at);
+    if (observed <= 0) return;
+    // Smoothed, or the number jitters with every poll and reads as unreliable.
+    setRate((r) => (r === null ? observed : r * 0.7 + observed * 0.3));
+  }, [status.running, status.embedded]);
+
+  if (status.remaining === 0) return null;
+  const perSecond = rate ?? (status.running ? null : MEASURED_RATE);
+  if (!perSecond) return null;
+
+  const minutes = Math.ceil(status.remaining / perSecond / 60);
+  const when =
+    minutes < 2
+      ? "under a minute"
+      : minutes < 90
+        ? `about ${minutes} minutes`
+        : `about ${Math.round(minutes / 60)} hours`;
+  return status.running ? `${when} left.` : `Roughly ${when} on a machine like this.`;
+}
+
+/**
+ * Semantic search — built on demand, and honest about how much it covers.
+ *
+ * Deliberately a button rather than something that runs on its own. It loads a
+ * model and works for minutes, and keyword search is the half that must work
+ * with no model, no GPU and no network (hard rule 10) — so the meaning-based
+ * half is something the user turns on, not something that happens to them.
+ *
+ * The coverage figure is the point. A half-built index is not broken, but a
+ * user whose results are quietly worse than they will be in ten minutes, with
+ * nothing saying why, has no way to tell the two apart.
+ */
+function Semantic({
+  status,
+  busy,
+  onStart,
+  onStop,
+}: {
+  status: SemanticStatus;
+  busy: boolean;
+  onStart: () => void;
+  onStop: () => void;
+}) {
+  const total = status.embedded + status.remaining;
+  const pct = total > 0 ? Math.round((status.embedded / total) * 100) : 0;
+  const complete = total > 0 && status.remaining === 0;
+  const eta = useEta(status);
+
+  return (
+    <section className={styles.section}>
+      <div className={styles.headingRow}>
+        <h2 className={styles.heading}>Semantic search</h2>
+        <button
+          type="button"
+          className={styles.rescan}
+          onClick={status.running ? onStop : onStart}
+          disabled={busy || (complete && !status.running)}
+        >
+          {status.running ? "Stop" : complete ? "Built" : "Build"}
+        </button>
+      </div>
+
+      <p className={styles.lede}>
+        {complete
+          ? "Every chunk has a vector. Searches match on meaning as well as words."
+          : status.embedded === 0
+            ? "Not built. Search matches words exactly — which always works, with no model and no network. Building this adds matching on meaning."
+            : `Covers ${pct}% of what is indexed. The rest is still keyword-only.`}
+        {!complete && eta && ` ${eta}`}
+      </p>
+
+      {total > 0 && (
+        <div className={styles.progress}>
+          <div className={styles.bar}>
+            <div
+              className={cx(
+                styles.barFill,
+                complete && styles.barDone,
+                !status.running && !complete && styles.barStopped,
+              )}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <p className={styles.progressLine}>
+            <span className={styles.progressStage}>
+              {status.embedded.toLocaleString()} of {total.toLocaleString()} chunks
+            </span>
+            {status.model && <span>{status.model}</span>}
+            {status.failed > 0 && (
+              <span className={styles.progressFailed}>
+                {status.failed.toLocaleString()} skipped
+              </span>
+            )}
+          </p>
+        </div>
+      )}
+
+      {/* Never silent: "off" and "cannot run" look identical otherwise. */}
+      {status.problem && (
+        <p className={styles.blocked}>
+          <Icon name="warning" />
+          {status.problem}
+        </p>
+      )}
     </section>
   );
 }

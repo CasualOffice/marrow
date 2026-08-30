@@ -95,13 +95,7 @@ impl Core {
     pub fn open(path: std::path::PathBuf) -> Result<Self> {
         // The composition root assembles the migration chain: `index` depends
         // on `store`, so store cannot reference it back without a cycle.
-        let store = Store::open_with_migrations(
-            path,
-            &[
-                marrow_index::fts5::MIGRATION,
-                marrow_index::vector::MIGRATION,
-            ],
-        )?;
+        let store = Store::open_with_migrations(path, marrow_index::MIGRATIONS)?;
         let index = Fts5Index::open(&store)?;
         let vectors = marrow_index::SqliteVectorIndex::open(&store)?;
         Ok(Self {

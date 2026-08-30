@@ -95,11 +95,9 @@ fn setup() -> Fixture {
         std::fs::write(corpus.join(name), body).unwrap();
     }
 
-    let store = Store::open_with_migrations(
-        dir.path().join("marrow.sqlite"),
-        &[marrow_index::fts5::MIGRATION],
-    )
-    .unwrap();
+    let store =
+        Store::open_with_migrations(dir.path().join("marrow.sqlite"), marrow_index::MIGRATIONS)
+            .unwrap();
     let now = Timestamp::now();
     let ws = store
         .upsert_workspace(NewWorkspace {

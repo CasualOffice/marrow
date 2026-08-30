@@ -28,7 +28,7 @@ fn fixture() -> Fixture {
     let corpus = tempfile::tempdir().unwrap();
     let store = Store::open_with_migrations(
         dir.path().join(marrow_store::DB_FILE_NAME),
-        &[marrow_index::fts5::MIGRATION],
+        marrow_index::MIGRATIONS,
     )
     .unwrap();
     let now = Timestamp::now();

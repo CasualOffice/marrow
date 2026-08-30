@@ -289,6 +289,16 @@ Keeps every future door open, including relicensing your own code, and grants pa
 
 Not worth a separate tier for a single operator. See [Part 7 §129](docs/Part_7_Solo_Rescope.md).
 
+### D57 — Who assembles the migration chain? → **`marrow_index::MIGRATIONS`, never a composition root** *(settled 2026-08-30)*
+
+The chain is numbered across crates: `marrow-store` owns 1 and 3, `marrow-index` owns 2 and 4, and `marrow-index` depends on `marrow-store` so store cannot reference it back ([D3](#d3)). The binary composing them is right. The binary *enumerating* them is not.
+
+`Store::compose` validates thoroughly — it rejects an unsorted chain, two migrations claiming one version, and a gap. It cannot reject a chain that merely stops early, because `[1, 2, 3]` is a well-formed chain. So a root that names a subset of the extensions compiles, migrates cleanly, passes its tests, and then refuses to open the database the other root wrote.
+
+That shipped. The CLI passed `fts5::MIGRATION` alone and the desktop passed both, and every `marrow search`, `marrow status` and `marrow mcp` against a real index failed with `CFG_UNSUPPORTED_VERSION` — the MCP server, which is the whole M2 deliverable, was dead on the author's own machine. The suite stayed green because the e2e and MCP fixtures also built partial-chain databases: **they tested a schema no binary writes.**
+
+The rule: a crate that contributes migrations exports the complete list; composition roots pass that constant and nothing else; fixtures use it too, so a test database is the shape a real one is. `check.sh` fails if any file outside `crates/index/src/lib.rs` names an individual migration. Adding a migration is then one edit that reaches every binary.
+
 ### D-sandbox — Build an OS sandbox? → **No, never**
 
 A sandbox protects unknown users from a malicious model. You are the operator and run arbitrary shell all day. The reference implementation is reportedly ~17k lines. Structured argv and env allowlists stay — as bug prevention, not security controls.

@@ -15,11 +15,9 @@ use serde_json::{json, Value};
 /// from what ships.
 fn fixture() -> (tempfile::TempDir, Server) {
     let dir = tempfile::tempdir().unwrap();
-    let store = Store::open_with_migrations(
-        dir.path().join("marrow.sqlite"),
-        &[marrow_index::fts5::MIGRATION],
-    )
-    .unwrap();
+    let store =
+        Store::open_with_migrations(dir.path().join("marrow.sqlite"), marrow_index::MIGRATIONS)
+            .unwrap();
 
     let now = Timestamp::now();
     let ws = store

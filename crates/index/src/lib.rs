@@ -37,6 +37,29 @@ pub mod literal;
 pub mod port;
 pub mod vector;
 
+/// Every migration this crate contributes to the shared database.
+///
+/// **Composition roots must pass this, never a hand-written subset.** The
+/// chain is numbered across crates (`marrow-store` owns 1 and 3, this crate
+/// owns 2 and 4), and `Store::compose` rejects a chain that is unsorted, has a
+/// clash, or has a gap — but a chain that merely *stops early* is
+/// well-formed. `[1, 2, 3]` is a perfectly valid chain; it is also a build
+/// that declares v3 and refuses to open the v4 database another root wrote.
+///
+/// That is not hypothetical. The CLI passed `fts5::MIGRATION` alone while the
+/// desktop passed both, so every `marrow search`, `marrow status` and
+/// `marrow mcp` against a real index failed with
+/// `CFG_UNSUPPORTED_VERSION`. One list is the fix: adding a migration here
+/// reaches every binary at once.
+pub const MIGRATIONS: &[marrow_store::migrate::Migration] = &[fts5::MIGRATION, vector::MIGRATION];
+
+/// The version a database is at once [`MIGRATIONS`] has been applied over
+/// `marrow-store`'s chain.
+///
+/// Distinct from [`marrow_core::SCHEMA_VERSION`], which is only what
+/// `marrow-store` alone would apply.
+pub const SCHEMA_VERSION: i64 = 4;
+
 pub use fts5::{Fts5Index, StoreChunkSource};
 pub use literal::{
     literal_search, CaseMode, LiteralHit, LiteralOutcome, LiteralQuery, LiteralTarget, PatternKind,

@@ -166,6 +166,13 @@ find ~ -flags dataless 2>/dev/null | wc -l
   files" plus the reason it stopped
 - [ ] `search_literal` over MCP — the CLI proves the wiring; the tool is not
   exposed yet
+- [x] **The CLI and MCP could not open a real index at all** until the migration
+  chain was unified. The composition roots had drifted: the CLI passed
+  `fts5::MIGRATION` alone (chain to v3) while the desktop passed both (v4), so
+  every `marrow search`, `marrow status` and `marrow mcp` against the app's own
+  database died with `CFG_UNSUPPORTED_VERSION`. One exported
+  `marrow_index::MIGRATIONS`, both roots on it, a `check.sh` guard, and
+  `SCHEMA_VERSION` pinned to what the chain actually reaches
 - [x] `marrow-query` landed (32 tests) — read path: RRF fusion shape, FI read model, explain
 - [x] Swapped MCP's and desktop's hand-rolled SQL onto `marrow_query::catalog`.
   Both had their own workspace listing and index status, and `roots()` was
@@ -291,6 +298,13 @@ nobody is asking.
 - [ ] Content-addressed embedding cache
 - [ ] RRF fusion; weights in config, not code
 - [ ] `search --explain`
+- [x] `marrow embed` — builds semantic search over what is already indexed.
+  Separate from `index` on purpose: indexing must work with no model, no GPU
+  and no network, so the meaning-based half is a thing you turn on. Resumable;
+  interrupting it keeps what it embedded
+- [x] Semantic section on the Models page — coverage, the model, Build/Stop,
+  and a measured estimate of how long the rest will take.
+  `start_semantic_backfill` had existed as a command with nothing calling it
 - [ ] Golden query set from your own queries (~30 to start)
 - [ ] Regression check wired into CI
 
@@ -374,6 +388,8 @@ Short entries. What shipped, what surprised you, what changed.
 
 | Date | Entry |
 |---|---|
+| 2026-08-30 | **The CLI and the MCP server could not open the app's own index, and the suite was green.** Two composition roots assembled the migration chain by hand and drifted — the CLI to v3, the desktop to v4 — so `marrow search`, `marrow status` and `marrow mcp` all died with `CFG_UNSUPPORTED_VERSION` against a real database. `Store::compose` rejects a chain that is unsorted, clashing or gapped, but one that merely *stops early* is well-formed, so nothing caught it. The tests missed it because the e2e and MCP fixtures built their own partial-chain databases: they tested a shape no binary writes. Fixed with one exported `marrow_index::MIGRATIONS`, both roots and every fixture on it, and a `check.sh` guard that fails if any file assembles a chain itself. Found by running `marrow embed` against the real index — not by a test. |
+| 2026-08-30 | **Semantic search was built, tested, and doing nothing.** 54,687 chunks, 0 vectors: `SemanticStatus` was in the Models snapshot and the UI never read it, and `start_semantic_backfill` was a registered command with no caller. Added `marrow embed` and the Models-page control. Measured on the real corpus: **6.4 chunks/s**, so a 35,134-file index is a ~2¼-hour build — which is exactly why the page now says so before you press the button rather than after. |
 | 2026-08-30 | Spec complete (7 parts). Re-scoped for solo/open-source in Part 7. Repo initialised. M0 started. |
 | 2026-08-30 | Named **Marrow** (D45). Docs renamed `Part_N_*.md`. Crate namespace left open as D46. |
 | 2026-08-30 | Reclaimed **64 GB** of Rust `target/` output (14→78 GB free). Build artifacts were 6.6× the entire knowledge corpus. M0 F11 superseded. |
