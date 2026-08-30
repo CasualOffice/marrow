@@ -41,13 +41,12 @@ $ marrow watch                                        # keep the index fresh
 $ marrow mcp                                          # serve the index to Claude Code
 ```
 
-Plus the desktop app, which is where Ask lives: a question answered by a local
-model, from retrieved chunks, with clickable citations.
+Plus the desktop app, which is where Ask lives: a question answered from
+retrieved chunks with clickable citations, conversations that survive a quit,
+and a file you can drag onto the window and ask about immediately.
 
-Plus the desktop app: conversations that survive a quit, drag a file in and ask
-about it immediately, and a `read_table` MCP tool that hands an agent a grid —
-rows, typed values, and the cell each one came from — rather than a wall of
-delimiters.
+And a `read_table` MCP tool that hands an agent a grid — rows, typed values, and
+the cell each one came from — rather than a wall of delimiters.
 
 ### Still to come
 
