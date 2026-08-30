@@ -583,6 +583,13 @@ fn merge_spans(a: &SourceSpan, b: &SourceSpan) -> SourceSpan {
                 end: (*e1).max(*e2),
             }
         }
+        // A band of a worksheet cites the block of cells it was built from —
+        // `Sheet1!A2:D41` — which is a real address, unlike the union of two
+        // ranges on different sheets. `union_cells` returns `None` for that
+        // case and the first span stands: narrow, never wrong.
+        (SourceSpan::Cells { .. }, SourceSpan::Cells { .. }) => {
+            crate::a1::union_cells(a, b).unwrap_or_else(|| a.clone())
+        }
         _ => a.clone(),
     }
 }

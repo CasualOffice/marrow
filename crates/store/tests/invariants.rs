@@ -641,6 +641,7 @@ fn sample_tables(version: marrow_core::VersionId) -> Vec<read::NewTable> {
         raw_text: text.to_owned(),
         typed_value: typed.map(str::to_owned),
         value_type: Some(ty.to_owned()),
+        formula: None,
         cell_span: format!(r#"{{"bytes":{{"start":{row},"end":{}}}}}"#, row + 1),
         confidence: 1.0,
     };

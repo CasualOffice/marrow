@@ -1459,6 +1459,9 @@ pub struct NewCell {
     pub raw_text: String,
     pub typed_value: Option<String>,
     pub value_type: Option<String>,
+    /// **TBL-007 / PAR-007.** The formula the cell's value was computed from,
+    /// as written. `None` for a literal and for every format without formulas.
+    pub formula: Option<String>,
     pub cell_span: String,
     pub confidence: f64,
 }
@@ -1492,8 +1495,8 @@ pub fn replace_tables(conn: &Connection, version_id: VersionId, tables: &[NewTab
         .prepare_cached(
             "INSERT INTO table_cells
                 (cell_id, table_id, row_idx, col_idx, rowspan, colspan,
-                 raw_text, typed_value, value_type, cell_span, confidence)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                 raw_text, typed_value, value_type, formula, cell_span, confidence)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         )
         .map_err(|e| crate::map_sqlite(e, "preparing table cell insert"))?;
 
@@ -1531,6 +1534,7 @@ pub fn replace_tables(conn: &Connection, version_id: VersionId, tables: &[NewTab
                     c.raw_text,
                     c.typed_value,
                     c.value_type,
+                    c.formula,
                     c.cell_span,
                     c.confidence,
                 ])
@@ -1605,6 +1609,7 @@ pub struct CellRow {
     pub raw_text: String,
     pub typed_value: Option<String>,
     pub value_type: Option<String>,
+    pub formula: Option<String>,
     pub cell_span: String,
     pub confidence: f64,
 }
@@ -1614,7 +1619,7 @@ pub fn cells_for(conn: &Connection, table_id: &str) -> Result<Vec<CellRow>> {
     let mut stmt = conn
         .prepare_cached(
             "SELECT row_idx, col_idx, rowspan, colspan, raw_text, typed_value,
-                    value_type, cell_span, confidence
+                    value_type, formula, cell_span, confidence
              FROM table_cells WHERE table_id = ?1 ORDER BY row_idx, col_idx",
         )
         .map_err(|e| crate::map_sqlite(e, "preparing the cell query"))?;
@@ -1628,8 +1633,9 @@ pub fn cells_for(conn: &Connection, table_id: &str) -> Result<Vec<CellRow>> {
                 raw_text: r.get(4)?,
                 typed_value: r.get(5)?,
                 value_type: r.get(6)?,
-                cell_span: r.get(7)?,
-                confidence: r.get(8)?,
+                formula: r.get(7)?,
+                cell_span: r.get(8)?,
+                confidence: r.get(9)?,
             })
         })
         .map_err(|e| crate::map_sqlite(e, "reading table cells"))?;

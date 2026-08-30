@@ -16,6 +16,8 @@
 //!        ├── csv::CsvParser           T1  table / row / cell
 //!        ├── text::TextParser         T1  the catch-all, byte + line spans
 //!        ├── pdf::PdfParser           T2  PDFKit, page + bbox
+//!        ├── xlsx::XlsxParser         T2  calamine, sheet + cell ref
+//!        ├── docx::DocxParser         T2  OOXML, XML path
 //!        ├── image::ImageParser       T4  Vision OCR, page 1 + bbox
 //!        │
 //!        └── (nothing matched)   →   ParsedArtifact::metadata_only()   T5
@@ -57,16 +59,19 @@
 //!
 //! # What this crate deliberately does not parse
 //!
-//! XLSX, DOCX, audio and video. They route to the metadata-only terminal, which
-//! is a correct answer rather than a gap: PAR-013 makes a file with no parser
-//! discoverable.
+//! PPTX, ODS/ODT, audio and video. They route to the metadata-only terminal,
+//! which is a correct answer rather than a gap: PAR-013 makes a file with no
+//! parser discoverable.
 //!
-//! Two entries left this list. PDF was D4 — fourteen files in the whole home
+//! Four entries left this list. PDF was D4 — fourteen files in the whole home
 //! directory, deferred indefinitely — and [`pdf`] reads it now. Images were
 //! M0 F6 — "EXIF is the whole image story" — and that turned out to be true of
 //! photographs and false of everything else: a screenshot of an error, a
 //! photographed whiteboard and a diagram exported to PNG are documents stored
 //! as pixels, and [`image`] reads them through the OS's own recogniser (D13).
+//! XLSX and DOCX left with the Table IR: §99 makes a number in a table the
+//! thing a large share of factual questions turn on, and a workbook that is
+//! only findable by its filename answers none of them.
 
 // Not `forbid`: `pdf` calls PDFKit and `image` calls Vision, both of which are
 // Objective-C and therefore unsafe by definition. The alternative in each case
@@ -78,27 +83,32 @@
 #![deny(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
+pub mod a1;
 pub mod budget;
 pub mod chunk;
 pub mod code;
 pub mod csv;
 pub mod decode;
+pub mod docx;
 pub mod html;
 pub mod image;
 pub mod ir;
 pub mod markdown;
+pub mod ooxml;
 pub mod parser;
 pub mod pdf;
 pub mod router;
 pub mod structured;
 pub mod table;
 pub mod text;
+pub mod xlsx;
 
 pub use budget::{BudgetGuard, Budgets};
 pub use chunk::{chunk, Chunk, ChunkKind, ChunkPolicy, CHUNKER_VERSION};
 pub use code::{CodeParser, Lang};
 pub use csv::CsvParser;
 pub use decode::Decoded;
+pub use docx::DocxParser;
 pub use html::HtmlParser;
 pub use image::ImageParser;
 pub use ir::{
@@ -109,8 +119,11 @@ pub use markdown::MarkdownParser;
 pub use parser::{ContentParser, FileProbe, ParseInput};
 pub use router::ParserRouter;
 pub use structured::StructuredParser;
-pub use table::{tables_in, CellValue, ColumnType, Header, Reconstruction, TableCell, TableIr};
+pub use table::{
+    tables_in, CellValue, ColumnType, Header, NamedRange, Reconstruction, TableCell, TableIr,
+};
 pub use text::TextParser;
+pub use xlsx::XlsxParser;
 
 /// Parse one file's bytes with the default chain and the default budgets.
 ///

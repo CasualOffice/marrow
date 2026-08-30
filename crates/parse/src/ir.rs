@@ -142,6 +142,14 @@ pub enum IrKind {
     TableRow,
     /// One cell. Carries the cell's text.
     TableCell,
+    /// A workbook-defined name and the range it points at (TBL-007, PAR-007).
+    /// Carries the reference text; the name is in [`NodeAttrs::name`].
+    ///
+    /// A node kind rather than a field on the table, because a named range is
+    /// a thing the file says — `Revenue = Sheet1!$B$2:$B$10` — with its own
+    /// location, and TBL-012 wants it matched by lexical search like a symbol.
+    /// Both of those want a node.
+    NamedRange,
     /// A hyperlink; target in [`NodeAttrs::url`].
     Link,
     /// An HTML/source comment.
@@ -166,6 +174,7 @@ impl IrKind {
             IrKind::Table => "TABLE",
             IrKind::TableRow => "TABLE_ROW",
             IrKind::TableCell => "TABLE_CELL",
+            IrKind::NamedRange => "NAMED_RANGE",
             IrKind::Link => "LINK",
             IrKind::Comment => "COMMENT",
             IrKind::FrontMatter => "FRONT_MATTER",
@@ -232,6 +241,13 @@ pub struct NodeAttrs {
     pub colspan: Option<u32>,
     /// Column header for this cell, when the table has one.
     pub column_name: Option<String>,
+    /// The formula a cell computes its value from, as written — `=SUM(B2:B9)`
+    /// (TBL-007, PAR-007). `None` for a literal cell and for every format that
+    /// has no formulas, which is all of them except XLSX.
+    ///
+    /// Lifted from the file, so untrusted like any other cell text: a formula
+    /// is a string somebody wrote, and nothing here evaluates it.
+    pub formula: Option<String>,
     /// 1-based inclusive line range. Companion to a `Bytes` span, per the note
     /// on [`SourceSpan::Lines`] — a node carries one span, and the byte range is
     /// the one that has to be exact, so lines ride along here.

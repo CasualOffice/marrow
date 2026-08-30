@@ -31,6 +31,9 @@ const NOT_TEXT: &[&str] = &[
     "ttf", "otf", "woff", "woff2", "eot", //
     // documents owned by T2/T3 when they exist
     "pdf", "docx", "xlsx", "pptx", "doc", "xls", "ppt", "odt", "ods", "epub", "rtf", //
+    // the macro-enabled OOXML variants, added with the T2 parsers that own
+    // them: a `.docm` decoded as text is a page of zip noise, not a document
+    "docm", "xlsm", "pptm", //
     // archives and binaries
     "zip", "gz", "bz2", "xz", "zst", "tar", "7z", "rar", "dmg", "pkg", "so", "dylib", "a", "o",
     "exe", "dll", "class", "jar", "wasm", "bin", "db", "sqlite", "sqlite3", //

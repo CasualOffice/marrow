@@ -162,6 +162,10 @@ fn tables_for(
                         raw_text: c.raw_text.clone(),
                         typed_value: c.typed_value(),
                         value_type: Some(c.value_type.as_str().to_string()),
+                        // TBL-007. The column has existed since migration 6 and
+                        // was unwritten because nothing produced a formula;
+                        // XLSX now does.
+                        formula: c.formula.clone(),
                         // TBL-002.
                         cell_span: span_json(&c.span)?,
                         confidence: c.confidence as f64,

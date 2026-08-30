@@ -12,7 +12,11 @@
 //! because three parsers were each careful.
 //!
 //! It also means header detection, type inference and chunking are written
-//! once. When XLSX lands it inherits all three by emitting the same nodes.
+//! once. XLSX and DOCX inherit all three by emitting the same nodes — and that
+//! claim was tested rather than asserted: neither [`crate::xlsx`] nor
+//! [`crate::docx`] contains a line of header logic or a type classifier, and
+//! the only thing that had to grow to admit them was the cell struct, by two
+//! fields the text formats leave `None`.
 //!
 //! # Spans (TBL-002)
 //!
@@ -24,11 +28,21 @@
 //! | CSV / TSV | [`SourceSpan::Bytes`] | A delimited file is text. The bytes are the cell as the user would see it in an editor, and there is no sheet to name. §99.5 says "EXACT — byte range". |
 //! | Markdown | [`SourceSpan::Bytes`] | Same: a `.md` table is a run of characters in a text file. |
 //! | HTML | [`SourceSpan::Bytes`] | The `<td>`'s inner range. A DOM path would be a coordinate we invented; the byte range is one the file actually has. |
+//! | **XLSX** | [`SourceSpan::Cells`] | `Sheet1!B4` is the address the *file itself* uses. Excel's box takes it, the formulas in the workbook are written in it, and the user already thinks in it. |
+//! | **DOCX** | [`SourceSpan::XPath`] | A `.docx` is deflated XML inside a zip. A byte offset would index a decompressed stream that exists nowhere on disk — there is no editor position it resolves to. The element path is a real address in a tree the file really has. |
 //!
-//! [`SourceSpan::Cells`] is deliberately *not* used for any of these. It names
-//! a sheet and an A1 range, which is a real address in a workbook and a fiction
-//! anywhere else — a citation should resolve to something the user can be taken
-//! to, and "Sheet1!B4" of a CSV is not that. It waits for XLSX.
+//! [`SourceSpan::Cells`] was deliberately unused until XLSX, and the reason is
+//! the same reason XLSX earns it: it names a sheet and an A1 range, which is a
+//! true address in a workbook and a fiction anywhere else. A citation has to
+//! resolve to something the user can be taken to, and "Sheet1!B4" of a CSV is
+//! not that — the CSV has no B4, it has bytes 137..139. The rule is not "use
+//! the richest variant available", it is "use the coordinate system the source
+//! is actually written in".
+//!
+//! DOCX is the same rule reaching the opposite conclusion from HTML. HTML has
+//! byte offsets that a person can act on, so a DOM path there would be an
+//! invention; DOCX has no such offsets at all, so the XML path is not the
+//! second-best answer but the only true one.
 //!
 //! A ragged row leaves a hole in the grid. The hole stays a hole: synthesising
 //! a cell for it would mean synthesising a location, which is the one thing
@@ -45,10 +59,16 @@ use crate::ir::{IrKind, ParsedArtifact};
 
 /// What a column's values turned out to be (TBL-005).
 ///
-/// A subset of §99.2's list. `enum` and `formula` are not here: the first needs
-/// a cardinality policy nothing has asked for yet, and the second needs a
-/// formula-bearing source, which is XLSX. Adding either is one variant and one
-/// classifier arm when a real file wants it.
+/// A subset of §99.2's list. `enum` is not here: it needs a cardinality policy
+/// nothing has asked for yet.
+///
+/// `formula` is not here either, and XLSX arriving is what settled that. §99.2
+/// lists it as a *column* type, but a formula column still holds numbers —
+/// `=B2*C2` down a price column is a decimal column whose cells happen to be
+/// computed — and typing it `formula` would take the one fact §99.3's
+/// arithmetic needs and replace it with the fact that it was calculated. So the
+/// formula lives on the cell ([`TableCell::formula`]) beside the type rather
+/// than instead of it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ColumnType {
     /// Every value in the column was blank.
@@ -150,6 +170,16 @@ pub struct TableCell {
     /// TBL-013. 1.0 for anything read from bytes; below that only where reading
     /// the text was itself a guess (OCR).
     pub confidence: f32,
+    /// **TBL-007 / PAR-007.** The formula this cell's value was computed from,
+    /// as written. `None` for a literal, and for every format that has no
+    /// formulas.
+    ///
+    /// [`TableCell::raw_text`] is unaffected: it stays the *cached result*,
+    /// because that is what the cell shows and what §99.3 computes over. The
+    /// formula is the provenance of the number, not a substitute for it — a
+    /// column of `=SUM(...)` that reported its text as `=SUM(...)` would be a
+    /// column of strings, and every numeric question against it would fail.
+    pub formula: Option<String>,
 }
 
 impl TableCell {
@@ -170,6 +200,30 @@ impl TableCell {
             CellValue::Timestamp | CellValue::Identifier => Some(self.raw_text.trim().to_owned()),
         }
     }
+}
+
+/// A name the workbook gives to a range (**TBL-007**, PAR-007).
+///
+/// §99.2 files named ranges under `relations`, alongside formula dependencies
+/// and cross-sheet references. Only this half is built: the *declared*
+/// relations, which the file states outright. A resolved dependency graph — B7
+/// reads B2:B6, this sheet reads that one — is derivable from
+/// [`TableCell::formula`] and is deliberately not derived here. It would be an
+/// index with nowhere to live (no `table_relations` table exists) and it is the
+/// first step of the knowledge graph [D43] refused until three real questions
+/// ask for it. The formula string is the record; resolving it is a later
+/// decision, not a lost one.
+///
+/// [D43]: ../../../DECISIONS.md
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NamedRange {
+    /// The defined name, e.g. `Revenue`. Lifted from the file.
+    pub name: String,
+    /// The reference exactly as the workbook wrote it, e.g. `Sheet1!$B$2:$B$10`.
+    pub target: String,
+    /// Where it points, resolved to a [`SourceSpan::Cells`] the citation layer
+    /// can navigate to.
+    pub span: SourceSpan,
 }
 
 /// A cell that covers more than its own square (TBL-004).
@@ -251,6 +305,8 @@ pub struct TableIr {
     /// the wrong table is worse than none.
     pub caption: Option<String>,
     pub merged_regions: Vec<MergedRegion>,
+    /// TBL-007. Empty for every source that has no such concept.
+    pub named_ranges: Vec<NamedRange>,
     /// Row-major, ascending. Holes are absent, never synthesised.
     pub cells: Vec<TableCell>,
     pub provenance: ProvenanceClass,
@@ -326,6 +382,7 @@ fn build(artifact: &ParsedArtifact, table_idx: usize) -> TableIr {
     // `None` rather than a guess.
     let mut caption = None;
     let mut cells: Vec<TableCell> = Vec::new();
+    let mut named_ranges: Vec<NamedRange> = Vec::new();
 
     for (i, n) in artifact.nodes.iter().enumerate() {
         if i == table_idx || !owned[i] {
@@ -334,6 +391,12 @@ fn build(artifact: &ParsedArtifact, table_idx: usize) -> TableIr {
         match n.kind {
             IrKind::TableCell => {
                 let raw = n.text().unwrap_or_default().to_owned();
+                // **The inheritance point.** Every source's cell arrives here as
+                // text and is classified by the same function. XLSX hands over a
+                // value it already knew the type of; re-deriving it from the
+                // text is what keeps TBL-001 true, and the two agree because the
+                // parser's job is to render the value honestly rather than to
+                // pre-empt this.
                 let (value_type, value) = classify(&raw);
                 cells.push(TableCell {
                     row: n.attrs.row.unwrap_or(0),
@@ -345,7 +408,17 @@ fn build(artifact: &ParsedArtifact, table_idx: usize) -> TableIr {
                     value_type,
                     span: n.span.clone(),
                     confidence: n.attrs.confidence.unwrap_or(1.0),
+                    formula: n.attrs.formula.clone(),
                 });
+            }
+            IrKind::NamedRange => {
+                if let Some(name) = n.attrs.name.clone() {
+                    named_ranges.push(NamedRange {
+                        name,
+                        target: n.text().unwrap_or_default().to_owned(),
+                        span: n.span.clone(),
+                    });
+                }
             }
             IrKind::Paragraph if caption.is_none() && n.parent == Some(table_idx) => {
                 caption = n
@@ -356,6 +429,7 @@ fn build(artifact: &ParsedArtifact, table_idx: usize) -> TableIr {
             _ => {}
         }
     }
+    named_ranges.sort_by(|a, b| a.name.cmp(&b.name));
 
     cells.sort_by_key(|c| (c.row, c.col));
 
@@ -388,6 +462,7 @@ fn build(artifact: &ParsedArtifact, table_idx: usize) -> TableIr {
         column_types,
         caption,
         merged_regions,
+        named_ranges,
         cells,
         // The table can be no better than the parse it came out of, and can be
         // worse: a ragged grid is a degraded reading of exact bytes.
@@ -406,6 +481,8 @@ fn extraction_method(parser_id: &str) -> &'static str {
         "csv" => "native_delimited",
         "markdown" => "native_markdown",
         "html" => "native_html",
+        "xlsx" => "native_xlsx",
+        "docx" => "native_ooxml",
         _ => "native",
     }
 }
@@ -818,6 +895,17 @@ pub fn schema_text(t: &TableIr, caption_and_context: &str) -> String {
             None => {
                 let _ = writeln!(s, "- {name} ({})", ty.as_str());
             }
+        }
+    }
+    // TBL-012 wants named ranges matched exactly in lexical search, the way a
+    // symbol is. The schema chunk is where that lands without a second index:
+    // it is one chunk per table, it is already the chunk that describes shape
+    // rather than contents, and "which sheet has the Revenue range" is exactly
+    // a shape question.
+    if !t.named_ranges.is_empty() {
+        let _ = writeln!(s, "Named ranges:");
+        for r in &t.named_ranges {
+            let _ = writeln!(s, "- {} ({})", r.name, r.target);
         }
     }
     s

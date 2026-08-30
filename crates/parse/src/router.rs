@@ -76,10 +76,16 @@ impl ParserRouter {
         //    content. On a non-macOS build this refuses and the file stays
         //    findable by name.
         r.register(Box::new(crate::pdf::PdfParser));
-        // 7. Plain text — 449 files, and the T1 fallback for everything else
+        // 7. Workbooks and Word documents. T2, so `register`'s sort places
+        //    them after every T1 parser regardless of where they appear here —
+        //    which is correct but not load-bearing, because `text.rs` refuses
+        //    both extensions outright rather than decoding a zip as mojibake.
+        r.register(Box::new(crate::xlsx::XlsxParser));
+        r.register(Box::new(crate::docx::DocxParser));
+        // 8. Plain text — 449 files, and the T1 fallback for everything else
         //    that decodes.
         r.register(Box::new(crate::text::TextParser));
-        // 8. Images — T4, so `register`'s sort puts it after every parser
+        // 9. Images — T4, so `register`'s sort puts it after every parser
         //    above regardless of where it appears here. That is the right
         //    place: OCR is the most expensive parse in the crate and the only
         //    one whose output is a guess, so it must never win a file that

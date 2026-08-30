@@ -40,6 +40,26 @@ toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
 serde_json = { workspace = true }
 yaml-rust2 = "0.12"
 
+# XLSX (§99.5: "native, calamine-class"). Chosen for the one thing a hand-rolled
+# reader would have to reimplement badly: `xl/styles.xml` decides whether a
+# serial number is a date, and getting that wrong turns 45943 into a quantity.
+# No `dates` feature — that pulls `chrono` in only to format a date, and
+# `ExcelDateTime::to_ymd_hms_milli` already hands back the components.
+calamine = "0.36"
+
+# The OOXML container. Both formats are zips, and a zip from a user's disk is
+# untrusted input — see `ooxml.rs` for the ceilings. `deflate` only: an Office
+# part is deflated or stored, and bzip2/lzma/zstd/AES are attack surface for
+# codecs the format never uses. Version pinned to the one `calamine` resolves
+# so there is a single zip implementation in the tree.
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
+# DOCX. A streaming XML reader rather than a DOCX crate, for the same reason
+# `csv.rs` has no `csv` crate and `html.rs` has no tree builder: a document
+# model gives excellent nodes and no positions, and a DOCX cell's provenance
+# *is* its position in the XML tree. See `docx.rs`.
+quick-xml = "0.41"
+
 # No `csv` crate: `ByteRecord::range()` indexes the record's private buffer, not
 # the source, so cell provenance would have to be reconstructed anyway. See
 # `csv.rs` — a quote-aware splitter that yields source ranges directly is both
