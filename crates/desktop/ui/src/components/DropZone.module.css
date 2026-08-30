@@ -1,0 +1,95 @@
+/* The drop target.
+ *
+ * Covers the whole window rather than a rectangle inside it: the gesture is
+ * "onto Marrow", the OS delivers it that way, and a target the user has to aim
+ * at is a target they miss. Above the dialog layer because a drop is still a
+ * legitimate thing to do while the setup flow is up — that is where someone is
+ * most likely to try it.
+ */
+
+.scrim {
+  /* Fixed, not absolute: `.app` establishes no containing block, so an absolute
+     overlay would resolve against whatever happened to be positioned above it.
+     Above `--z-dialog` because dropping onto the setup flow is the most likely
+     place anyone will try it. */
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-toast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-8);
+  /* The canvas seen through a wash of the accent, so what is underneath stays
+     recognisable — an opaque cover would make it look like the window was
+     replaced rather than that something is being offered to it. */
+  background: var(--accent-soft);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  max-width: var(--card-measure);
+  padding: var(--sp-12) var(--sp-16);
+  text-align: center;
+  background: var(--sheet);
+  border-radius: var(--r-sheet);
+  box-shadow: var(--el3);
+  /* Dashed, and inside the shadow rather than instead of it: the dashes are
+     what says "an open target" rather than "a panel". */
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+}
+
+.glyph {
+  color: var(--accent-text);
+}
+
+.title {
+  margin: 0;
+  font-family: var(--tight);
+  font-size: var(--fs-head);
+  letter-spacing: var(--ls-tight);
+  color: var(--fg);
+}
+
+.detail {
+  margin: 0;
+  max-width: 46ch;
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  color: var(--fg2);
+}
+
+.alt {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--fg3);
+}
+
+/* While the copy runs the accent goes away: nothing is being offered any more,
+   something is happening. `--hover` is the neutral wash both themes already
+   define, so this needs no colour of its own. */
+.working {
+  background: var(--hover);
+}
+
+.working .panel {
+  outline: none;
+}
+
+.working .glyph {
+  color: var(--fg2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scrim {
+    backdrop-filter: none;
+  }
+}

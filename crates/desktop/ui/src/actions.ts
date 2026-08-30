@@ -4,9 +4,47 @@
  * keyboard equivalent" — enforced by there being nothing else to call).
  */
 
-import { addWorkspace, asUiError, openPath, reindex, revealPath } from "./api";
+import {
+  addFiles,
+  addWorkspace,
+  asUiError,
+  clearScratch,
+  openPath,
+  reindex,
+  revealPath,
+  type DropReport,
+} from "./api";
+import { SCRATCH_KEY } from "./queries";
+import { queryClient } from "./queryClient";
 import type { Anchor } from "./store";
 import { useUi } from "./store";
+
+/**
+ * Everything that changes when the set of indexed files changes.
+ *
+ * One list, called by every verb that adds or removes files, because a dropped
+ * file is simultaneously a new workspace, a new file row, a different count on
+ * Status, a different ranking and possibly a new project to scope to. Refetching
+ * only the panel that happens to be on screen leaves the other four showing the
+ * state from before — and the first-run flow reads two of them to decide
+ * whether its step 1 is done, so a stale answer there is the flow refusing to
+ * acknowledge what the user just did.
+ *
+ * `["files"]` and `["search"]` are key *prefixes*: those queries carry a
+ * workspace, a filter and a limit, and every variant of them is equally stale.
+ */
+export function refreshAfterIndexChange(): void {
+  for (const queryKey of [
+    ["workspaces"],
+    ["health"],
+    ["files"],
+    ["search"],
+    ["projects"],
+    SCRATCH_KEY,
+  ]) {
+    void queryClient.invalidateQueries({ queryKey });
+  }
+}
 
 /**
  * Copy the citation — `relativePath:line`, the form an editor linkifies.
@@ -97,7 +135,101 @@ export async function grantFolder(): Promise<void> {
   const { notify } = useUi.getState();
   try {
     const next = await addWorkspace();
-    if (next) notify("Indexing it now. It becomes searchable as it goes.");
+    if (next) {
+      // The list this returned is the truth as of now; writing it in beats
+      // waiting up to thirty seconds for the poll. The rest of the panels are
+      // invalidated rather than written, because this call does not know what
+      // they should say.
+      queryClient.setQueryData(["workspaces"], next);
+      refreshAfterIndexChange();
+      notify("Indexing it now. It becomes searchable as it goes.");
+    }
+  } catch (e) {
+    notify(asUiError(e).message);
+  }
+}
+
+/**
+ * What a drop did, in one sentence.
+ *
+ * Shared by the drop event, the file picker and the setup flow, because those
+ * three produce the same outcome and a user who drops a file should not read a
+ * different account of it than one who picked the same file from a panel.
+ *
+ * Every part of the report gets a clause, including the ones that are not
+ * successes: a file that was skipped, or an older copy that was evicted to make
+ * room, is exactly what the user needs to hear about and exactly what a
+ * summary is tempted to drop.
+ */
+export function describeDrop(r: DropReport): string {
+  const parts: string[] = [];
+  if (r.added.length === 1) parts.push(`Added ${r.added[0]}`);
+  else if (r.added.length > 1) parts.push(`Added ${r.added.length} files`);
+  if (r.alreadyThere.length > 0) {
+    parts.push(
+      r.alreadyThere.length === 1
+        ? `${r.alreadyThere[0]} was already there`
+        : `${r.alreadyThere.length} were already there`,
+    );
+  }
+  if (r.evicted.length > 0) {
+    parts.push(
+      `made room by removing ${r.evicted.length === 1 ? r.evicted[0] : `${r.evicted.length} older files`}`,
+    );
+  }
+  // The first refusal in full, because one clear reason is worth more than a
+  // count of reasons the user cannot see.
+  const first = r.skipped[0];
+  if (first) {
+    parts.push(
+      r.skipped.length === 1
+        ? `Skipped ${first.name} — ${first.reason}`
+        : `Skipped ${r.skipped.length} files. ${first.name}: ${first.reason}`,
+    );
+  }
+  if (parts.length === 0) return "Nothing was added.";
+  return `${parts.join(". ")}.`;
+}
+
+/**
+ * Copy files into the dropped-files workspace (`⌘O`).
+ *
+ * The keyboard half of dropping onto the window: a drop is a mouse gesture with
+ * no keyboard equivalent at all, and GUI §11 does not have an exception for
+ * gestures the OS invented.
+ */
+export async function pickFiles(): Promise<DropReport | null> {
+  const { notify } = useUi.getState();
+  try {
+    const report = await addFiles();
+    if (report) {
+      notify(describeDrop(report));
+      refreshAfterIndexChange();
+    }
+    return report;
+  } catch (e) {
+    notify(asUiError(e).message);
+    return null;
+  }
+}
+
+/**
+ * Throw away everything in the dropped-files workspace.
+ *
+ * Deletes copies Marrow made in a folder Marrow owns; the user's own files are
+ * never touched. Deliberately not confirmed with a dialog: what it removes is
+ * duplicated bytes, and the originals are wherever they came from.
+ */
+export async function emptyScratch(): Promise<void> {
+  const { notify } = useUi.getState();
+  try {
+    const r = await clearScratch();
+    refreshAfterIndexChange();
+    notify(
+      r.removed.length === 0
+        ? "There was nothing in the dropped-files folder."
+        : `Removed ${r.removed.length} ${r.removed.length === 1 ? "file" : "files"}. They are no longer searchable.`,
+    );
   } catch (e) {
     notify(asUiError(e).message);
   }

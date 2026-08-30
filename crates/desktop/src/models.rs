@@ -35,6 +35,8 @@ use marrow_model::worker::{MlxProvider, Runtime, Worker};
 use marrow_model::Embedder;
 use serde::Serialize;
 
+use crate::prefs;
+
 /// How often the machine is sampled while the app is open.
 ///
 /// Two seconds: fast enough that an admission decision is never made on a
@@ -322,7 +324,14 @@ impl Hub {
         let data_dir = models_dir.parent().unwrap_or(&models_dir).to_path_buf();
         let runtime = Runtime::discover(&data_dir, worker_script());
 
-        let profile = default_profile(&machine);
+        // What the user chose, if they ever did. `default_profile` is the
+        // fallback and not a stored value: the hardware default is allowed to
+        // move between builds, and it should keep moving for someone who has
+        // never expressed an opinion. An unreadable preferences file lands here
+        // too, silently — a corrupt preference must not stop the window opening.
+        let profile = prefs::load(&data_dir)
+            .ai_profile
+            .unwrap_or_else(|| default_profile(&machine));
         Self {
             runtime,
             data_dir,
@@ -504,6 +513,13 @@ impl Hub {
         // TIER-028: takes effect on the next request, never interrupting one
         // in flight. Nothing is in flight yet, but the ordering is the point.
         *self.profile.lock().ok()? = p;
+        // **And it survives the process.** This lived in the mutex and nowhere
+        // else, so a user who picked Efficient found Balanced waiting for them
+        // at the next launch — a control that appears to work and then quietly
+        // undoes itself, which is worse than one that is not offered. Written
+        // after the in-memory change, so a failure to persist costs the
+        // persistence and not the choice.
+        crate::prefs::set_ai_profile(&self.data_dir, p);
         Some(p)
     }
 

@@ -37,7 +37,7 @@ import { StateBadge, type StateTone } from "./Badges";
 import { ErrorNotice } from "./ErrorNotice";
 import { Icon } from "./Icon";
 import { useIndexHealth, useWorkspaces } from "../queries";
-import { runIndex, unavailable } from "../actions";
+import { pickFiles, runIndex, unavailable } from "../actions";
 import { addWorkspace, asUiError } from "../api";
 import { useUi } from "../store";
 import { useQueryClient } from "@tanstack/react-query";
@@ -55,6 +55,11 @@ interface Verdict {
  * workspace, and saying otherwise is the bug this page had.
  */
 function verdict(w: WorkspaceRow): Verdict {
+  // An empty scratch workspace is empty, not broken. The folder Marrow keeps
+  // dropped files in is *meant* to be empty until something is dropped, and
+  // after it is emptied — warning about the ordinary state of a thing is how
+  // this page earned its rewrite once already.
+  if (w.scratch && w.files === 0) return { tone: "ok", word: "empty" };
   if (w.files === 0) return { tone: "warn", word: "nothing indexed" };
   if (w.parseFailed > 0) return { tone: "warn", word: "parse failures" };
   if (w.notProcessed > 0) return { tone: "warn", word: "partly read" };
@@ -90,6 +95,7 @@ export function StatusView() {
   const rows = workspaces.data ?? [];
   const h = health.data;
   const notify = useUi((s) => s.notify);
+  const setSetupOpen = useUi((s) => s.setSetupOpen);
   const client = useQueryClient();
   const [adding, setAdding] = useState(false);
 
@@ -127,6 +133,33 @@ export function StatusView() {
           >
             <Icon name="folder" size={13} />
             {adding ? "Choosing…" : "Add a folder"}
+          </button>
+          {/* The keyboard half of dropping onto the window, and the only path
+              to indexing a single file that does not involve moving it first. */}
+          <button
+            type="button"
+            className={styles.add}
+            onClick={() => void pickFiles()}
+          >
+            <Icon name="file" size={13} />
+            Add files
+          </button>
+          {/*
+            The way back into the first-run flow.
+            The flow opens itself when there are no workspaces at all, and never
+            otherwise — so someone who skipped the model step, or who wants to
+            re-read what each step costs, needs a door. This is it, and it is an
+            ordinary focusable button rather than a shortcut, because a
+            shortcut that is the sole path to something is GUI §11 read
+            backwards.
+          */}
+          <button
+            type="button"
+            className={styles.add}
+            onClick={() => setSetupOpen(true)}
+          >
+            <Icon name="arrowRight" size={13} />
+            Set up Marrow
           </button>
         </div>
 
@@ -184,12 +217,15 @@ export function StatusView() {
                 </span>
               </div>
 
-              {(w.files === 0 ||
+              {((w.files === 0 && !w.scratch) ||
                 w.parseFailed > 0 ||
                 w.notProcessed > 0 ||
                 w.cloudOnly > 0) && (
                 <div className={styles.issues}>
-                  {w.files === 0 && (
+                  {/* Not for the dropped-files folder: empty is what it is
+                      supposed to be until something is dropped, and "run an
+                      index" would not put anything in it. */}
+                  {w.files === 0 && !w.scratch && (
                     <Issue
                       tone="warn"
                       title="Nothing in this workspace is indexed"

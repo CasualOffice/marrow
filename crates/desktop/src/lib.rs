@@ -12,6 +12,8 @@
 pub mod ask;
 pub mod commands;
 pub mod models;
+pub mod prefs;
+pub mod scratch;
 pub mod state;
 pub mod watching;
 

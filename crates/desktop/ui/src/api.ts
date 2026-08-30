@@ -136,6 +136,16 @@ export function search(query: string, limit: number): Promise<SearchResponse> {
 export interface WorkspaceRow {
   readonly name: string;
   readonly path: string;
+  /**
+   * The one workspace Marrow created for itself — where dropped files land.
+   *
+   * Two things in this window have to treat it differently, and both would
+   * otherwise be guessing from the name: the first-run flow asks whether the
+   * user has got anywhere yet, and an *empty* scratch folder is "empty" rather
+   * than the "nothing indexed" fault an empty granted folder is. Nothing else
+   * about it is special, deliberately.
+   */
+  readonly scratch: boolean;
   readonly files: number;
   /**
    * Per workspace, not global.
@@ -199,6 +209,148 @@ export interface IndexHealth {
  */
 export function addWorkspace(): Promise<readonly WorkspaceRow[] | null> {
   return call<readonly WorkspaceRow[] | null>("add_workspace", {});
+}
+
+/* ── dropped files ───────────────────────────────────────────────────────── */
+
+/** Mirrors `scratch::Skipped` — one file that did not make it in, and why. */
+export interface DropSkipped {
+  readonly name: string;
+  /** A code from the §108 taxonomy. Branch on this, never on the prose. */
+  readonly code: string;
+  readonly reason: string;
+}
+
+/** Mirrors `scratch::DropReport`. Nothing a drop did is silent. */
+export interface DropReport {
+  readonly added: readonly string[];
+  /** Already present with identical contents. Not a failure — dedup is a
+   *  feature — but the user asked for something and must be told what
+   *  happened. */
+  readonly alreadyThere: readonly string[];
+  readonly skipped: readonly DropSkipped[];
+  /** Older copies removed to stay under the folder's ceiling. Reported,
+   *  because an eviction nobody is told about is a file that silently
+   *  vanished from under a saved answer's citations. */
+  readonly evicted: readonly string[];
+  readonly bytesAdded: number;
+  readonly workspace: string;
+}
+
+/**
+ * Mirrors `commands::DropOutcome` — the payload on the drop event.
+ *
+ * Exactly one of the two is set. A whole-drop failure (the folder could not be
+ * created, the store refused) is a different thing from the per-file refusals
+ * inside a report, and reads differently.
+ */
+export interface DropOutcome {
+  readonly report: DropReport | null;
+  readonly error: UiError | null;
+}
+
+/** Mirrors `scratch::ScratchStatus`. Counted from the disk, not from the index:
+ *  the question it answers is what this is costing in bytes. */
+export interface ScratchStatus {
+  /** False before the first drop — the folder is created on demand. */
+  readonly exists: boolean;
+  /** `null` until it exists. The window never prints a guessed path. */
+  readonly path: string | null;
+  readonly workspace: string;
+  readonly files: number;
+  readonly bytes: number;
+  readonly maxBytes: number;
+  readonly maxFileBytes: number;
+}
+
+/** Mirrors `scratch::ClearReport`. */
+export interface ClearReport {
+  readonly removed: readonly string[];
+  readonly bytes: number;
+}
+
+/**
+ * Copy chosen files into the scratch workspace and index them.
+ *
+ * Opens a native panel in Rust and **takes no path argument** — the same shape
+ * as `addWorkspace`, and for the same reason. SEC-012 means this window has no
+ * filesystem affordance at all, so there is deliberately no way to say "index
+ * this path" from here even if the window wanted to.
+ *
+ * Resolves `null` when the panel was cancelled, which is not an error.
+ */
+export function addFiles(): Promise<DropReport | null> {
+  return call<DropReport | null>("add_files", {});
+}
+
+export function scratchStatus(): Promise<ScratchStatus> {
+  return call<ScratchStatus>("scratch_status", {});
+}
+
+/**
+ * Empty the scratch workspace.
+ *
+ * Deletes copies Marrow made inside a folder Marrow owns; nothing the user
+ * wrote is touched. The index rows are soft-deleted by the ordinary ingest
+ * path, exactly as they would be for any file that disappeared from a watched
+ * folder.
+ */
+export function clearScratch(): Promise<ClearReport> {
+  return call<ClearReport>("clear_scratch", {});
+}
+
+/** What a drag over the window is carrying, for the overlay. */
+export interface DragState {
+  readonly over: boolean;
+  readonly count: number;
+}
+
+/**
+ * Subscribe to the window's drag-and-drop life cycle.
+ *
+ * Three of the four events are Tauri's own (`tauri://drag-enter` and friends),
+ * which is where the hover overlay's file count comes from. **Those paths are
+ * used to draw and are never sent back**: no command accepts a source path, so
+ * the only paths that reach the disk are the ones the OS handed to Rust. The
+ * fourth is Marrow's, carrying what the copy-and-index actually did.
+ *
+ * Resolves to an unsubscribe. In a plain browser (`pnpm dev`) there is no IPC
+ * bridge and nothing to listen to, so it resolves to a no-op rather than
+ * throwing — the rest of the window still works there.
+ */
+export async function onDragAndDrop(handlers: {
+  onDrag: (s: DragState) => void;
+  /**
+   * The files landed and Rust has started copying them.
+   *
+   * Distinct from `onDrag({over: false})`, and it has to be: a drag pulled back
+   * out of the window also ends the hover and produces **no** drop, so a window
+   * that treated the two alike would put up a "working…" state that nothing
+   * would ever take down.
+   */
+  onDropStarted: (count: number) => void;
+  onDrop: (o: DropOutcome) => void;
+}): Promise<() => void> {
+  if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
+    return () => {};
+  }
+  const { listen } = await import("@tauri-apps/api/event");
+  const off = await Promise.all([
+    listen<{ paths?: string[] }>("tauri://drag-enter", (e) =>
+      handlers.onDrag({ over: true, count: e.payload?.paths?.length ?? 0 }),
+    ),
+    // `tauri://drag-over` is deliberately not listened to: it fires
+    // continuously while the pointer moves and its payload carries no paths, so
+    // subscribing would replace the count from `drag-enter` with a zero on the
+    // first mouse move.
+    listen("tauri://drag-leave", () => handlers.onDrag({ over: false, count: 0 })),
+    listen<{ paths?: string[] }>("tauri://drag-drop", (e) => {
+      handlers.onDrag({ over: false, count: 0 });
+      handlers.onDropStarted(e.payload?.paths?.length ?? 0);
+    }),
+    listen<DropOutcome>("marrow://drop-result", (e) => handlers.onDrop(e.payload)),
+  ]);
+  return () => off.forEach((fn) => fn());
 }
 
 /** One folder a question can be narrowed to. */

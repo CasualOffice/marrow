@@ -126,7 +126,11 @@ export function AskView() {
   const [session, setSession] = useState(sessionKey);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [question, setQuestion] = useState("");
-  const [thorough, setThorough] = useState(false);
+  // In the store rather than in component state, because it has to survive the
+  // process: a mode switch that resets on every launch is indistinguishable
+  // from one that does not work, and the user re-chose it every morning.
+  const thorough = useUi((s) => s.thorough);
+  const setThorough = useUi((s) => s.setThorough);
   // `null` is every project, which is the right default: narrowing is something
   // you choose when you know you mean one, not a setting to get wrong first.
   const [scope, setScope] = useState<string | null>(null);

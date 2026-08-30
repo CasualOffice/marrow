@@ -1,0 +1,384 @@
+/* First run.
+ *
+ * A dialog on a scrim, the same shape as the shortcuts sheet, sized for prose
+ * rather than for a key table. Nothing here invents a colour or a radius: the
+ * panel is `--sheet` on `--el3`, the steps are separated by `--line`, and the
+ * one accented thing on screen is the primary action of the step you are on.
+ */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-dialog);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-8);
+  background: var(--hover);
+  backdrop-filter: blur(3px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scrim {
+    backdrop-filter: none;
+  }
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  width: min(620px, 100%);
+  max-height: 100%;
+  overflow: hidden;
+  background: var(--sheet);
+  border-radius: var(--r-sheet);
+  box-shadow: var(--el3);
+}
+
+/* ── head ───────────────────────────────────────────────────────────────── */
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-6);
+  padding: var(--sp-12) var(--sp-12) var(--sp-8);
+}
+
+.title {
+  margin: 0;
+  font-family: var(--tight);
+  font-size: var(--fs-head);
+  letter-spacing: var(--ls-tight);
+  color: var(--fg);
+}
+
+.sub {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-body);
+  color: var(--fg2);
+}
+
+.grow {
+  flex: 1;
+}
+
+.skip {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: var(--ctl-h);
+  padding: 0 var(--ctl-pad);
+  border: 0;
+  border-radius: var(--r-ctrl);
+  background: transparent;
+  color: var(--fg2);
+  font: inherit;
+  font-size: var(--fs-ctl);
+  cursor: pointer;
+}
+
+.skip:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+/* ── steps ──────────────────────────────────────────────────────────────── */
+
+.steps {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0 var(--sp-12);
+  list-style: none;
+}
+
+.step {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: var(--sp-6);
+  padding: var(--sp-10) 0;
+  box-shadow: inset 0 1px 0 var(--line);
+}
+
+.step:first-child {
+  box-shadow: none;
+}
+
+/* A step whose prerequisite is not met. Dimmed, never hidden — a step that
+   appears when it becomes relevant makes the flow look shorter than it is. */
+.stepDim .lede,
+.stepDim .stepTitle {
+  color: var(--fg3);
+}
+
+.marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  border-radius: var(--r-pill);
+  background: var(--sunken);
+  color: var(--fg3);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.stepDone .marker {
+  background: var(--tint-ok);
+  color: var(--ok);
+}
+
+.stepBody {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.stepTitle {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  margin: 0;
+  font-family: var(--tight);
+  font-size: var(--fs-title);
+  letter-spacing: var(--ls-tight);
+  color: var(--fg);
+}
+
+.optional {
+  padding: 1px var(--sp-3);
+  border-radius: var(--r-chip);
+  background: var(--sunken);
+  color: var(--fg3);
+  font-family: var(--sans);
+  font-size: var(--fs-micro);
+  letter-spacing: 0;
+}
+
+.stepState {
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--fg3);
+}
+
+.stepDone .stepState {
+  color: var(--ok);
+}
+
+.lede {
+  margin: 0;
+  max-width: var(--prose-measure);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  color: var(--fg2);
+}
+
+.strong {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.aside {
+  margin: 0;
+  max-width: var(--prose-measure);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-body);
+  color: var(--fg3);
+}
+
+/* ── actions ────────────────────────────────────────────────────────────── */
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+}
+
+.primary,
+.secondary,
+.done {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-4);
+  height: var(--ctl-h-lg);
+  padding: 0 var(--ctl-pad-lg);
+  border: 0;
+  border-radius: var(--r-ctrl);
+  font: inherit;
+  font-size: var(--fs-ctl);
+  cursor: pointer;
+}
+
+.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.primary:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.secondary,
+.done {
+  background: var(--sunken);
+  color: var(--fg);
+  box-shadow: var(--hairline);
+}
+
+.secondary:hover,
+.done:hover {
+  background: var(--hover);
+}
+
+/* ── model step ─────────────────────────────────────────────────────────── */
+
+.ready {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--ok);
+}
+
+.blocked {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-4);
+  margin: 0;
+  max-width: var(--prose-measure);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  color: var(--warn-text);
+}
+
+.setup {
+  margin: 0;
+  padding: var(--sp-5) var(--sp-6);
+  overflow-x: auto;
+  border-radius: var(--r-ctrl);
+  background: var(--sunken);
+  color: var(--fg2);
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  white-space: pre-wrap;
+}
+
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.bar {
+  height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--sunken);
+  overflow: hidden;
+}
+
+.barFill {
+  height: 100%;
+  background: var(--accent);
+  /* Determinate: the width is the truth, so the only motion is it catching up
+     with a number that really changed. */
+  transition: width 240ms var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .barFill {
+    transition: none;
+  }
+}
+
+.progressLine {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  margin: 0;
+  font-size: var(--fs-micro);
+}
+
+.progressNums {
+  font-variant-numeric: tabular-nums;
+  color: var(--fg3);
+}
+
+/* ── skeleton (SKEL-001) ────────────────────────────────────────────────── */
+
+.skeleton {
+  display: flex;
+  gap: var(--sp-4);
+}
+
+.skel {
+  border-radius: var(--r-ctrl);
+  background: var(--sunken);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* SKEL-007: the shimmer goes under reduced motion; the skeleton stays. */
+  .skel {
+    animation: pulse 1.4s var(--ease) infinite;
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.skelStat {
+  height: 30px;
+  flex: 1;
+  max-width: 160px;
+}
+
+/* ── foot ───────────────────────────────────────────────────────────────── */
+
+.foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-6);
+  padding: var(--sp-8) var(--sp-12) var(--sp-12);
+  box-shadow: inset 0 1px 0 var(--line);
+}
+
+.footNote {
+  margin: 0;
+  max-width: 46ch;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-body);
+  color: var(--fg3);
+}
+
+/* At the window minimum the panel gives up its side padding before it gives up
+   the measure of the prose inside it. */
+@media (max-width: 720px) {
+  .head,
+  .foot {
+    padding-left: var(--sp-8);
+    padding-right: var(--sp-8);
+  }
+  .steps {
+    padding-left: var(--sp-8);
+    padding-right: var(--sp-8);
+  }
+}

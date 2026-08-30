@@ -34,6 +34,25 @@ const GROUPS: ReadonlyArray<{ title: string; items: Binding[] }> = [
     ],
   },
   {
+    // Both are live handlers in `App.tsx`, and both are the *keyboard* half of
+    // something that otherwise had only a mouse path — dropping files onto the
+    // window is a gesture with no key at all, and "Add a folder" was a button
+    // on the Status page and nowhere else.
+    title: "Adding files",
+    items: [
+      {
+        keys: "⌘O",
+        label: "Command O",
+        action: "Add files — copied in, indexed straight away",
+      },
+      {
+        keys: "⇧⌘O",
+        label: "Shift Command O",
+        action: "Add a folder — indexed where it already is",
+      },
+    ],
+  },
+  {
     title: "Moving",
     items: [
       { keys: "↓ / ↑", action: "Move the selection" },

@@ -14,6 +14,15 @@ pub struct Core {
     store: Store,
     index: Fts5Index,
     vectors: marrow_index::SqliteVectorIndex,
+    /// The per-user directory the database sits in.
+    ///
+    /// Held because two things Marrow *owns* live beside the database and have
+    /// to be found from anywhere a command runs: the preferences file, and the
+    /// scratch workspace dropped files are copied into. Derived from the
+    /// database's own parent rather than passed in, so there is one answer to
+    /// "where is Marrow's data" and it cannot disagree with where the database
+    /// actually is — which is what a second constructor parameter would allow.
+    data_dir: std::path::PathBuf,
 }
 
 /// Words too common to help, and common enough to hurt.
@@ -118,6 +127,13 @@ pub struct Project {
 
 impl Core {
     pub fn open(path: std::path::PathBuf) -> Result<Self> {
+        // A database at the filesystem root has no parent; that cannot happen
+        // in practice and an empty path here would only ever produce a clear
+        // failure at the moment something tried to use it.
+        let data_dir = path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default();
         // The composition root assembles the migration chain: `index` depends
         // on `store`, so store cannot reference it back without a cycle.
         let store = Store::open_with_migrations(path, marrow_index::MIGRATIONS)?;
@@ -127,7 +143,14 @@ impl Core {
             store,
             index,
             vectors,
+            data_dir,
         })
+    }
+
+    /// Where Marrow keeps its own files — the database, the preferences, the
+    /// scratch workspace. Never a folder the user granted.
+    pub fn data_dir(&self) -> &std::path::Path {
+        &self.data_dir
     }
 
     /// The vector index, for the backfill and for `search_hybrid`.
@@ -419,6 +442,23 @@ impl Core {
     /// every file underneath is stored twice under two identities, and path is
     /// never identity (invariant #2).
     pub fn grant(&self, path: &std::path::Path) -> Result<marrow_core::RootId> {
+        self.grant_named(path, None)
+    }
+
+    /// [`Core::grant`], with the workspace's display name chosen by the caller.
+    ///
+    /// The name is otherwise the folder's own final component, which is right
+    /// for a folder the user picked and wrong for the one Marrow owns: the
+    /// scratch root is a directory called `dropped` inside the application's
+    /// data directory, and a sidebar row reading "dropped" says nothing about
+    /// what is in it. Only the *name* differs — it is granted, canonicalized,
+    /// overlap-checked, watched and indexed exactly like any other root, which
+    /// is the whole point of making it a real one.
+    pub fn grant_named(
+        &self,
+        path: &std::path::Path,
+        name: Option<&str>,
+    ) -> Result<marrow_core::RootId> {
         let root = marrow_scan::AuthorizedRoot::open(path)?;
         let canonical = root.path().to_path_buf();
 
@@ -444,10 +484,12 @@ impl Core {
             }
         }
 
-        let name = canonical
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "workspace".to_string());
+        let name = name.map(str::to_string).unwrap_or_else(|| {
+            canonical
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "workspace".to_string())
+        });
         let now = marrow_core::Timestamp::now();
         let workspace_id = self.store.upsert_workspace(marrow_store::NewWorkspace {
             workspace_id: marrow_core::WorkspaceId::new(),
@@ -527,9 +569,22 @@ impl Core {
         // separately-maintained queries answering the same question about the
         // same index.
         let conn = self.store.reader()?;
+        // Compared as a path, not as a name: the workspace's *name* is a label
+        // and a user could grant a folder called "Dropped files" of their own.
+        // What makes a workspace the scratch one is that it is the directory
+        // Marrow created inside its own data directory, and that is a fact
+        // about the path.
+        //
+        // Canonicalized, because the stored root is. `~/.local/share` is
+        // routinely reached through a symlink and a temporary directory on
+        // macOS always is (`/var` → `/private/var`), so comparing the
+        // unresolved form matches nothing. `None` when it does not exist yet,
+        // which is not equal to any stored path — the intended answer.
+        let scratch = std::fs::canonicalize(crate::scratch::dir_in(&self.data_dir)).ok();
         Ok(marrow_query::catalog::workspace_stats(&conn)?
             .into_iter()
             .map(|w| WorkspaceRow {
+                scratch: scratch.as_deref() == Some(std::path::Path::new(&w.path)),
                 name: w.name,
                 path: w.path,
                 files: w.files,

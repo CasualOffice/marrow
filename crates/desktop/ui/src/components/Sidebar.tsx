@@ -55,7 +55,13 @@ function workspaceState(w: WorkspaceRow): Degradation {
   if (w.notProcessed > 0) issues.push(`${count(w.notProcessed)} not read yet`);
   if (w.cloudOnly > 0) issues.push(`${count(w.cloudOnly)} cloud-only`);
   if (w.files === 0) {
-    return { degraded: true, word: "nothing indexed", issues };
+    // Except for the folder Marrow keeps dropped files in, which is empty by
+    // design until something is dropped and empty again after it is cleared.
+    // A permanent warning on the ordinary state of a thing is the failure this
+    // function was rewritten to remove, one workspace along.
+    return w.scratch
+      ? { degraded: false, word: "empty", issues }
+      : { degraded: true, word: "nothing indexed", issues };
   }
   if (issues.length > 0) {
     return { degraded: true, word: issues.join(" · "), issues };
@@ -278,7 +284,7 @@ export const Sidebar = forwardRef<HTMLElement>(function Sidebar(_props, ref) {
                   className={cx(
                     "mono",
                     styles.metric,
-                    w.files === 0 && styles.warnText,
+                    w.files === 0 && !w.scratch && styles.warnText,
                   )}
                 >
                   {count(w.files)}

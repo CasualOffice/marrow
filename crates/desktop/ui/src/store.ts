@@ -99,6 +99,7 @@ export function anchorOf(h: SearchHit): Anchor {
 interface UiState {
   view: View;
   query: string;
+  /** Folded to its rail. Persisted: it was being refolded on every launch. */
   sidebarCollapsed: boolean;
   focusedPane: Pane;
 
@@ -139,6 +140,47 @@ interface UiState {
   quickFindQuery: string;
   shortcutsOpen: boolean;
 
+  /**
+   * Whether the guided setup is on screen.
+   *
+   * Three states, and the third is the point:
+   *
+   *   `true`  — opened deliberately, from the button on Status.
+   *   `false` — closed deliberately, for this run of the app.
+   *   `null`  — nobody has said. **Decide from real state**: the app opens the
+   *             flow when there are no workspaces at all, which is the one
+   *             situation where the window is a search box over nothing.
+   *
+   * There is deliberately no persisted "has seen it" flag. A flag is a claim
+   * about the user, and it is wrong the moment they delete everything and are
+   * back to an empty window with no way forward. Asking the index instead means
+   * the help comes back exactly when it is needed again, and never appears for
+   * someone who is already working.
+   */
+  setupOpen: boolean | null;
+
+  /**
+   * Files are being dragged over the window, and how many.
+   *
+   * Window state and nothing else: the *paths* the drag carries stay in Rust.
+   * Tauri forwards them here as well and this store deliberately keeps only the
+   * count, so there is nothing for a later edit to be tempted to send back.
+   */
+  dragging: { over: boolean; count: number };
+  /** A drop is being copied and indexed. Cleared by the result event. */
+  dropBusy: boolean;
+
+  /**
+   * Thorough rather than Fast, remembered across launches.
+   *
+   * It used to live in `AskView`'s component state, so a user who wanted
+   * thorough answers re-chose it on every launch and a mode switch that resets
+   * itself is indistinguishable from one that does not work. Persisted here
+   * beside the theme because it is the same kind of thing — a window-local
+   * preference, not index state.
+   */
+  thorough: boolean;
+
   /** The generated page or diagram on show beside the conversation. */
   artifact: Artifact | null;
   artifactMode: ArtifactMode;
@@ -175,6 +217,10 @@ interface UiState {
   closeQuickFind: () => void;
   setQuickFindQuery: (q: string) => void;
   setShortcutsOpen: (open: boolean) => void;
+  setSetupOpen: (open: boolean) => void;
+  setDragging: (d: { over: boolean; count: number }) => void;
+  setDropBusy: (busy: boolean) => void;
+  setThorough: (thorough: boolean) => void;
 
   openArtifact: (a: Artifact) => void;
   /** Follow a still-streaming artifact, but only the one already on show. */
@@ -189,6 +235,44 @@ interface UiState {
 
 let noticeId = 0;
 
+/**
+ * Window preferences that outlive the process, in `localStorage`.
+ *
+ * Same store and the same reasoning as the theme in `theme.ts`: each of these
+ * is local to this window, is not part of the index, and does not travel with
+ * it. **A choice that silently reverts is worse than one that is not offered** —
+ * the user cannot tell it apart from a control that does nothing, and both of
+ * these were re-made on every launch.
+ *
+ * A `localStorage` that throws — private mode, a disabled origin — costs the
+ * preference and nothing else, so both directions swallow it.
+ *
+ * Deliberately not here: `artifactWidth`, which is a reaction to the window as
+ * it is right now (restoring last week's 700px into a window since made small
+ * is a worse opening state than the default), and `workspaceFilter`, which is
+ * navigation rather than preference.
+ */
+function loadFlag(key: string): boolean {
+  try {
+    return window.localStorage.getItem(key) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function saveFlag(key: string, on: boolean): void {
+  try {
+    window.localStorage.setItem(key, String(on));
+  } catch {
+    /* it still applies for this session */
+  }
+}
+
+/** Thorough rather than Fast. */
+const THOROUGH_KEY = "marrow.thorough";
+/** The sidebar folded away to its rail. */
+const COLLAPSED_KEY = "marrow.sidebarCollapsed";
+
 /** Tab order across panes. The sidebar drops out when it is collapsed. */
 const PANES: Pane[] = ["sidebar", "results", "detail"];
 
@@ -197,7 +281,7 @@ export const useUi = create<UiState>((set, get) => ({
   query: "",
   workspaceFilter: null,
   theme: loadTheme(),
-  sidebarCollapsed: false,
+  sidebarCollapsed: loadFlag(COLLAPSED_KEY),
   focusedPane: "results",
   anchor: null,
   activeConversationId: null,
@@ -205,6 +289,10 @@ export const useUi = create<UiState>((set, get) => ({
   quickFindOpen: false,
   quickFindQuery: "",
   shortcutsOpen: false,
+  setupOpen: null,
+  dragging: { over: false, count: 0 },
+  dropBusy: false,
+  thorough: loadFlag(THOROUGH_KEY),
   artifact: null,
   artifactMode: "preview",
   artifactWidth: ARTIFACT_W_DEFAULT,
@@ -220,13 +308,19 @@ export const useUi = create<UiState>((set, get) => ({
     set({ theme });
   },
   toggleSidebar: () =>
-    set((s) => ({
-      sidebarCollapsed: !s.sidebarCollapsed,
-      focusedPane:
-        !s.sidebarCollapsed && s.focusedPane === "sidebar"
-          ? "results"
-          : s.focusedPane,
-    })),
+    set((s) => {
+      const sidebarCollapsed = !s.sidebarCollapsed;
+      // Remembered, like the theme: someone who works with the rail folded away
+      // was refolding it every launch.
+      saveFlag(COLLAPSED_KEY, sidebarCollapsed);
+      return {
+        sidebarCollapsed,
+        focusedPane:
+          sidebarCollapsed && s.focusedPane === "sidebar"
+            ? "results"
+            : s.focusedPane,
+      };
+    }),
   focusPane: (focusedPane) => set({ focusedPane }),
   cyclePane: (back) =>
     set((s) => {
@@ -257,6 +351,13 @@ export const useUi = create<UiState>((set, get) => ({
   closeQuickFind: () => set({ quickFindOpen: false, quickFindQuery: "" }),
   setQuickFindQuery: (quickFindQuery) => set({ quickFindQuery }),
   setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
+  setSetupOpen: (setupOpen) => set({ setupOpen }),
+  setDragging: (dragging) => set({ dragging }),
+  setDropBusy: (dropBusy) => set({ dropBusy }),
+  setThorough: (thorough) => {
+    saveFlag(THOROUGH_KEY, thorough);
+    set({ thorough });
+  },
 
   openArtifact: (artifact) =>
     set((s) => ({

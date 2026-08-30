@@ -27,11 +27,13 @@ import {
   listWorkspaces,
   modelsOverview,
   readRegion,
+  scratchStatus,
   search,
   type ConversationSummary,
   type FileDetail,
   type FileRow,
   type IndexHealth,
+  type ScratchStatus,
   type SearchResponse,
   type UiError,
   type WorkspaceRow,
@@ -161,6 +163,25 @@ export function useFiles(
     placeholderData: keepPreviousData,
     staleTime: 15_000,
     gcTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
+/** The key a drop invalidates, along with workspaces, files and health. */
+export const SCRATCH_KEY = ["scratch"] as const;
+
+/**
+ * What is in the dropped-files folder.
+ *
+ * Not polled. It only changes because this window changed it — a drop, a pick,
+ * an emptying — and each of those invalidates the key. An interval here would
+ * be a `read_dir` running all day to rediscover what it already knows.
+ */
+export function useScratch(): UseQueryResult<ScratchStatus, UiError> {
+  return useQuery<ScratchStatus, UiError>({
+    queryKey: SCRATCH_KEY,
+    queryFn: () => scratchStatus().catch((e) => Promise.reject(asUiError(e))),
+    staleTime: 60_000,
     retry: false,
   });
 }

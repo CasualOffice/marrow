@@ -14,12 +14,15 @@
  * what this build cannot do.
  */
 
+import { useCallback, useState } from "react";
+
 import styles from "./SettingsView.module.css";
 import { cx } from "../lib/cx";
 import { bytes, count, DASH } from "../lib/format";
 import { ErrorNotice } from "./ErrorNotice";
 import { Icon } from "./Icon";
-import { useIndexHealth, useWorkspaces } from "../queries";
+import { emptyScratch } from "../actions";
+import { useIndexHealth, useScratch, useWorkspaces } from "../queries";
 import { useUi } from "../store";
 import { resolveTheme, type ThemeChoice } from "../theme";
 
@@ -38,7 +41,7 @@ const THEMES: ReadonlyArray<{ id: ThemeChoice; label: string }> = [
  * read-only**: granting a folder writes the database and starts watchers,
  * downloading a model writes to disk and uses the network, and an index run
  * rewrites the index. The page used to say "eight read-only commands" when
- * there were twenty-eight and several mutate — body copy a user reads to
+ * there were thirty-one and several mutate — body copy a user reads to
  * understand the security posture, which makes it the worst place in the app to
  * be wrong. The guarantee that survives is the one SEC-012 actually makes: the
  * WebView has no ambient capability, only these named calls.
@@ -149,6 +152,9 @@ export function SettingsView() {
             )}
           </section>
 
+          {/* ── dropped files ─────────────────────────────────────────────── */}
+          <DroppedFiles />
+
           {/* ── where it lives ────────────────────────────────────────────── */}
           <section className={styles.section}>
             <h2 className={styles.heading}>Where it lives</h2>
@@ -199,6 +205,91 @@ export function SettingsView() {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The dropped-files folder: what is in it, what it costs, and how to empty it.
+ *
+ * "Temporary" needed a definition, and this card is half of it. Marrow's answer
+ * is **until you throw it away, under a ceiling** — not per session, because
+ * conversations persist and a conversation is the one thing in that database
+ * which cannot be re-derived from your files. Deleting the evidence a saved
+ * answer cites, on quit, would rot every thread that was ever answered from a
+ * dropped file, silently and a launch later.
+ *
+ * The other half is the ceiling, stated here rather than discovered when an
+ * eviction happens. Oldest copies go first, and the notice names them.
+ *
+ * The numbers come from the **disk**, not from the index: the question this
+ * card answers is what the duplication is costing, and a file copied in a
+ * moment ago is costing it whether or not a sweep has reached it.
+ */
+function DroppedFiles() {
+  const scratch = useScratch();
+  const [busy, setBusy] = useState(false);
+  const s = scratch.data;
+
+  // `emptyScratch` refreshes every panel a change to the index touches — a
+  // cleared folder is a changed workspace, file list, count and ranking, and
+  // this card is only one of the five.
+  const empty = useCallback(async () => {
+    setBusy(true);
+    try {
+      await emptyScratch();
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  return (
+    <section className={styles.section}>
+      <h2 className={styles.heading}>Dropped files</h2>
+      <p className={styles.lede}>
+        Files dropped on the window, or added with ⌘O, are <em>copied</em> into a
+        folder Marrow owns and indexed there. Copied rather than referenced
+        because a file left where it was could be moved or deleted with nothing
+        watching it, and the index would go on citing a path that is not there.
+        Your originals are never moved or changed.
+      </p>
+      <p className={styles.lede}>
+        They stay until you empty this — not until you quit, because an answer
+        you saved last week still cites them. It holds up to{" "}
+        {bytes(s?.maxBytes)} in total and {bytes(s?.maxFileBytes)} per file;
+        past that, the oldest copies are removed to make room and you are told
+        which.
+      </p>
+
+      {scratch.isError ? (
+        <ErrorNotice error={scratch.error} action={null} />
+      ) : (
+        <dl className={styles.facts}>
+          <Fact k="files" v={s ? count(s.files) : DASH} />
+          <Fact k="on disk" v={s ? bytes(s.bytes) : DASH} />
+          <Fact
+            k="folder"
+            v={s === undefined ? DASH : (s.path ?? "not created yet")}
+          />
+        </dl>
+      )}
+
+      <div className={styles.segmented}>
+        <button
+          type="button"
+          className={styles.segment}
+          disabled={busy || s === undefined || s.files === 0}
+          onClick={() => void empty()}
+        >
+          <Icon name="trash" size={12} />
+          {busy ? "Emptying…" : "Empty it"}
+        </button>
+      </div>
+      <p className={styles.hint}>
+        {s !== undefined && s.files === 0
+          ? "Nothing is in it, so there is nothing to remove."
+          : "Removes Marrow's copies and takes them out of the index. Nothing you wrote is touched."}
+      </p>
+    </section>
   );
 }
 

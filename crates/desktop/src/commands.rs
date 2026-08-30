@@ -26,7 +26,7 @@ use crate::state::Core;
 /// Carries the stable code alongside the message so the UI can branch on the
 /// code (a cloud-only file needs a different affordance from a parse failure)
 /// without string-matching prose.
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct UiError {
     pub code: String,
     pub message: String,
@@ -103,6 +103,15 @@ pub async fn search(
 pub struct WorkspaceRow {
     pub name: String,
     pub path: String,
+    /// True for the one workspace Marrow created itself — the folder dropped
+    /// files are copied into.
+    ///
+    /// Surfaced because two things in the window have to treat it differently
+    /// and both would otherwise have to guess from the name: the first-run flow
+    /// asks whether the user has granted anything, and an empty scratch folder
+    /// is "empty", not the "nothing indexed" fault an empty granted folder is.
+    /// Everything else about it is an ordinary workspace, deliberately.
+    pub scratch: bool,
     pub files: i64,
     /// Per-workspace, not global. GUI §11 requires every degraded state to be
     /// visible from the sidebar without navigating, and a single global number
@@ -172,6 +181,134 @@ pub async fn add_workspace(
         core.workspaces().map(Some)
     })
     .await
+}
+
+/// Copy files into the scratch workspace and index them, now.
+///
+/// **The app could not add a *file*.** Only whole folders, only through a
+/// picker, so a PDF on the desktop had to be filed into an indexed folder
+/// before Marrow would read it.
+///
+/// The picker runs **here, in Rust**, exactly as [`add_workspace`]'s does: the
+/// WebView is granted no dialog or filesystem capability (SEC-012), and this
+/// command takes **no path argument at all**. That is the guarantee, not a
+/// check — there is no way to express "index this path" from the window,
+/// whether the window meant well or not. The paths a drop produces come from
+/// the OS event and are handled by [`handle_drop`], which is also not
+/// reachable from the WebView.
+///
+/// `None` when the user cancelled, which is not an error.
+#[tauri::command]
+pub async fn add_files(
+    core: State<'_, Arc<Core>>,
+    watchers: State<'_, Option<Arc<crate::watching::Watchers>>>,
+) -> Result<Option<crate::scratch::DropReport>, UiError> {
+    let Some(picked) = rfd::AsyncFileDialog::new()
+        .set_title("Choose files for Marrow to read")
+        .pick_files()
+        .await
+    else {
+        return Ok(None);
+    };
+    let core = Arc::clone(&core);
+    let watchers = watchers.inner().clone();
+    let paths: Vec<std::path::PathBuf> = picked.iter().map(|p| p.path().to_path_buf()).collect();
+    blocking(move || crate::scratch::accept(&core, watchers.as_ref(), &paths).map(Some)).await
+}
+
+/// What is in the scratch workspace, and what it is costing.
+///
+/// A separate command from `list_workspaces` because the question is different:
+/// that one reports what the *index* holds, and this reports what is on
+/// **disk**, including a file copied in a moment ago that no sweep has reached.
+/// "How much disk is this costing me" has to be answerable before the answer
+/// can be acted on.
+#[tauri::command]
+pub async fn scratch_status(core: State<'_, Arc<Core>>) -> Res<crate::scratch::ScratchStatus> {
+    let core = Arc::clone(&core);
+    blocking(move || crate::scratch::status(&core)).await
+}
+
+/// Empty the scratch workspace.
+///
+/// Deletes copies Marrow made, in a folder Marrow owns. Nothing the user wrote
+/// is touched, and the index rows are **soft** deleted the ordinary way: the
+/// ingest finds each path gone and moves `status` to `DELETED`.
+#[tauri::command]
+pub async fn clear_scratch(core: State<'_, Arc<Core>>) -> Res<crate::scratch::ClearReport> {
+    let core = Arc::clone(&core);
+    blocking(move || crate::scratch::clear(&core)).await
+}
+
+/// The event a finished drop is reported on.
+///
+/// A push rather than a return value because a drop has no caller: it starts at
+/// the window server, not in the WebView. The window listens for this and for
+/// Tauri's own `tauri://drag-enter` / `tauri://drag-leave` (which is where the
+/// hover overlay comes from).
+pub const DROP_RESULT_EVENT: &str = "marrow://drop-result";
+
+/// What a drop did, or why it could not be done at all.
+///
+/// Two nullable fields rather than a serialized `Result`, whose wire form is
+/// `{"Ok":…}`/`{"Err":…}` — a shape the UI would have to know about `serde` to
+/// read. A whole-drop failure (the folder could not be created, the store
+/// refused) is distinct from the per-file refusals inside a report, and the
+/// window renders them differently.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DropOutcome {
+    pub report: Option<crate::scratch::DropReport>,
+    pub error: Option<UiError>,
+}
+
+/// A drop landed on the window.
+///
+/// **`paths` came from the operating system.** Tauri also forwards the same
+/// list to the WebView so it can draw an overlay, but nothing sends it back:
+/// there is no command that accepts a source path, so the only paths that can
+/// reach the filesystem are the ones this function was handed by the event
+/// loop. That is the whole of the "the drop handler must not accept a path the
+/// WebView invented" rule, and it is structural rather than a validation step
+/// that could be forgotten.
+///
+/// Runs on its own thread: copying and indexing a dropped file is real work,
+/// and doing it inside the window event handler would freeze the window for the
+/// duration of it.
+pub fn handle_drop(app: &tauri::AppHandle, paths: Vec<std::path::PathBuf>) {
+    use tauri::{Emitter, Manager};
+
+    if paths.is_empty() {
+        return;
+    }
+    let core = Arc::clone(&*app.state::<Arc<Core>>());
+    let watchers = app
+        .state::<Option<Arc<crate::watching::Watchers>>>()
+        .inner()
+        .clone();
+    let app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("marrow-drop".into())
+        .spawn(move || {
+            let payload = match crate::scratch::accept(&core, watchers.as_ref(), &paths) {
+                Ok(report) => DropOutcome {
+                    report: Some(report),
+                    error: None,
+                },
+                Err(e) => DropOutcome {
+                    report: None,
+                    error: Some(UiError::from(e)),
+                },
+            };
+            // A window that went away mid-copy is not an error; the files are
+            // indexed either way and the next launch will find them.
+            if let Err(e) = app.emit(DROP_RESULT_EVENT, payload) {
+                tracing::warn!(error = %e, "could not report the drop to the window");
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "could not start the thread for a dropped file");
+    }
 }
 
 /// The projects available to scope a question to.
@@ -486,6 +623,9 @@ const COMMAND_NAMES: &[&str] = &[
     "list_workspaces",
     "list_projects",
     "add_workspace",
+    "add_files",
+    "scratch_status",
+    "clear_scratch",
     "index_health",
     "reindex",
     "file_detail",
@@ -522,8 +662,14 @@ const COMMAND_NAMES: &[&str] = &[
 /// `delete_conversation` is a **soft** delete of a row Marrow wrote itself —
 /// `status` moves to `DELETED` and nothing leaves the database. It touches
 /// nothing the user wrote, which is what the rule below is actually protecting.
+///
+/// `add_files` and `clear_scratch` both write to the disk, and both write only
+/// inside the one folder Marrow created for itself: `add_files` copies chosen
+/// files in, `clear_scratch` deletes copies back out. Neither takes a path from
+/// the window — the first opens a native panel, the second has no argument at
+/// all — so neither can be pointed at anything the user wrote.
 #[cfg(test)]
-const DELIBERATE_MUTATIONS: &[&str] = &["delete_conversation"];
+const DELIBERATE_MUTATIONS: &[&str] = &["delete_conversation", "add_files", "clear_scratch"];
 
 #[cfg(test)]
 mod tests {
@@ -649,7 +795,7 @@ mod tests {
         // to the user's disk; when one does it needs a deliberate addition.
         // `reindex` is the closest — it re-reads granted folders and rewrites
         // Marrow's own derived index, which is rebuildable by definition.
-        assert_eq!(COMMAND_NAMES.len(), 28);
+        assert_eq!(COMMAND_NAMES.len(), 31);
         for n in COMMAND_NAMES {
             if DELIBERATE_MUTATIONS.contains(n) {
                 continue;

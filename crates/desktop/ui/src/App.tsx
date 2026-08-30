@@ -33,6 +33,8 @@ import { SettingsView } from "./components/SettingsView";
 import { ArtifactPanel } from "./components/ArtifactPanel";
 import { QuickFind } from "./components/QuickFind";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
+import { Welcome, useSetupGate } from "./components/Welcome";
+import { DropZone } from "./components/DropZone";
 import { Notice } from "./components/Notice";
 import { cx } from "./lib/cx";
 import { baseOf, count } from "./lib/format";
@@ -44,7 +46,13 @@ import {
   useWorkspaces,
 } from "./queries";
 import { anchorOf, hitKey, useUi } from "./store";
-import { copyCitation, openInSystem, revealInFileManager } from "./actions";
+import {
+  copyCitation,
+  grantFolder,
+  openInSystem,
+  pickFiles,
+  revealInFileManager,
+} from "./actions";
 import type { SearchHit } from "./api";
 
 /** How long a fetch may run before the footer admits it is running (GUI §5.2). */
@@ -75,6 +83,15 @@ export function App() {
 
   const health = useIndexHealth();
   const workspaces = useWorkspaces();
+  /*
+   * Whether the setup dialog is up, and therefore owns the keyboard.
+   *
+   * Decided here rather than inside the dialog so there is one answer, and so
+   * the dialog is *mounted* only while it is open — it reads the Models
+   * snapshot, which polls every four seconds, and mounting it always would put
+   * that poll behind every screen in the app to render nothing.
+   */
+  const setupVisible = useSetupGate();
 
   const searchRef = useRef<HTMLInputElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
@@ -148,8 +165,8 @@ export function App() {
   /* ── keyboard ──────────────────────────────────────────────────────────── */
 
   // The handler reads live values through a ref so it can be bound once.
-  const live = useRef({ hits, anchor, move, peek, select, query });
-  live.current = { hits, anchor, move, peek, select, query };
+  const live = useRef({ hits, anchor, move, peek, select, query, setupVisible });
+  live.current = { hits, anchor, move, peek, select, query, setupVisible };
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -170,8 +187,28 @@ export function App() {
         else ui.openQuickFind();
         return;
       }
-      // The overlay and the dialog own every other key while they are up.
-      if (ui.quickFindOpen || ui.shortcutsOpen) return;
+      /*
+       * ⌘O and ⇧⌘O — add files, add a folder.
+       *
+       * **A drop is a mouse gesture with no keyboard equivalent at all**, and
+       * GUI §11 has no exception for gestures the OS invented. These are it:
+       * both open a native panel in Rust, which is the same path the drop takes
+       * once the paths exist. "Add a folder" had no key either — it was a
+       * button on one page and nothing else.
+       *
+       * Bound above the overlay guard so they still work while the setup dialog
+       * is up, because the dialog exists to offer exactly these two things.
+       */
+      if (meta && e.key.toLowerCase() === "o") {
+        e.preventDefault();
+        if (e.shiftKey) void grantFolder();
+        else void pickFiles();
+        return;
+      }
+      // The overlay and the dialog own every other key while they are up. The
+      // setup dialog is modal too: it handles Escape and Tab itself, and the
+      // verbs below act on a ranking that is behind it.
+      if (ui.quickFindOpen || ui.shortcutsOpen || s.setupVisible) return;
 
       if (meta && e.key.toLowerCase() === "f") {
         e.preventDefault();
@@ -391,6 +428,14 @@ export function App() {
 
       <QuickFind />
       <ShortcutsDialog />
+      {setupVisible && <Welcome />}
+      {/*
+        Last, so it paints over everything including the setup dialog: dropping
+        a file while that dialog is up is the most likely place someone will
+        try it, and a drop target hidden behind the thing telling you to drop
+        is the worst possible ordering.
+      */}
+      <DropZone />
       <Notice />
     </div>
   );

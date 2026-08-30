@@ -24,6 +24,9 @@ import type {
   FileRow,
   IndexHealth,
   Region,
+  ClearReport,
+  DropReport,
+  ScratchStatus,
   SearchHit,
   ModelRow,
   ModelsSnapshot,
@@ -474,6 +477,7 @@ function hits(query: string): SearchHit[] {
 const WORKSPACES: WorkspaceRow[] = [
   {
     name: "melp",
+    scratch: false,
     path: "/Users/dev/melp",
     files: 9435,
     chunks: 48_210,
@@ -486,6 +490,7 @@ const WORKSPACES: WorkspaceRow[] = [
   },
   {
     name: "pictures",
+    scratch: false,
     path: "/Users/dev/Pictures",
     files: 3478,
     chunks: 11_895,
@@ -498,6 +503,7 @@ const WORKSPACES: WorkspaceRow[] = [
   },
   {
     name: "drafts",
+    scratch: false,
     path: "/Users/dev/Drafts",
     files: 2140,
     chunks: 6_400,
@@ -510,6 +516,7 @@ const WORKSPACES: WorkspaceRow[] = [
   },
   {
     name: "icloud",
+    scratch: false,
     path: "/Users/dev/Library/Mobile Documents",
     files: 0,
     chunks: 0,
@@ -520,7 +527,39 @@ const WORKSPACES: WorkspaceRow[] = [
     parseFailed: 0,
     notProcessed: 0,
   },
+  /*
+   * The dropped-files workspace.
+   *
+   * Present, and flagged, because three places render it differently from a
+   * granted folder — the sidebar row, the Status card and the first-run flow's
+   * "have you got anywhere yet" test — and a fixture with no scratch row would
+   * leave all three untested in the browser.
+   */
+  {
+    name: "Dropped files",
+    scratch: true,
+    path: "/Users/dev/.local/share/marrow/dropped",
+    files: 2,
+    chunks: 31,
+    contentBytes: 402_000,
+    cloudOnly: 0,
+    unindexed: 0,
+    noParser: 0,
+    parseFailed: 0,
+    notProcessed: 0,
+  },
 ];
+
+/** Mirrors `scratch::ScratchStatus`. Counted from the disk, not the index. */
+const SCRATCH: ScratchStatus = {
+  exists: true,
+  path: "/Users/dev/.local/share/marrow/dropped",
+  workspace: "Dropped files",
+  files: 2,
+  bytes: 402_000,
+  maxBytes: 512 * 1024 * 1024,
+  maxFileBytes: 64 * 1024 * 1024,
+};
 
 // The totals are the sum of the workspaces above, because the footer and the
 // cards are the same fact about the same index and a fixture where they
@@ -820,6 +859,36 @@ export async function mockInvoke<T>(
     case "reveal_path":
       // Nothing to open in a browser; the command exists and succeeds.
       return undefined as T;
+    case "scratch_status":
+      return SCRATCH as T;
+    case "add_files": {
+      // No panel in a browser, so this reports the shape a real one produces —
+      // including a refusal, because the notice has to render both halves and a
+      // fixture where everything succeeds never shows the half that matters.
+      const report: DropReport = {
+        added: ["lease.pdf"],
+        alreadyThere: [],
+        skipped: [
+          {
+            name: "holiday.heic",
+            code: "FS_PLACEHOLDER_SKIPPED",
+            reason:
+              "That file is cloud-only. Its contents are not on this machine, and reading it would download them.",
+          },
+        ],
+        evicted: [],
+        bytesAdded: 214_000,
+        workspace: "Dropped files",
+      };
+      return report as T;
+    }
+    case "clear_scratch": {
+      const cleared: ClearReport = {
+        removed: ["lease.pdf", "notes.md"],
+        bytes: 402_000,
+      };
+      return cleared as T;
+    }
     case "reindex":
       // The count of folders asked, which is what the notice reads back. The
       // sweep is Rust and there is none in a browser, so the numbers on the

@@ -80,11 +80,25 @@ fn main() {
         .manage(core)
         .manage(hub)
         .manage(watchers)
+        // **The paths a drop delivers arrive here, in Rust, from the OS.**
+        // Tauri forwards the same list to the WebView so it can draw a hover
+        // overlay, but nothing sends it back: no command accepts a source path.
+        // The window cannot ask Marrow to read a file it invented, because
+        // there is nothing to ask.
+        .on_window_event(|window, event| {
+            use tauri::Manager;
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                commands::handle_drop(window.app_handle(), paths.clone());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::search,
             commands::list_workspaces,
             commands::list_projects,
             commands::add_workspace,
+            commands::add_files,
+            commands::scratch_status,
+            commands::clear_scratch,
             commands::index_health,
             commands::reindex,
             commands::file_detail,
