@@ -189,7 +189,8 @@ pub fn ingest_root_with_index(
     let (tx_scan, rx_scan) = sync_channel::<ScanEntry>(1024);
     let (tx_hash, rx_hash) = sync_channel::<Hashed>(256);
 
-    let walk_handle = spawn_walk(root, &policy.walk, tx_scan, progress, cancel);
+    let walk_errors: WalkErrors = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let walk_handle = spawn_walk(root, &policy.walk, tx_scan, progress, cancel, &walk_errors);
     let hash_handles = spawn_hashers(
         policy.hash_workers,
         policy.max_hash_bytes,
@@ -305,6 +306,17 @@ pub fn ingest_root_with_index(
         let _ = h.join();
     }
     let _ = walk_handle.join();
+
+    // Folded in after the join, so they are counted before the guard below
+    // reads `failures`. A walk error is the strongest possible reason not to
+    // conclude that unseen files are deleted: an unopenable directory removes
+    // its whole subtree from `seen`, and every file under it would otherwise be
+    // marked gone while sitting perfectly happily on the disk.
+    if let Ok(errs) = walk_errors.lock() {
+        for (e, path) in errs.iter() {
+            outcome.note_failure(e, path);
+        }
+    }
 
     store.flush()?;
 
@@ -545,13 +557,25 @@ pub fn apply_hints(
     Ok(outcome)
 }
 
+/// Errors the walk itself raised — an unopenable directory, a metadata error, a
+/// refused symlink escape.
+///
+/// **These are not the same as a file that failed to hash**, and conflating them
+/// is what made the bulk delete unsafe. A file that could not be read is still a
+/// file the walk *saw*; a directory that could not be opened removes everything
+/// beneath it from the walk's knowledge, which is precisely the state in which
+/// concluding "these files are gone" is wrong.
+type WalkErrors = Arc<std::sync::Mutex<Vec<(marrow_core::Error, String)>>>;
+
 fn spawn_walk(
     root: &AuthorizedRoot,
     policy: &WalkPolicy,
     tx: SyncSender<ScanEntry>,
     progress: &Arc<Progress>,
     cancel: &Cancel,
+    errors: &WalkErrors,
 ) -> thread::JoinHandle<()> {
+    let errors = Arc::clone(errors);
     let root = root.clone();
     let policy = policy.clone();
     let progress = Arc::clone(progress);
@@ -573,8 +597,16 @@ fn spawn_walk(
                     }
                 }
                 ScanEvent::Failed(err) => {
+                    // Recorded, not just logged. `progress` is a live counter
+                    // for the UI and is never read back into the outcome, so a
+                    // bump alone left the run reporting zero failures — which
+                    // is exactly the condition the reconciliation guard checks
+                    // before deciding that everything it did not see is gone.
                     debug!(error = %err, "walk entry failed");
                     progress.bump(Stage::Failed);
+                    if let Ok(mut v) = errors.lock() {
+                        v.push((err, String::new()));
+                    }
                 }
             }
         }
@@ -728,6 +760,24 @@ fn record(
             }
         }
     };
+
+    // **A file the walk found again is not deleted.** Reconciliation marks a
+    // file DELETED when a walk does not reach it, which is correct when the file
+    // is gone and wrong when the *walk* was — a directory it could not open, a
+    // volume that was not mounted, a file moved out and back. Without this the
+    // row stayed DELETED for ever while every counter reported it healthy: the
+    // hash matches, so the run says "unchanged", and search filters it out.
+    if let Some(f) = existing.as_ref() {
+        if f.status == marrow_core::FileStatus::Deleted {
+            let id = f.file_id;
+            inflight.push(
+                store
+                    .writer()
+                    .send(move |c| marrow_store::read::restore_file(c, id, now).map(|_| ()))?,
+            );
+            debug!(path = %h.path, "a file that was marked deleted is back");
+        }
+    }
 
     let Some(file) = existing else {
         // New file.

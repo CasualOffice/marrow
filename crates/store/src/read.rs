@@ -833,6 +833,31 @@ fn insert_path_row(conn: &Connection, file_id: FileId, path: &str, at: Timestamp
 /// **Invariant #2: the path is not the identity.** `file_id` is untouched, the
 /// open range in `file_paths` is closed at `at`, and a new one is opened. Every
 /// version, chunk and job keyed on this file stays valid across the move.
+/// Bring a soft-deleted file back, because the walk found it again.
+///
+/// **Nothing set `status` back to `ACTIVE`, so every delete was permanent.**
+/// Reconciliation marks a file DELETED when a walk does not reach it, which is
+/// right when the file is gone and wrong when the walk was. Move a file out of
+/// a watched folder and back, or let one sweep fail to open a directory, and
+/// the row stayed DELETED for ever: the next walk finds it by filesystem
+/// identity, restores `current_path`, sees the content hash unchanged, and
+/// reports it as *unchanged* — while search, `read_file` and `file_info` all
+/// filter on `status = 'ACTIVE'` and refuse it. No error, no warning, and no
+/// counter that moves.
+///
+/// A soft delete has to be reversible by the same mechanism that made it, or it
+/// is not a soft delete.
+pub fn restore_file(conn: &Connection, file_id: FileId, at: Timestamp) -> Result<bool> {
+    let n = conn
+        .execute(
+            "UPDATE files SET status = 'ACTIVE', updated_at = ?2
+              WHERE file_id = ?1 AND status = 'DELETED'",
+            rusqlite::params![file_id.to_string(), at.as_millis()],
+        )
+        .map_err(|e| crate::map_sqlite(e, "restoring a file the walk found again"))?;
+    Ok(n > 0)
+}
+
 pub fn record_path_change(
     conn: &Connection,
     file_id: FileId,

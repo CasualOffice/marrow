@@ -591,3 +591,120 @@ fn a_file_is_reparsed_when_the_parser_that_read_it_has_moved_on() {
         "reprocessing did not converge — every run would re-parse the corpus"
     );
 }
+
+/// **A walk that could not read a directory has not established what is gone.**
+///
+/// The guard on the bulk delete checks `outcome.failures.is_empty()`, and its
+/// comment says in as many words that a *failed* run must not conclude
+/// anything. But a walk error was only logged and bumped on a live progress
+/// counter that is never read back into the outcome, so the run reported zero
+/// failures and the delete went ahead — soft-deleting every file under a
+/// directory that was merely unreadable, while they sat perfectly happily on
+/// the disk. `removed: 10000, failed: 0` reads exactly like a healthy
+/// reconciliation of a folder the user emptied.
+#[test]
+#[cfg(unix)]
+fn a_walk_that_could_not_open_a_directory_does_not_conclude_anything_is_gone() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let f = setup();
+    let first = run(&f);
+    assert_eq!(first.removed, 0);
+
+    let before: i64 = f
+        .store
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM files WHERE status='ACTIVE'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    // A subdirectory the walk cannot open. Its contents vanish from what the
+    // walk knows, which is exactly the state in which "everything I did not see
+    // is deleted" is the wrong conclusion.
+    let locked = f.root.path().join("locked");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(locked.join("kept.md"), "still here\n").unwrap();
+    run(&f); // index it while it is readable
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let outcome = run(&f);
+    // Restore before asserting, so a failure does not leave the tempdir
+    // undeletable.
+    let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
+
+    assert!(
+        outcome.failed > 0,
+        "a directory that could not be opened was reported as zero failures"
+    );
+    assert_eq!(
+        outcome.removed, 0,
+        "an incomplete walk soft-deleted files it simply could not see"
+    );
+
+    let after: i64 = f
+        .store
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM files WHERE status='ACTIVE'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        after,
+        before + 1,
+        "files were lost to an unreadable directory"
+    );
+}
+
+/// **A soft delete has to be reversible by the mechanism that made it.**
+///
+/// Nothing ever set `status` back to `ACTIVE`. So a file moved out of a watched
+/// folder and back stayed DELETED for ever: the next walk finds it by
+/// filesystem identity, restores its path, sees the hash unchanged and reports
+/// it as *unchanged*, while search and every read tool filter on ACTIVE and
+/// refuse it. No error, no warning, no counter that moves.
+#[test]
+fn a_file_that_comes_back_is_searchable_again() {
+    let f = setup();
+    run(&f);
+
+    let conn = f.store.reader().unwrap();
+    let (file_id, path): (String, String) = conn
+        .query_row(
+            "SELECT file_id, current_path FROM files
+              WHERE status='ACTIVE' AND current_path IS NOT NULL LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    drop(conn);
+
+    let away = f.root.path().join("..").join("moved-away.tmp");
+    std::fs::rename(&path, &away).unwrap();
+    let gone = run(&f);
+    assert_eq!(gone.removed, 1, "the sweep did not notice it leave");
+
+    std::fs::rename(&away, &path).unwrap();
+    run(&f);
+
+    let status: String = f
+        .store
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT status FROM files WHERE file_id = ?1",
+            [&file_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        status, "ACTIVE",
+        "{path} came back and stayed invisible for ever"
+    );
+}
