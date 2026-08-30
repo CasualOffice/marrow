@@ -417,3 +417,77 @@ fn reindex(core: &Core, corpus: &std::path::Path) {
     .unwrap();
     core.store().flush().unwrap();
 }
+
+#[test]
+#[ignore = "reproduces the reported truncation; needs a model"]
+fn a_long_answer_is_not_silently_cut_off() {
+    // Reported from real use: "ask stops in between answering". Reproduced
+    // here by asking for something that genuinely needs many tokens, and
+    // checking what the pipeline says about why it stopped.
+    let (_corpus, _db_dir, db) = indexed_corpus();
+    let core = Arc::new(Core::open(db).expect("core"));
+    let hub = Arc::new(Hub::start(data_dir().join("models"), &[]));
+    if hub.generator().is_none() {
+        panic!("no model installed");
+    }
+
+    let mut answer = String::new();
+    let mut stop = String::new();
+    let mut out_tokens = 0u32;
+    let mut failure = None;
+
+    ask::run(
+        &core,
+        &hub,
+        "truncation",
+        "Summarise every clause of the lease in detail, one numbered paragraph \
+         each, and then explain what each one means for the tenant.",
+        &[],
+        false,
+        &Cancel::new(),
+        &mut |e| match e {
+            ask::AskEvent::Token { text } => answer.push_str(&text),
+            ask::AskEvent::Done {
+                stop_reason,
+                output_tokens,
+                ..
+            } => {
+                stop = stop_reason;
+                out_tokens = output_tokens;
+            }
+            ask::AskEvent::Failed { code, message } => {
+                failure = Some(format!("[{code}] {message}"))
+            }
+            _ => {}
+        },
+    );
+
+    if let Some(f) = failure {
+        panic!("the pipeline failed rather than truncating: {f}");
+    }
+    eprintln!(
+        "\n--- {out_tokens} tokens, stop = {stop} ---\n{}\n[...]\n{}\n",
+        answer.chars().take(200).collect::<String>(),
+        answer
+            .chars()
+            .rev()
+            .take(200)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>()
+    );
+
+    // The bug was not that a limit exists — it was a flat 1,024 low enough to
+    // cut an ordinary answer. The budget is derived from the window now, so an
+    // ordinary question must finish; and when a limit *is* reached, the UI says
+    // so where the answer stops rather than only in the footer.
+    assert_ne!(
+        stop, "length",
+        "an ordinary answer still hit the ceiling; {out_tokens} tokens"
+    );
+    assert!(
+        out_tokens > 200,
+        "this question should produce a real answer"
+    );
+}

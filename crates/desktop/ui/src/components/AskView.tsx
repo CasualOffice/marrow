@@ -395,6 +395,23 @@ function TurnBlock({
         />
       )}
 
+      {/* Where the answer stops, not only in the footer. An answer that ends
+          mid-sentence with the reason in small grey type below reads as broken
+          rather than as truncated. */}
+      {turn.usage?.stopReason === "length" && (
+        <p className={styles.cutOff}>
+          <Icon name="warning" size={11} />
+          This answer reached its length limit and stopped here. Ask a narrower
+          question, or ask it to continue.
+        </p>
+      )}
+      {turn.usage?.stopReason === "cancelled" && (
+        <p className={styles.cutOff}>
+          <Icon name="warning" size={11} />
+          Stopped. What is above is what had been written.
+        </p>
+      )}
+
       {turn.usage && (
         <div className={styles.footer}>
           <span className={styles.usage}>

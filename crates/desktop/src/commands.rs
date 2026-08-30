@@ -236,11 +236,41 @@ where
 
 /// Shape a hit for the UI. Kept here so the two renderers — this and the CLI —
 /// can be compared side by side.
-pub(crate) fn to_hit(rank: usize, h: &marrow_index::TextHit, roots: &[String]) -> SearchHit {
-    let line = match &h.span {
-        SourceSpan::Lines { start, .. } => Some(*start),
-        _ => None,
+/// The line the match is actually on, not the line the chunk starts at.
+///
+/// A chunk can span forty lines. Reporting its first line while the excerpt
+/// shows line twenty-seven sends the user to the wrong place in the file — and
+/// it looks like the search found the wrong thing rather than that the citation
+/// is off by nineteen lines.
+///
+/// FTS5's snippet is a window over one column. When it did not truncate the
+/// front — no leading ellipsis — the window starts at the column's start, so
+/// the newlines before the first match are the offset into the chunk. When it
+/// did truncate, that offset is unknowable and the chunk's first line is the
+/// honest answer.
+///
+/// The result is clamped to the chunk's own line range either way. That is what
+/// makes this safe when the snippet came from the `path` column instead of the
+/// body: counting newlines in a path is meaningless, and the clamp turns a
+/// meaningless number back into the chunk's start.
+fn matched_line(h: &marrow_index::TextHit) -> Option<u32> {
+    const ELLIPSIS: char = '…';
+    let SourceSpan::Lines { start, end } = &h.span else {
+        return None;
     };
+    let Some(first) = h.snippet.matches.first() else {
+        return Some(*start);
+    };
+    if h.snippet.text.starts_with(ELLIPSIS) {
+        return Some(*start);
+    }
+    let before = h.snippet.text.get(..first.start).unwrap_or("");
+    let offset = before.matches('\n').count() as u32;
+    Some((*start + offset).min(*end).max(*start))
+}
+
+pub(crate) fn to_hit(rank: usize, h: &marrow_index::TextHit, roots: &[String]) -> SearchHit {
+    let line = matched_line(h);
     let relative = roots
         .iter()
         .filter(|r| h.path.starts_with(r.as_str()))
@@ -375,6 +405,107 @@ const COMMAND_NAMES: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hit_with(
+        span: SourceSpan,
+        snippet: &str,
+        matches: Vec<marrow_index::MatchRange>,
+    ) -> marrow_index::TextHit {
+        marrow_index::TextHit {
+            chunk_id: marrow_core::ChunkId::new(),
+            file_id: marrow_core::FileId::new(),
+            version_id: marrow_core::VersionId::new(),
+            workspace_id: marrow_core::WorkspaceId::new(),
+            path: "src/auth/token.rs".into(),
+            title: String::new(),
+            score: 0.0,
+            span,
+            snippet: marrow_index::Snippet {
+                text: snippet.into(),
+                matches,
+            },
+            provenance: ProvenanceClass::Exact,
+            origin: Origin::User,
+            modified: marrow_core::Timestamp::now(),
+        }
+    }
+
+    #[test]
+    fn the_reported_line_is_where_the_match_is_not_where_the_chunk_starts() {
+        // The bug this exists for: a chunk spanning lines 100–140 with the
+        // match on 127 reported `:100`, so clicking the result opened the file
+        // nineteen lines above the thing the excerpt was showing.
+        let snippet = "line one\nline two\nline three has refresh in it";
+        let at = snippet.find("refresh").unwrap();
+        let h = hit_with(
+            SourceSpan::Lines {
+                start: 100,
+                end: 140,
+            },
+            snippet,
+            vec![marrow_index::MatchRange {
+                start: at,
+                end: at + 7,
+            }],
+        );
+        assert_eq!(matched_line(&h), Some(102), "two newlines before the match");
+    }
+
+    #[test]
+    fn a_truncated_snippet_falls_back_to_the_chunks_first_line() {
+        // A leading ellipsis means FTS5 cut the front off, so the offset into
+        // the chunk is unknowable. The chunk's start is then the honest answer;
+        // a guess would be a citation that points somewhere specific and wrong.
+        let h = hit_with(
+            SourceSpan::Lines {
+                start: 100,
+                end: 140,
+            },
+            "…two\nthree has refresh",
+            vec![marrow_index::MatchRange { start: 11, end: 18 }],
+        );
+        assert_eq!(matched_line(&h), Some(100));
+    }
+
+    #[test]
+    fn the_line_can_never_leave_the_chunk_it_came_from() {
+        // The clamp is what makes this safe when the snippet came from the
+        // `path` column rather than the body: counting newlines in a path is
+        // meaningless, and the clamp turns a meaningless number back into the
+        // chunk's start.
+        let snippet = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk match";
+        let at = snippet.find("match").unwrap();
+        let h = hit_with(
+            SourceSpan::Lines { start: 10, end: 12 },
+            snippet,
+            vec![marrow_index::MatchRange {
+                start: at,
+                end: at + 5,
+            }],
+        );
+        assert_eq!(
+            matched_line(&h),
+            Some(12),
+            "clamped to the chunk's last line"
+        );
+    }
+
+    #[test]
+    fn a_hit_with_no_match_offsets_reports_the_chunk_start() {
+        let h = hit_with(
+            SourceSpan::Lines { start: 7, end: 9 },
+            "no markers here",
+            vec![],
+        );
+        assert_eq!(matched_line(&h), Some(7));
+    }
+
+    #[test]
+    fn a_span_that_is_not_lines_reports_no_line_rather_than_inventing_one() {
+        // Invariant #1: `Whole` is honest and a fabricated line number is not.
+        let h = hit_with(SourceSpan::Whole, "text", vec![]);
+        assert_eq!(matched_line(&h), None);
+    }
 
     #[test]
     fn an_error_carries_its_stable_code_not_just_prose() {

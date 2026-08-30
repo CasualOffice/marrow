@@ -637,7 +637,7 @@ impl Hub {
                 } else {
                     Reasoning::Off
                 },
-                max_output_tokens: 1024,
+                max_output_tokens: answer_budget(&entry, envelope, thorough),
                 cancel,
             },
             on_token,
@@ -1078,6 +1078,40 @@ pub struct Conversation {
     pub sent: Vec<crate::state::RetrievedChunk>,
 }
 
+/// How many tokens the answer may use.
+///
+/// Derived, not chosen. A flat 1,024 was cutting ordinary answers off
+/// mid-sentence — measured at 859 tokens for a single-document summary, so the
+/// ceiling was one long answer away at all times. The number that is actually
+/// available is what the context window has left after the prompt and the
+/// thinking budget, and that is what this returns.
+///
+/// The prompt is estimated from bytes rather than tokenized: tokenizing here
+/// would mean a round trip to the worker before the worker can be asked to do
+/// anything, and the estimate only has to be conservative. Four bytes per token
+/// is low for English prose and about right for code and markup, which is what
+/// this index mostly holds.
+fn answer_budget(entry: &marrow_model::Entry, envelope: &Envelope, thorough: bool) -> u32 {
+    /// Never below this: an answer that cannot finish a paragraph is not worth
+    /// the load.
+    const FLOOR: u32 = 1_024;
+    /// Never above this either. A model that runs away produces minutes of
+    /// tokens nobody reads, and the queue has to be able to promise an end.
+    const CEILING: u32 = 4_096;
+
+    let prompt = (envelope.text.len() / 4) as u32;
+    let thinking = if thorough {
+        Reasoning::THOROUGH.thinking_tokens()
+    } else {
+        0
+    };
+    entry
+        .default_context
+        .saturating_sub(prompt)
+        .saturating_sub(thinking)
+        .clamp(FLOOR, CEILING)
+}
+
 /// A model held in a worker process.
 #[derive(Debug)]
 struct Loaded {
@@ -1225,6 +1259,55 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let hub = Hub::start(t.path().join("models"), &[]);
         (t, hub)
+    }
+
+    fn envelope_of(bytes: usize) -> Envelope {
+        marrow_model::envelope::Builder::new("sys", "x".repeat(bytes))
+            .finish(&mut marrow_model::envelope::RandomNonce)
+    }
+
+    #[test]
+    fn the_answer_budget_is_what_the_window_has_left_not_a_flat_number() {
+        // The reported bug: a flat 1,024 cut ordinary answers off mid-sentence.
+        // Measured at 859 tokens for a one-document summary, so the ceiling was
+        // one long answer away at all times.
+        let entry = marrow_model::catalogue::builtin()
+            .into_iter()
+            .find(|e| e.id == "qwen3.5-4b-mlx-q4")
+            .unwrap();
+        let small = answer_budget(&entry, &envelope_of(400), false);
+        assert!(
+            small > 1_024,
+            "a short prompt should leave room, got {small}"
+        );
+        assert!(small <= 4_096, "and still be bounded, got {small}");
+    }
+
+    #[test]
+    fn a_long_prompt_shrinks_the_answer_but_never_below_a_usable_floor() {
+        // The window is shared. An enormous prompt must not leave an answer
+        // that cannot finish a paragraph — at that point the load was wasted.
+        let entry = marrow_model::catalogue::builtin()
+            .into_iter()
+            .find(|e| e.id == "qwen3.5-4b-mlx-q4")
+            .unwrap();
+        let huge = answer_budget(&entry, &envelope_of(200_000), false);
+        assert_eq!(huge, 1_024, "the floor holds");
+    }
+
+    #[test]
+    fn thorough_takes_its_thinking_out_of_the_same_window() {
+        // Otherwise the two budgets sum past the context and the model is cut
+        // off by the runtime instead of by us — which reports as a crash.
+        let entry = marrow_model::catalogue::builtin()
+            .into_iter()
+            .find(|e| e.id == "qwen3.5-4b-mlx-q4")
+            .unwrap();
+        let e = envelope_of(4_000);
+        assert!(
+            answer_budget(&entry, &e, true) <= answer_budget(&entry, &e, false),
+            "thinking must come out of the same window"
+        );
     }
 
     #[test]

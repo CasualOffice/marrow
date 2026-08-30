@@ -411,3 +411,25 @@
   cursor: pointer;
   text-decoration: underline;
 }
+
+/* An answer that stopped short says so where it stopped.
+   The footer already carries it, but a footer in small grey mono type is not
+   where a reader looks when a sentence ends halfway. */
+.cutOff {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  margin: 0;
+  max-width: var(--prose-measure);
+  padding: var(--sp-4) var(--sp-5);
+  border-radius: var(--r-surf);
+  background: var(--tint-warn-soft);
+  color: var(--warn-text);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-body);
+}
+
+.cutOff svg {
+  flex: none;
+  margin-top: 3px;
+}
