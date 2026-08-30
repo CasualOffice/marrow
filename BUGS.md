@@ -129,3 +129,24 @@ what it promises · serde field names across every struct on the Rust↔TS
 boundary, both directions · no `flatten`/`untagged`/`skip_serializing_if` on the
 boundary, so `Option` arrives as explicit `null` and FI-003 holds · all numerics
 well inside 2^53; every timestamp epoch-ms.
+
+
+---
+
+## Hard-rule audit (2026-08-30) — markers written out of step with the work
+
+One theme, four instances: **a completion marker is committed before, or
+independently of, the work it attests to.** The first is corpus-corrupting and
+silent.
+
+| # | sev | What happens | Where |
+|---|---|---|---|
+| R7-A | **critical** | `record_version` is sent in its **own** writer closure; `replace_chunks` + `upsert_docs` go in a different one ~100 lines later. The writer batches, so these are separate transactions. A `kill -9` between them — which CLAUDE.md says happens "constantly during development" — leaves a `file_versions` row whose `content_hash` matches the disk and which has **zero chunks**. On the next run the gate is `content_hash != new` → false → the content stage never runs. **The file is permanently unsearchable and nothing will ever notice.** Silent and accumulating. | `ingest/src/pipeline.rs:728` vs `:834` |
+| R7-B | high | Freshness is stamped when no reconciliation happened. Three callers: before the first sweep (`desktop/src/watching.rs:311` calls `set_health` at `:453`, the sweep is at `:328` — open the app, kill it two seconds later, the row says `LIVE / just now` having walked nothing); on a **cancelled** sweep, where `o.cancelled` is never inspected; and on a health *downgrade*, so freshness improves at the moment coverage degrades. This is the `watcher_health` bug one layer up — a writer now exists and writes the wrong thing. The correct guard already exists at `cli/src/main.rs:533`. | `desktop/src/watching.rs`, `cli/src/watching.rs:202,227,255` |
+| R10-A | high | `marrow search --literal` builds its whole scan scope from the `files` table — the index it exists to bypass. Add a folder, search before any index run: zero targets, the loop body never executes, `stopped` stays `Completed`, every skip counter is 0. The user is told **"0 matches in 0 of 0 files"** with no incompleteness warning: a complete search of a folder nothing opened. Same for any file created since the last sweep — precisely what this command is recommended for. | `cli/src/literal.rs:162` |
+| R7-C | med | `parser_version` is written and never compared. `content.rs:31` states PAR-003 makes it "the mechanism by which an upgrade schedules reprocessing"; it is read back only for display. `changed` is content-hash only, so a parser fix is dead on arrival for the entire existing corpus. | `ingest/src/content.rs:31` |
+| — | low | `download.rs:150` uses `.expect()` outside tests and `main`, against the conventions. | `model/src/download.rs:150` |
+
+Two findings in the model crate (corrupt-install detection, a breaker never
+persisted) were relayed without supporting detail and are **not verified**. They
+are not on this list until someone looks.
