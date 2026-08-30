@@ -324,7 +324,11 @@ Refuses, and these are not overridable: plain `http`, any port but 443, and \
 any host that **resolves** to loopback, a private range, link-local or \
 carrier-grade NAT — checked on the resolved address and re-checked on every \
 redirect, because a hostname that resolves to 127.0.0.1 is the whole attack. \
-A first fetch of a new host needs the user's confirmation.",
+**Only hosts the user has already allowed can be fetched.** This surface has no \
+way to ask, so consent is pre-registered: the user lists hosts in \
+`net-allow.txt` in Marrow's data directory. A host that is not listed is \
+refused, and the refusal names the file and the line to add — pass that on \
+rather than retrying, because retrying will fail identically.",
         schema: || {
             json!({
                 "type": "object",

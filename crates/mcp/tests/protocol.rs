@@ -388,7 +388,60 @@ mod writes {
             json!({ "url": "https://example.com/" }),
         );
         assert!(is_error(&out));
-        assert!(text(&out).contains("no way to ask"), "{}", text(&out));
+        assert!(text(&out).contains("cannot"), "{}", text(&out));
+    }
+
+    /// **A refusal has to leave something to do.**
+    ///
+    /// Consent was built fresh and empty inside the handler, so `decide`
+    /// returned `NewHost` for every URL and the tool refused everything, on
+    /// every host, forever — while its description advertised a one-time
+    /// confirmation step. A model spent a call discovering a tool that could
+    /// never succeed, and the message ended at "no way to ask", which is true
+    /// and actionless.
+    #[test]
+    fn a_host_the_user_allowed_is_no_longer_treated_as_new() {
+        let f = fixture_with_root();
+        let dir = tempfile::tempdir().expect("dir");
+        std::fs::write(
+            dir.path().join("net-allow.txt"),
+            "# hosts I have agreed to\nexample.com\n",
+        )
+        .expect("write allowlist");
+
+        let store = Store::open_with_migrations(
+            dir.path().join("allowed.sqlite"),
+            marrow_index::MIGRATIONS,
+        )
+        .expect("store");
+        let server = Server::new(store)
+            .expect("server")
+            .with_data_dir(dir.path());
+
+        let out = call(
+            &server,
+            "fetch_url",
+            json!({ "url": "https://example.com/" }),
+        );
+        let msg = text(&out);
+        assert!(
+            !msg.contains("not fetched from example.com before"),
+            "an allowed host was still treated as new: {msg}"
+        );
+
+        // And the refusal for a host that is *not* listed must name the file
+        // and the line to add, rather than stopping at "cannot ask".
+        let other = call(
+            &server,
+            "fetch_url",
+            json!({ "url": "https://other.invalid/" }),
+        );
+        let msg = text(&other);
+        assert!(is_error(&other));
+        assert!(
+            msg.contains("net-allow.txt"),
+            "the refusal must say where to grant it: {msg}"
+        );
     }
 
     #[test]

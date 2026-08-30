@@ -495,6 +495,38 @@ impl Consent {
         Self::default()
     }
 
+    /// Load the hosts the user has already agreed to, from a file they own.
+    ///
+    /// **A surface that cannot ask still has to be able to fetch.** The MCP
+    /// server built a fresh, empty `Consent` on every call, so `decide` returned
+    /// `NewHost` for every URL and the tool refused everything, on every host,
+    /// forever — while its own description advertised a one-time confirmation
+    /// step. A tool that can never succeed is worse than one that is absent: a
+    /// model spends a call discovering it, and the description is a promise the
+    /// code cannot keep.
+    ///
+    /// A file rather than a database table because the point is that the user
+    /// controls it: they can read it, edit it in any editor, and see exactly
+    /// what they have agreed to. NET-018 wants the grant to be explicit and
+    /// per-host, and a line in a file the user typed is more explicit than a
+    /// dialog they clicked through.
+    ///
+    /// A missing file means nothing is allowed, which is the correct default
+    /// and not an error.
+    pub fn from_allowlist(path: &std::path::Path) -> Self {
+        let mut consent = Self::default();
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return consent;
+        };
+        for line in text.lines() {
+            let host = line.split('#').next().unwrap_or("").trim();
+            if !host.is_empty() {
+                consent.confirm_host(host);
+            }
+        }
+        consent
+    }
+
     /// NET-018. The host is lowercased; nothing else about it is interpreted.
     pub fn confirm_host(&mut self, host: &str) {
         self.hosts.insert(host.trim().to_ascii_lowercase());

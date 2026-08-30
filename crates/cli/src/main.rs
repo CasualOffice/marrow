@@ -29,6 +29,8 @@ use marrow_store::Store;
 use render::Style;
 
 /// Exit codes ([UX §8]). Zero results is success, not an error.
+///
+/// [UX §8]: ../../../docs/UX.md
 pub(crate) const EXIT_INTERRUPTED: i32 = 5;
 
 mod exit {
@@ -36,13 +38,24 @@ mod exit {
     pub const USAGE: i32 = 1;
     pub const NOT_FOUND: i32 = 2;
     pub const INDEX_UNAVAILABLE: i32 = 4;
+    /// The user pressed Ctrl-C. 5 because that is the number UX §8's table
+    /// gives it, and a documented exit code is a contract with whatever script
+    /// is reading it.
+    pub const INTERRUPTED: i32 = super::EXIT_INTERRUPTED;
+    /// The network could not be reached, or refused. Beyond the §8 table:
+    /// reaching outward failed, and a script that retries on a missing index
+    /// should not retry on this.
+    pub const NETWORK_UNAVAILABLE: i32 = 6;
     /// The model could not run: not installed, suspended, or out of memory.
     /// Distinct from `INDEX_UNAVAILABLE` because search still works — a script
     /// that falls back to `marrow search` needs to tell the two apart.
-    pub const MODEL_UNAVAILABLE: i32 = 5;
-    /// The network could not be reached, or refused.
-    pub const NETWORK_UNAVAILABLE: i32 = 6;
-    pub const INTERRUPTED: i32 = super::EXIT_INTERRUPTED;
+    ///
+    /// **7, not 5.** It shared 5 with `INTERRUPTED`, which made the one
+    /// distinction it exists for impossible: a fallback script could not tell a
+    /// machine with no model from a user who had just pressed Ctrl-C, and would
+    /// have retried the run they stopped. This is the code that moved because
+    /// it is the one §8 never assigned.
+    pub const MODEL_UNAVAILABLE: i32 = 7;
     pub const INTERNAL: i32 = 70;
 }
 
@@ -275,17 +288,35 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
                 );
             }
             let index = marrow_index::Fts5Index::open(&store)?;
-            search::run(&store, &index, &q, *limit, &roots, cli.json, style, out)
+            // Absent unless this machine has an embedding model, an MLX
+            // runtime and vectors from a backfill — hard rule 10 says search
+            // answers with none of those, so this is an enhancement that stays
+            // silent when it cannot happen.
+            let semantic = search::semantic_branch(&store, &data_dir()?, &q);
+            search::run(
+                &store,
+                &index,
+                semantic.as_ref(),
+                &q,
+                *limit,
+                &roots,
+                cli.json,
+                style,
+                out,
+            )
         }
         Cmd::Embed => {
             let store = open_store()?;
-            embed::run(&store, &data_dir()?, style, out)
+            embed::run(&store, &data_dir()?, cli.json, style, out)
         }
         Cmd::Status => status(cli.json, style, out),
-        Cmd::Watch { name } => watch(name.as_deref(), style, out),
+        Cmd::Watch { name } => watch(name.as_deref(), cli.json, style, out),
         Cmd::Mcp => {
             let store = open_store()?;
-            let server = marrow_mcp::Server::new(store)?;
+            // The data directory is where the network allowlist lives. Without
+            // it `fetch_url` can never confirm a host, which is how it came to
+            // refuse every URL forever while advertising a confirmation step.
+            let server = marrow_mcp::Server::new(store)?.with_data_dir(data_dir()?);
             let stdin = std::io::stdin().lock();
             let stdout = std::io::stdout().lock();
             marrow_mcp::serve(&server, stdin, stdout)?;
@@ -661,15 +692,13 @@ fn status(json: bool, style: Style, out: &mut impl Write) -> Result<()> {
     let conn = store.reader()?;
     let rows = list_workspaces(&conn)?;
 
-    let (files, bytes, placeholders): (i64, i64, i64) = conn
-        .query_row(
-            "SELECT (SELECT count(*) FROM files WHERE status='ACTIVE'),
-                    (SELECT COALESCE(sum(size_bytes),0) FROM file_versions WHERE status='CURRENT'),
-                    (SELECT count(*) FROM files WHERE tier_state != 'RESIDENT')",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
-        .map_err(|e| marrow_store::map_sqlite(e, "reading index health"))?;
+    // The same read model MCP and the desktop report from, rather than a
+    // fourth hand-rolled count query. It is the only one of the four that
+    // carries freshness, and the counts are worth nothing without it.
+    let stats = marrow_query::catalog::index_stats(&conn)?;
+    let files = stats.files;
+    let bytes = stats.content_bytes;
+    let placeholders = stats.cloud_only;
 
     if json {
         writeln!(
@@ -677,11 +706,19 @@ fn status(json: bool, style: Style, out: &mut impl Write) -> Result<()> {
             "{}",
             serde_json::json!({
                 "schema": "marrow.status/1",
-                "workspaces": rows.len(),
+                "workspaces": stats.workspaces,
                 "files": files,
                 "content_bytes": bytes,
                 "cloud_only": placeholders,
-                "schema_version": store.schema_version(),
+                "schema_version": stats.schema_version,
+                // Counts without freshness are how a stale index answers
+                // confidently: `35,134 files` reads as the disk now, and a
+                // script has no way to see that nothing has looked at it since
+                // this morning. Same three fields as MCP's `index_status`.
+                "last_indexed_ms": stats.last_reconciled_ms,
+                "watcher": stats.watcher_health,
+                "may_be_stale": stats.may_be_stale(),
+                "freshness": freshness(&stats),
             })
         )?;
         return Ok(());
@@ -708,7 +745,7 @@ fn status(json: bool, style: Style, out: &mut impl Write) -> Result<()> {
         "  {}",
         style.dim(&format!(
             "{} workspaces · {} files · {}",
-            rows.len(),
+            stats.workspaces,
             render::count(files as u64),
             render::bytes(bytes as u64)
         ))
@@ -725,10 +762,54 @@ fn status(json: bool, style: Style, out: &mut impl Write) -> Result<()> {
             ))
         )?;
     }
+    // Warned rather than dimmed when it may be stale: the counts above are the
+    // part people read, and a sentence saying they might describe a disk that
+    // has moved on has to compete with them.
+    let line = freshness(&stats);
+    writeln!(
+        out,
+        "  {}",
+        if stats.may_be_stale() {
+            style.warn(&line)
+        } else {
+            style.dim(&line)
+        }
+    )?;
     Ok(())
 }
 
-fn watch(only: Option<&str>, style: Style, out: &mut impl Write) -> Result<()> {
+/// One sentence about whether these counts can be trusted as current.
+///
+/// Three states, not two. "Never scanned" and "scanned an hour ago but nothing
+/// is watching" both mean the index may lag the disk, but they call for
+/// different actions, and collapsing them would tell the user to re-run a scan
+/// that just ran. MCP says the same three things in its own vocabulary; here
+/// the action is a command they can paste.
+fn freshness(st: &marrow_query::catalog::IndexStats) -> String {
+    let Some(at) = st.last_reconciled_ms else {
+        return "These folders have never been scanned, so nothing here reflects what is \
+                on the disk. Run `marrow index` before relying on a result."
+            .to_string();
+    };
+    if !st.may_be_stale() {
+        return "A watcher is running, so the index follows the disk as it changes.".to_string();
+    }
+    let ago = Timestamp::now().as_millis().saturating_sub(at);
+    let when = match ago / 1000 {
+        s if s < 90 => "less than two minutes ago".to_string(),
+        s if s < 5_400 => format!("{} minutes ago", s / 60),
+        s if s < 172_800 => format!("{} hours ago", s / 3600),
+        s => format!("{} days ago", s / 86_400),
+    };
+    format!(
+        "Last scanned {when}, and nothing is watching now — anything added, changed or \
+         deleted since then is not in the index, and a search cannot mention what it does \
+         not know about. Run `marrow index` to catch up, or `marrow watch` to follow \
+         changes as they happen."
+    )
+}
+
+fn watch(only: Option<&str>, json: bool, style: Style, out: &mut impl Write) -> Result<()> {
     let store = open_store()?;
     let conn = store.reader()?;
     let rows: Vec<_> = list_workspaces(&conn)?
@@ -759,6 +840,82 @@ fn watch(only: Option<&str>, style: Style, out: &mut impl Write) -> Result<()> {
     }
 
     let cancel = waiting::install_interrupt_handler();
-    writeln!(out, "{}", style.dim("Ctrl-C to stop"))?;
-    watching::run(&store, targets, &cancel, style, out)
+    // Not in JSON: stdout is one object per event there, and a line of prose
+    // in the middle of it is what breaks the consumer this flag exists for.
+    if !json {
+        writeln!(out, "{}", style.dim("Ctrl-C to stop"))?;
+    }
+    watching::run(&store, targets, &cancel, json, style, out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use marrow_query::catalog::IndexStats;
+
+    #[test]
+    fn every_exit_code_means_one_thing() {
+        // A script that falls back to `marrow search` when the model is gone
+        // reads this number; two meanings on one number make that impossible.
+        let codes = [
+            exit::OK,
+            exit::USAGE,
+            exit::NOT_FOUND,
+            exit::INDEX_UNAVAILABLE,
+            exit::MODEL_UNAVAILABLE,
+            exit::NETWORK_UNAVAILABLE,
+            exit::INTERRUPTED,
+            exit::INTERNAL,
+        ];
+        for (i, a) in codes.iter().enumerate() {
+            for b in &codes[i + 1..] {
+                assert_ne!(a, b, "two exit codes share the value {a}");
+            }
+        }
+        // The documented ones keep the numbers UX §8 gave them; the model
+        // code, which that table never assigned, is the one that moved.
+        assert_eq!(exit::INTERRUPTED, 5);
+        assert_eq!(exit::MODEL_UNAVAILABLE, 7);
+    }
+
+    #[test]
+    fn an_index_nobody_has_scanned_says_so_rather_than_reporting_counts_alone() {
+        let st = IndexStats {
+            files: 35_134,
+            last_reconciled_ms: None,
+            watcher_health: "unavailable".into(),
+            ..IndexStats::default()
+        };
+        assert!(st.may_be_stale());
+        let line = freshness(&st);
+        assert!(line.contains("never been scanned"), "{line}");
+        assert!(line.contains("marrow index"), "{line}");
+    }
+
+    #[test]
+    fn a_watched_index_is_not_reported_as_stale() {
+        let st = IndexStats {
+            last_reconciled_ms: Some(Timestamp::now().as_millis()),
+            watcher_health: "live".into(),
+            ..IndexStats::default()
+        };
+        assert!(!st.may_be_stale());
+        assert!(freshness(&st).contains("watcher is running"));
+    }
+
+    #[test]
+    fn an_unwatched_index_says_how_old_it_is_and_what_to_run() {
+        // The state the CLI leaves behind: `marrow index` marks the root
+        // UNAVAILABLE because a one-shot run leaves nothing watching.
+        let three_hours = 3 * 3_600_000;
+        let st = IndexStats {
+            last_reconciled_ms: Some(Timestamp::now().as_millis() - three_hours),
+            watcher_health: "unavailable".into(),
+            ..IndexStats::default()
+        };
+        let line = freshness(&st);
+        assert!(line.contains("3 hours ago"), "{line}");
+        assert!(line.contains("marrow index"), "{line}");
+        assert!(line.contains("marrow watch"), "{line}");
+    }
 }

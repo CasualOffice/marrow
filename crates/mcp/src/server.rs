@@ -11,6 +11,11 @@ use tracing::{debug, warn};
 use crate::protocol::{err, ok, tool_error, tool_ok, Request, RpcError, ServerDescriptor};
 use crate::tools;
 
+/// The hosts the user has agreed this server may fetch, one per line.
+///
+/// `#` starts a comment. Absent means nothing is allowed.
+const ALLOWLIST: &str = "net-allow.txt";
+
 /// Hard cap on results, whatever a client asks for.
 ///
 /// A model that asks for 1,000 hits gets a context window full of excerpts and
@@ -25,12 +30,34 @@ const MAX_READ_BYTES: usize = 256 * 1024;
 pub struct Server {
     store: Store,
     index: Fts5Index,
+    /// Where the network allowlist lives. `None` means no fetch can be
+    /// confirmed, which is the honest state for a caller that did not say.
+    data_dir: Option<std::path::PathBuf>,
 }
 
 impl Server {
     pub fn new(store: Store) -> Result<Self> {
         let index = Fts5Index::open(&store)?;
-        Ok(Self { store, index })
+        Ok(Self {
+            store,
+            index,
+            data_dir: None,
+        })
+    }
+
+    /// The same server, told where its data directory is.
+    ///
+    /// Only `fetch_url` needs it, to find the host allowlist. Kept separate
+    /// from `new` so a test can build a server that cannot reach the network at
+    /// all rather than one that reaches the author's own allowlist.
+    pub fn with_data_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.data_dir = Some(dir.into());
+        self
+    }
+
+    /// Where the user records the hosts they have agreed to.
+    pub fn allowlist_path(&self) -> Option<std::path::PathBuf> {
+        self.data_dir.as_ref().map(|d| d.join(ALLOWLIST))
     }
 
     /// Handle one request. Returns `None` for notifications.
@@ -839,7 +866,13 @@ impl Server {
             .ok_or_else(|| Error::new(Code::CfgInvalid, "`url` is required."))?;
 
         let client = marrow_net::Client::live();
-        let mut consent = marrow_net::Consent::new();
+        // Loaded per call rather than held: the user may add a host between two
+        // fetches, and a long-lived server that cached this at startup would
+        // keep refusing a host they had just allowed.
+        let mut consent = match self.allowlist_path() {
+            Some(p) => marrow_net::Consent::from_allowlist(&p),
+            None => marrow_net::Consent::new(),
+        };
         let mut turn = marrow_net::Turn::new();
 
         // The confirmation prompt is the caller's, and this surface has no
@@ -848,13 +881,24 @@ impl Server {
         match client.decide(url, &consent, &turn) {
             marrow_net::Decision::Allow => {}
             marrow_net::Decision::Confirm { why, .. } => {
+                // Naming the file and the line to add is the difference between
+                // a refusal a user can act on and a dead end. Before this the
+                // message ended at "no way to ask", which was true and left
+                // nothing to do about it.
+                let how = match self.allowlist_path() {
+                    Some(p) => format!(
+                        "This surface cannot ask you, so add the host to {} — one per line — \
+                         and call again.",
+                        p.display()
+                    ),
+                    None => "This server was started without a data directory, so it has no \
+                             allowlist to consult and cannot fetch anything."
+                        .to_string(),
+                };
                 return Err(Error::new(
                     Code::PolApprovalRequired,
-                    format!(
-                        "{} Marrow has no way to ask over MCP, so the fetch was not made.",
-                        why.explain()
-                    ),
-                ))
+                    format!("{} {how}", why.explain()),
+                ));
             }
             marrow_net::Decision::Refuse(r) => return Err(r.into()),
         }
