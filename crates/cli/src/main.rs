@@ -763,6 +763,8 @@ fn status(json: bool, style: Style, out: &mut impl Write) -> Result<()> {
                 "watcher": stats.watcher_health,
                 "may_be_stale": stats.may_be_stale(),
                 "freshness": freshness(&stats),
+                "embedded_chunks": stats.embedded_chunks,
+                "semantic_coverage_pct": stats.semantic_coverage(),
             })
         )?;
         return Ok(());
@@ -819,6 +821,25 @@ fn status(json: bool, style: Style, out: &mut impl Write) -> Result<()> {
             style.dim(&line)
         }
     )?;
+
+    // **What `--semantic` can actually speak for.** Only chunks with a vector
+    // are visible to that branch, and a partial backfill looks exactly like a
+    // complete one from the outside — the answers are simply drawn from a
+    // fraction of the corpus, with nothing saying which fraction. Silent when
+    // nothing is embedded at all, because "0%" and "you are not using this"
+    // are different things to say and only one needs saying.
+    if let Some(pct) = stats.semantic_coverage() {
+        writeln!(
+            out,
+            "  {}",
+            style.dim(&format!(
+                "`--semantic` covers {pct:.0}% of the index ({} of {} chunks). \
+                 `marrow embed` finishes the rest.",
+                render::count(stats.embedded_chunks as u64),
+                render::count(stats.chunks as u64)
+            ))
+        )?;
+    }
     Ok(())
 }
 

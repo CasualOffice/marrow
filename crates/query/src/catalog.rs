@@ -90,6 +90,14 @@ pub struct IndexStats {
     pub cloud_only: i64,
     pub workspaces: i64,
     pub schema_version: i64,
+    /// Chunks with a vector, out of `chunks`.
+    ///
+    /// Surfaced because semantic search answers from these and only these. On
+    /// this corpus 2,304 of 182,306 chunks are embedded — so a semantic branch
+    /// speaks for 1.3% of the index while looking exactly like one that speaks
+    /// for all of it. A coverage figure is the difference between a narrow
+    /// answer and a wrong impression of the whole.
+    pub embedded_chunks: i64,
     /// When any root was last reconciled with the disk, and what the watcher
     /// could see at the time.
     ///
@@ -111,6 +119,18 @@ impl IndexStats {
     /// True when nothing has ever reconciled, or nothing is watching now. Both
     /// mean the same thing to a caller: the disk may have moved on and this
     /// index would not know.
+    /// How much of the index semantic search can speak for, as a percentage.
+    ///
+    /// `None` when nothing has been embedded, because "0%" and "this feature is
+    /// not in use" are different things to say and only one of them needs
+    /// saying.
+    pub fn semantic_coverage(&self) -> Option<f64> {
+        if self.embedded_chunks == 0 || self.chunks == 0 {
+            return None;
+        }
+        Some(self.embedded_chunks as f64 / self.chunks as f64 * 100.0)
+    }
+
     pub fn may_be_stale(&self) -> bool {
         self.last_reconciled_ms.is_none() || self.watcher_health == "unavailable"
     }
@@ -230,6 +250,19 @@ pub fn index_stats(conn: &ReadConn) -> Result<IndexStats> {
         )
         .map_err(|e| map_sqlite(e, "reading index freshness"))?;
 
+    // The vector table belongs to `marrow-index`'s migration, and a database
+    // composed without it is a legitimate state — hard rule 10 says search
+    // works with no model at all. Absent means zero coverage, not an error.
+    let embedded_chunks: i64 = conn
+        .query_row(
+            "SELECT CASE WHEN EXISTS
+               (SELECT 1 FROM sqlite_master WHERE type='table' AND name='chunk_embeddings')
+             THEN (SELECT count(*) FROM chunk_embeddings) ELSE 0 END",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| map_sqlite(e, "reading semantic coverage"))?;
+
     Ok(IndexStats {
         files,
         chunks: marrow_store::read::chunk_count(conn)? as i64,
@@ -237,6 +270,7 @@ pub fn index_stats(conn: &ReadConn) -> Result<IndexStats> {
         cloud_only,
         workspaces,
         schema_version: marrow_store::migrate::current_version(conn)?,
+        embedded_chunks,
         last_reconciled_ms,
         // A root that has never been reconciled reports whatever the schema
         // default left behind, which is `LIVE`. That default is the lie; treat
@@ -560,14 +594,25 @@ mod tests {
         // A surface that reported `marrow_core::SCHEMA_VERSION` would be wrong
         // in two directions at once: it is the highest migration *that crate*
         // defines, and the chain is numbered across crates, so a live database
-        // is at the composed maximum — 4, not 3.
+        // is at the composed maximum.
+        //
+        // Asserted against the single declared maximum rather than a literal,
+        // which is the whole reason that constant exists (D57). This test named
+        // the vector migration's own number and started failing the moment a
+        // later migration was added — pinning a number is how a test about
+        // composition becomes a test about one link in it.
         let (_d, s) = fixture();
         let conn = s.reader().unwrap();
         let reported = index_stats(&conn).unwrap().schema_version;
-        assert_eq!(reported, marrow_index::vector::VECTOR_INDEX_VERSION);
+        assert_eq!(reported, marrow_index::SCHEMA_VERSION);
+        // Not "greater than the store's own maximum": the store now owns
+        // migration 5 and `marrow-index` owns 2 and 4, so the composed maximum
+        // and the store's own maximum are the same number today. Which crate
+        // happens to hold the highest one is not the invariant — the invariant
+        // is that a surface reports what the database is at, from the database.
         assert!(
-            reported > marrow_core::SCHEMA_VERSION,
-            "the composed chain goes further than the store's own list"
+            reported >= marrow_core::SCHEMA_VERSION,
+            "a composed chain cannot be shorter than the store's own list"
         );
     }
 
