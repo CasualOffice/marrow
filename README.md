@@ -2,8 +2,9 @@
 
 A local knowledge runtime. It indexes folders you point it at, understands their structure, answers questions with citations to the **exact page, cell or line**, and exposes all of it over MCP so the agent you already use — Claude Code, Codex, Cursor — can search everything you own.
 
-**Status:** M0–M2 done. **M3 in progress** — the desktop app runs, PDFs carry per-character provenance, tables are not started. The model runtime ([Part 8](docs/Part_8_Model_Runtime.md) S1–S5, S7) is in, so the app answers questions from a local model with citations. M4 semantic is **partial**: vectors are built, and read by the desktop's Ask and `marrow search` — not yet by the desktop's Search view or the MCP `search` tool. [TRACKER.md](TRACKER.md) is the real state.
-**Scope:** Personal project. One user, one Mac, open source. Not a product.
+**Status:** `v0.0.0` — first public tag. M0–M2 done; **M3 nearly done** (tables now read from CSV, Markdown, HTML, XLSX and DOCX; PDF *ruled* tables and `table compute` are not built). The model runtime ([Part 8](docs/Part_8_Model_Runtime.md)) answers questions locally, and cloud providers landed so a machine without a GPU still works. M4 semantic is **partial** — vectors reach the desktop's Ask and `marrow search --semantic`, not yet the desktop's Search view or the MCP `search` tool. [TRACKER.md](TRACKER.md) is the real state; [BUGS.md](BUGS.md) is what is currently wrong.
+**Platform:** macOS on Apple Silicon. Windows and Linux **do not work yet** — see [Platforms](#platforms), which says exactly why and what a port needs.
+**Scope:** Personal project, built in the open. One author. Not a product, no SLA.
 **Licence:** Apache-2.0
 
 ---
@@ -30,7 +31,10 @@ And one that applied because this is for personal use — until the build outgre
 ```
 $ marrow workspace add ~/Projects                     # grant it a folder
 $ marrow index                                        # scan and record what changed
-$ marrow search "auth refresh token"                  # lexical + filename + semantic, cited
+$ marrow search "auth refresh token"                  # lexical + filename, cited
+$ marrow search --semantic "how do I stop a run"      # also match on meaning
+$ marrow search --type rs --since 7d "admission"      # filter by type, path, date
+$ marrow search --explain "admission control"         # why each result ranked there
 $ marrow search --literal '});'                       # exact scan, ignores the index
 $ marrow embed                                        # build semantic search on top
 $ marrow watch                                        # keep the index fresh
@@ -39,6 +43,11 @@ $ marrow mcp                                          # serve the index to Claud
 
 Plus the desktop app, which is where Ask lives: a question answered by a local
 model, from retrieved chunks, with clickable citations.
+
+Plus the desktop app: conversations that survive a quit, drag a file in and ask
+about it immediately, and a `read_table` MCP tool that hands an agent a grid —
+rows, typed values, and the cell each one came from — rather than a wall of
+delimiters.
 
 ### Still to come
 
@@ -59,10 +68,10 @@ It also deliberately does **not** build an OS sandbox ([§129](docs/Part_7_Solo_
 
 | | |
 |---|---|
-| Current milestone | **M3 — desktop shell · PDF · tables** (tables not started) |
-| What works today | The desktop app: search, Ask with a local model and citations, status, folder granting · CLI `workspace add` · `index` · `search` (`--literal`) · `embed` · `status` · `watch` · `mcp` · the MCP server, over 35,119 real files |
-| Not wired yet | Semantic search reaches the desktop's **Ask** and `marrow search`. The desktop's **Search** view and the MCP `search` tool are still lexical-only |
-| Measured | 15.6 s to index and chunk the corpus; **0–3 ms** queries; embedding the corpus runs at 6.4 chunks/s (~2¼ h) |
+| Current milestone | **M3 — desktop shell · PDF · tables.** Tables read from CSV, Markdown, HTML, XLSX and DOCX with a header confidence and a span per cell; PDF ruled tables, unit extraction and `table compute` are not built |
+| What works today | Desktop app — conversations that survive a quit, Ask with citations, drop a file in, first-run setup, Models, Status · CLI — `workspace add` · `index` · `search` (`--literal`, `--semantic`, `--explain`, filters) · `embed` · `status` · `watch` · `mcp` · MCP server, ten tools, over 35,404 real files |
+| Not wired yet | Semantic reaches the desktop's **Ask** and `marrow search --semantic`; the desktop's **Search** view and MCP `search` are still lexical-only |
+| Measured | ~13 s to index and chunk 35,404 files · **0–3 ms** lexical queries · embedding runs at 6.4 chunks/s · a 4B model answers in 3–13 s on an M-series laptop |
 
 See **[ROADMAP.md](ROADMAP.md)** for phases and **[TRACKER.md](TRACKER.md)** for the live task list.
 
@@ -95,15 +104,43 @@ Filesystem   ignore · notify · blake3 · globset
 Canonical    SQLite (WAL, single-writer actor)
 Full text    SQLite FTS5 — same transaction as canonical state (D3, not Tantivy)
 Vector       brute-force cosine over SQLite, indefinitely (D1); revisit past ~500k chunks
-Parsers      Tree-sitter · PDFKit (D54, not PDFium) — in-process; the isolating
-             subprocess is not built · calamine for tables (not built)
+Parsers      Tree-sitter · PDFKit (D54, not PDFium) · Vision for image text (D60)
+             · calamine for XLSX · zipped-XML reader for DOCX · tag scanner for
+             HTML — all in-process; the isolating subprocess is not built
 Embeddings   MLX in a worker process (D55, not Candle); Ollama/LM Studio detected if present
-Generation   MLX worker under a supervisor with admission, a breaker and a KV cache (Part 8)
+Generation   MLX worker under a supervisor with admission, a breaker and a KV
+             cache (Part 8) · any OpenAI-compatible endpoint behind the same
+             trait, key in the OS keychain (§140)
 Interface    Desktop app · CLI · MCP server over stdio
 UI           Tauri 2 + React + TypeScript — the desktop app is the product (D42, reversed)
 ```
 
-Target hardware: an Apple Silicon Mac with 16 GB (D5). **No degradation tiers** — if it doesn't run here, that's a bug, not a configuration. PDF parsing and the model runtime are macOS-only by decision (D54, D55); elsewhere those files stay findable by name.
+---
+
+## Platforms
+
+Reference hardware is an Apple Silicon Mac with 16 GB ([D5](DECISIONS.md)). **No degradation tiers** — if it does not run there, that is a bug, not a configuration.
+
+**Windows and Linux do not work yet, and the reason is specific rather than general.** Most of the code is already portable: the platform-specific pieces are `cfg`-gated and the workspace's Rust compiles for both targets. What stops it is one function.
+
+`tier_from_metadata` decides whether a file is really on this disk or is a cloud placeholder — an iCloud stub, a OneDrive file marked recall-on-open. Hard rule 3 says a placeholder is **never** silently hydrated, because reading one downloads it, and that is your bandwidth and your disk. Only the macOS implementation exists. The stub for every other platform **fails closed**: it reports every file as unavailable, so nothing is read and nothing is hashed. A Linux or Windows build would run, refuse to index a single file, and be right to.
+
+That is the correct default and it is not a port.
+
+| | macOS (Apple Silicon) | Windows | Linux |
+|---|---|---|---|
+| Index, search, MCP, watch | ✅ | needs **TIER-002** — `FILE_ATTRIBUTE_RECALL_ON_OPEN`, `RECALL_ON_DATA_ACCESS`, `OFFLINE` | needs **TIER-004** — sync-client mount points, by config |
+| Tables (CSV, MD, HTML, XLSX, DOCX) | ✅ | ✅ once indexing works | ✅ once indexing works |
+| PDF text with per-character boxes | ✅ PDFKit ([D54](DECISIONS.md)) | ❌ no equivalent chosen | ❌ |
+| Text in images (OCR) | ✅ Vision ([D60](DECISIONS.md)) | ❌ | ❌ |
+| **Local** model | ✅ MLX ([D55](DECISIONS.md)) | ❌ Apple-only | ❌ Apple-only |
+| **Cloud / OpenAI-compatible** model | ✅ | ✅ once the keychain has a backend | ✅ once the keychain has a backend |
+
+**No GPU, or not a Mac? Use a provider.** Settings takes any OpenAI-compatible endpoint — OpenAI, OpenRouter, Together, Groq, or your own vLLM, LM Studio, llama.cpp or Ollama. Anthropic works through OpenRouter today; its native API is [parked](TRACKER.md). Search never needs a model at all, on any platform.
+
+Honest cost of a port, in the order it would have to happen: cloud-placeholder detection per platform (the blocker above); a keyring backend other than `apple-native`; a hardware probe for those platforms; CI on real runners rather than cross-compiling — SQLite and Tree-sitter build C, so a Mac cannot honestly cross-check them. PDF and OCR would stay absent until someone picks replacements, and those files stay findable by name meanwhile.
+
+
 
 ---
 
