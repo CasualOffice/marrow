@@ -28,7 +28,11 @@ use marrow_core::{ContentHash, ProvenanceClass, SourceSpan};
 use crate::ir::{IrKind, IrNode, ParsedArtifact};
 
 /// Chunker identity, persisted so a change can schedule re-chunking (§20.2).
-pub const CHUNKER_VERSION: &str = "1";
+///
+/// `2`: band lines are driven by a table's cells rather than by its bounding
+/// box, so the text of a chunk from a sparse or very wide sheet is different
+/// from what `1` wrote.
+pub const CHUNKER_VERSION: &str = "2";
 
 /// Sizing policy.
 ///
@@ -463,16 +467,33 @@ fn table_chunks(
     let mut body = String::new();
     let mut span: Option<SourceSpan> = None;
 
-    for row in t.header.body_start()..t.n_rows {
-        let line = (0..t.n_cols)
-            .map(|c| {
-                t.cell(row, c)
-                    .map(|c| c.raw_text.trim())
-                    .unwrap_or_default()
-            })
-            .collect::<Vec<_>>()
-            .join(" | ");
-        for c in t.row(row) {
+    // **Driven by the cells, not by the bounding box.** A sheet with a value in
+    // A1 and one in the far corner has two cells and a box of seventeen billion
+    // squares. Walking `0..n_rows` x `0..n_cols` rendered sixteen thousand empty
+    // fields on each of a million rows -- about 51 GB of chunk text from a file
+    // that opens instantly in Excel, built with no ceiling and outside any
+    // budget. The XLSX parser is careful about exactly this and emits nodes only
+    // for rows that hold something; this threw that away again.
+    //
+    // `t.cells` is sorted by `(row, col)`, so one pass groups them by row. Rows
+    // with nothing in them are not skipped, they are never visited: an empty row
+    // carries no evidence, and its cost should be its content's, not its
+    // address's.
+    let body_start = t.header.body_start();
+    let mut i = 0;
+    while i < t.cells.len() {
+        let row = t.cells[i].row;
+        let start = i;
+        while i < t.cells.len() && t.cells[i].row == row {
+            i += 1;
+        }
+        if row < body_start {
+            continue;
+        }
+        let cells = &t.cells[start..i];
+
+        let line = band_line(cells, t.n_cols, policy.target_bytes);
+        for c in cells {
             span = Some(match span {
                 Some(s) => merge_spans(&s, &c.span),
                 None => c.span.clone(),
@@ -504,6 +525,57 @@ fn table_chunks(
         ));
     }
     out
+}
+
+/// One body row as `a | b | c`, with holes kept as blank fields so a value stays
+/// under its column across rows.
+///
+/// Positional like the old rendering, and byte-identical to it for any ordinary
+/// table -- but a *run* of blanks is collapsed rather than written out. A row
+/// with values in column 1 and column 16,384 says nothing more by printing
+/// 16,382 empty fields, and printing them is what turned a two-cell sheet into
+/// gigabytes. The line is capped as well, so a genuinely wide row cannot exceed
+/// the chunk it is being written into.
+fn band_line(cells: &[crate::table::TableCell], n_cols: u32, max_bytes: usize) -> String {
+    /// Blank columns written out one by one before the run is named instead.
+    /// Small gaps are alignment; large ones are an address.
+    const MAX_RUN: u32 = 8;
+
+    let mut fields: Vec<String> = Vec::new();
+    let mut bytes = 0usize;
+    let mut col = 0u32;
+
+    for (n, c) in cells.iter().enumerate() {
+        if bytes >= max_bytes {
+            fields.push(format!("<+{} more columns>", cells.len() - n));
+            return fields.join(" | ");
+        }
+        let gap = c.col.saturating_sub(col);
+        if gap > MAX_RUN {
+            let field = format!("<{gap} empty columns>");
+            bytes += field.len() + 3;
+            fields.push(field);
+        } else {
+            for _ in 0..gap {
+                fields.push(String::new());
+                bytes += 3;
+            }
+        }
+        let text = c.raw_text.trim();
+        bytes += text.len() + 3;
+        fields.push(text.to_owned());
+        col = c.col.saturating_add(c.colspan.max(1));
+    }
+
+    // Trailing blanks, so a short last row does not understate the table's
+    // width -- but only while they are alignment rather than an address.
+    let tail = n_cols.saturating_sub(col);
+    if tail <= MAX_RUN {
+        for _ in 0..tail {
+            fields.push(String::new());
+        }
+    }
+    fields.join(" | ")
 }
 
 fn finish_table_chunk(
@@ -616,6 +688,106 @@ mod tests {
 
     fn parse_rs(src: &str) -> ParsedArtifact {
         parse_with(&crate::code::CodeParser, "t.rs", src)
+    }
+
+    /// A sheet holding `cells` at the given (row, col) coordinates and nothing
+    /// else — what the XLSX parser emits for a sparse workbook.
+    fn sparse_sheet(cells: &[(u32, u32, &str)]) -> ParsedArtifact {
+        use crate::ir::{ArtifactBuilder, IrNode, NodeAttrs, ParserTier};
+        use marrow_core::SourceSpan;
+
+        let span = |r: u32, c: u32| SourceSpan::Cells {
+            sheet: "Sheet1".to_owned(),
+            range: format!("R{r}C{c}"),
+        };
+        let mut b = ArtifactBuilder::new(
+            "test",
+            "1",
+            ParserTier::T2,
+            BudgetGuard::new(Budgets::default()),
+        );
+        let table = b
+            .push(None, IrNode::structural(IrKind::Table, span(0, 0)))
+            .unwrap();
+        for (r, c, text) in cells {
+            let row = b
+                .push(
+                    Some(table),
+                    IrNode::structural(IrKind::TableRow, span(*r, *c)).with_attrs(NodeAttrs {
+                        row: Some(*r),
+                        ..NodeAttrs::default()
+                    }),
+                )
+                .unwrap();
+            b.push(
+                Some(row),
+                IrNode::content(IrKind::TableCell, span(*r, *c), *text).with_attrs(NodeAttrs {
+                    row: Some(*r),
+                    col: Some(*c),
+                    ..NodeAttrs::default()
+                }),
+            )
+            .unwrap();
+        }
+        b.finish()
+    }
+
+    #[test]
+    fn a_sparse_sheet_is_chunked_by_its_cells_not_by_its_bounding_box() {
+        // A workbook with a value in A1 and one in a far corner has two cells
+        // and a bounding box of billions of squares. The XLSX parser is careful
+        // about this -- it emits nodes only for rows that hold something -- and
+        // the chunker undid that by walking `0..n_rows` x `0..n_cols`, so two
+        // cells rendered tens of thousands of lines of ` | ` separators.
+        //
+        // The real Excel maximum, because it now costs what two cells cost.
+        // Against the old code the same fixture is about 51 GB of chunk text;
+        // at 1/2,850th of this box it already produced 6,668 chunks, so this
+        // test could not be written at full scale until it was fixed.
+        let a = sparse_sheet(&[(0, 0, "opening"), (1_048_575, 16_383, "corner")]);
+        let chunks = chunk(&a, &ChunkPolicy::default());
+        let total: usize = chunks.iter().map(|c| c.text.len()).sum();
+
+        assert!(
+            chunks.len() <= 8,
+            "two cells produced {} chunks",
+            chunks.len()
+        );
+        assert!(
+            total <= 16 * 1024,
+            "two cells produced {total} bytes of chunk text"
+        );
+        let all: String = chunks.iter().map(|c| c.text.as_str()).collect();
+        assert!(all.contains("opening"), "the A1 value was dropped");
+        assert!(all.contains("corner"), "the far cell was dropped");
+    }
+
+    #[test]
+    fn a_wide_boxs_schema_chunk_is_bounded_and_says_so() {
+        // The schema chunk listed one line per column of the bounding box, each
+        // line scanning every cell for a numeric range. A cell in the far
+        // corner made that sixteen thousand lines about a table with two values
+        // in it. Bounded now -- and the count on the "Table:" line stays the
+        // real width, so the chunk does not quietly understate the sheet.
+        let a = sparse_sheet(&[(0, 0, "opening"), (1_048_575, 16_383, "corner")]);
+        let chunks = chunk(&a, &ChunkPolicy::default());
+        let schema = chunks
+            .iter()
+            .find(|c| c.kind == ChunkKind::TableSchema)
+            .expect("schema chunk");
+
+        let listed = schema.text.lines().filter(|l| l.starts_with("- ")).count();
+        assert!(listed <= 260, "{listed} columns were listed individually");
+        assert!(
+            schema.text.contains("16384 columns"),
+            "the real width was lost: {:?}",
+            schema.text
+        );
+        assert!(
+            schema.text.contains("further columns, not listed"),
+            "the listing was truncated silently: {:?}",
+            schema.text
+        );
     }
 
     #[test]

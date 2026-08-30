@@ -858,7 +858,9 @@ fn record(
     // hashes. The improvement applied to files indexed after it and to nothing
     // else, silently.
     let stale = match &current {
-        Some(c) if !changed && !unfinished => stale_parser(conn, router, c.version_id)?,
+        Some(c) if !changed && !unfinished => {
+            stale_parser(conn, router, c.version_id)? || stale_chunker(conn, c.version_id)?
+        }
         _ => false,
     };
 
@@ -934,6 +936,37 @@ fn stale_parser(
         }
     }
     Ok(false)
+}
+
+/// Whether a different chunker wrote this version's chunks.
+///
+/// `CHUNKER_VERSION` was persisted from the start and documented as the thing
+/// that "can schedule re-chunking", and then nothing ever read it back: the
+/// staleness check looked only at parser versions, so changing how chunks are
+/// cut left every already-indexed file cut the old way. Silent, and exactly the
+/// stale-index failure the reconciler exists to prevent -- a search returns a
+/// chunk whose text no longer matches what the current code would produce from
+/// the same bytes.
+///
+/// A version this run has no chunks for is not stale. That is a file whose
+/// content stage never finished, which `unfinished` already handles, and
+/// reporting it here would re-run it twice.
+fn stale_chunker(conn: &ReadConn, version_id: VersionId) -> Result<bool> {
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT 1 FROM chunks WHERE version_id = ?1 AND chunker_version <> ?2 LIMIT 1",
+        )
+        .map_err(|e| marrow_store::map_sqlite(e, "reading the chunker that cut a version"))?;
+    let stale = stmt
+        .exists([
+            version_id.to_string().as_str(),
+            marrow_parse::CHUNKER_VERSION,
+        ])
+        .map_err(|e| marrow_store::map_sqlite(e, "reading the chunker that cut a version"))?;
+    if stale {
+        debug!(version = %version_id, now = %marrow_parse::CHUNKER_VERSION, "the chunker moved on; re-chunking");
+    }
+    Ok(stale)
 }
 
 /// What `record` produced, so the content stage knows what to attach chunks to.

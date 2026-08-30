@@ -834,6 +834,15 @@ fn is_ulid(s: &str) -> bool {
 // ---------------------------------------------------------------- chunking
 
 /// Render the header row as one line, for repetition on every band (TBL-011).
+/// How many columns are rendered individually before the count stands in.
+///
+/// A sheet's column extent is an **address**, not a size. XLSX allows 16,384
+/// columns and one cell in the far corner claims all of them, so anything that
+/// loops `0..n_cols` is doing work proportional to a number the file merely
+/// mentioned. Two hundred and fifty six is well past any table a person reads a
+/// row of and far short of the point where the loop is the problem.
+pub const MAX_LISTED_COLUMNS: usize = 256;
+
 pub fn header_line(t: &TableIr) -> Option<String> {
     let h = t.header.row?;
     let line = render_row(t, h);
@@ -841,16 +850,24 @@ pub fn header_line(t: &TableIr) -> Option<String> {
 }
 
 /// One row as `a | b | c`, holes included as blanks so columns stay aligned.
+///
+/// Bounded by [`MAX_LISTED_COLUMNS`] for the same reason the schema listing is:
+/// `n_cols` is the far edge of the bounding box, which one cell in the corner
+/// of a sheet can push to 16,384 without there being 16,384 of anything.
 fn render_row(t: &TableIr, row: u32) -> String {
-    (0..t.n_cols)
+    let width = (t.n_cols as usize).min(MAX_LISTED_COLUMNS);
+    let mut fields: Vec<String> = (0..width as u32)
         .map(|c| {
             t.cell(row, c)
                 .map(|c| c.raw_text.trim())
                 .unwrap_or_default()
                 .to_owned()
         })
-        .collect::<Vec<_>>()
-        .join(" | ")
+        .collect();
+    if (t.n_cols as usize) > width {
+        fields.push(format!("<+{} more columns>", t.n_cols as usize - width));
+    }
+    fields.join(" | ")
 }
 
 /// The schema chunk (TBL-011): what the columns are, not what is in them.
@@ -872,7 +889,13 @@ pub fn schema_text(t: &TableIr, caption_and_context: &str) -> String {
         );
     }
     let _ = writeln!(s, "Columns:");
-    for col in 0..t.n_cols {
+    // Bounded. `n_cols` is an address, not a count: a single value in a sheet's
+    // far corner makes the box 16,384 wide, and listing one line per column
+    // wrote a schema chunk of sixteen thousand entries -- each one scanning
+    // every cell for its numeric range -- describing a table with two values in
+    // it. The count on the line above is the honest number; this is the listing.
+    let listed = (t.n_cols as usize).min(MAX_LISTED_COLUMNS) as u32;
+    for col in 0..listed {
         let name = t
             .column_names
             .get(col as usize)
@@ -896,6 +919,13 @@ pub fn schema_text(t: &TableIr, caption_and_context: &str) -> String {
                 let _ = writeln!(s, "- {name} ({})", ty.as_str());
             }
         }
+    }
+    if (t.n_cols as usize) > listed as usize {
+        let _ = writeln!(
+            s,
+            "- ... and {} further columns, not listed.",
+            t.n_cols as usize - listed as usize
+        );
     }
     // TBL-012 wants named ranges matched exactly in lexical search, the way a
     // symbol is. The schema chunk is where that lands without a second index:

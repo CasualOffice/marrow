@@ -592,6 +592,52 @@ fn a_file_is_reparsed_when_the_parser_that_read_it_has_moved_on() {
     );
 }
 
+/// **A chunker change must reach the files that are already chunked.**
+///
+/// The sibling of the test above, and the same bug one layer down.
+/// `CHUNKER_VERSION` is documented as the thing "persisted so a change can
+/// schedule re-chunking" and was written faithfully with every chunk — and the
+/// staleness gate only ever compared *parser* versions, so it was never read
+/// back. Changing how chunks are cut left every indexed file cut the old way,
+/// and a search kept returning chunks whose text the current code would no
+/// longer produce from the same bytes.
+#[test]
+fn a_file_is_rechunked_when_the_chunker_that_cut_it_has_moved_on() {
+    let f = setup();
+    let first = run(&f);
+    assert!(first.parsed > 0, "the fixture must parse something");
+
+    let second = run(&f);
+    assert_eq!(
+        second.parsed, 0,
+        "an unchanged corpus must not be re-parsed"
+    );
+
+    // What an upgrade looks like from the next run's point of view.
+    f.store
+        .writer()
+        .submit(|c| {
+            c.execute("UPDATE chunks SET chunker_version = 'ancient'", [])
+                .map(|_| ())
+                .map_err(|e| marrow_store::map_sqlite(e, "ageing the recorded chunker version"))
+        })
+        .unwrap();
+    f.store.flush().unwrap();
+
+    let third = run(&f);
+    assert!(
+        third.parsed > 0,
+        "the chunker moved on and nothing was re-cut, so every already-indexed \
+         file keeps chunks the current code would not produce"
+    );
+
+    let fourth = run(&f);
+    assert_eq!(
+        fourth.parsed, 0,
+        "re-chunking did not converge — every run would re-chunk the corpus"
+    );
+}
+
 /// **A walk that could not read a directory has not established what is gone.**
 ///
 /// The guard on the bulk delete checks `outcome.failures.is_empty()`, and its
