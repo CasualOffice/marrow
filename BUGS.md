@@ -246,15 +246,15 @@ itself worth noting: **shipping and being visible are different events**.
 | Workspace setup | **exists** — `add_workspace`, native picker in Rust, canonicalizes and refuses overlapping roots |
 | Model download and configuration | **exists** — download, cancel, profile, detection, release, with fit arithmetic on the Models page |
 | New / clean session, chat history | **exists** as of `226e211` — persists across quit, sidebar list, rename, soft delete, ⌘N |
-| File upload | **missing** — folders only, through a picker. A PDF on the desktop cannot be asked about without moving it first |
-| Images | **missing** — indexed from metadata alone; a screenshot of an error is findable by filename and nothing else |
-| Scratch / session workspace | **missing** — there is a scratch dir for model weights, none for the user |
-| First-run setup | **missing** — no path from installed to working; you land on a search box over an empty index |
+| File upload | **built** `d77b92e` — drop onto the window or ⌘O; copied into a scratch root, indexed synchronously, answerable in the next breath |
+| Images | **built** `c961b95` — Vision OCR, every line with a real bbox `source_span` (D60) |
+| Scratch / session workspace | **built** `d77b92e` — a granted, watched root Marrow owns; capped, oldest-first eviction, visible and emptyable from Settings |
+| First-run setup | **built** `d77b92e` — grant, watch it index, then the optional model; decided from real state, skippable, re-enterable |
 | Video and audio | **scoped, not built** — see the TRACKER parking lot. A shallow version would read as support and answer nothing |
 
 ### And one found while checking
 
-**The AI profile never persists.** `Hub` holds it in a `Mutex<Profile>`
+**The AI profile never persists.** *(fixed `d77b92e` — a preferences file, not a migration. Two more were found the same way: Fast/Thorough and the sidebar collapse were both re-chosen on every launch.)* `Hub` holds it in a `Mutex<Profile>`
 initialised from `default_profile(&machine)` at startup; `set_profile` writes
 only to that mutex. Choosing Efficient or LargerLocal survives until the next
 launch and then silently reverts to the hardware default — a setting that
