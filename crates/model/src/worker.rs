@@ -32,6 +32,26 @@ use crate::provider::{
     Boundary, Completion, GenerateRequest, GenerationProvider, StopReason, Token, Usage,
 };
 
+/// What a worker was loaded to do.
+///
+/// Not a capability flag on one model: the two kinds are loaded by different
+/// libraries and called differently, so a worker is one or the other for its
+/// whole life.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Generate,
+    Embedding,
+}
+
+impl Kind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Kind::Generate => "generate",
+            Kind::Embedding => "embedding",
+        }
+    }
+}
+
 /// The protocol version this build speaks. A worker announcing anything else
 /// is refused rather than tolerated — a silently mismatched protocol produces
 /// answers that look fine and are wrong.
@@ -83,6 +103,10 @@ struct Line {
     cache_trimmable: Option<bool>,
     #[serde(default)]
     cache_kinds: Option<Vec<String>>,
+    /// Embedding width, measured at load rather than read from a config that
+    /// could disagree with the weights.
+    #[serde(default)]
+    dims: Option<usize>,
 }
 
 /// Where the Python interpreter and the worker script live.
@@ -146,6 +170,8 @@ pub struct Worker {
     next_id: AtomicU64,
     request_timeout: Duration,
     loaded: Option<String>,
+    /// The embedding width, when an embedder is loaded.
+    dims: Option<usize>,
     /// `None` until a model is loaded.
     ///
     /// Whether prompt-prefix reuse can work at all for this model. Qwen 3.5 4B
@@ -253,6 +279,7 @@ impl Worker {
             next_id: AtomicU64::new(0),
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             loaded: None,
+            dims: None,
             cache_trimmable: None,
         };
 
@@ -296,10 +323,27 @@ impl Worker {
 
     /// Load weights. Slow — minutes for a large model on a cold cache.
     pub fn load(&mut self, model_id: &str, weights_dir: &Path) -> Result<()> {
+        self.load_as(model_id, weights_dir, Kind::Generate)
+            .map(|_| ())
+    }
+
+    /// Load an embedding model and return its width.
+    ///
+    /// A separate call because it is a separate library: an embedding model is
+    /// not a causal LM with the head removed (see the worker's `op_load`).
+    pub fn load_embedder(&mut self, model_id: &str, weights_dir: &Path) -> Result<usize> {
+        self.load_as(model_id, weights_dir, Kind::Embedding)
+    }
+
+    fn load_as(&mut self, model_id: &str, weights_dir: &Path, kind: Kind) -> Result<usize> {
         let id = self.send("load", |o| {
             o.insert(
                 "model".into(),
                 serde_json::Value::String(weights_dir.display().to_string()),
+            );
+            o.insert(
+                "kind".into(),
+                serde_json::Value::String(kind.as_str().to_string()),
             );
         })?;
         let line = self.await_event(&id, "loaded", Duration::from_secs(600))?;
@@ -312,7 +356,25 @@ impl Worker {
             );
         }
         self.loaded = Some(model_id.to_string());
-        Ok(())
+        self.dims = line.dims;
+        // A width of zero would silently make every stored vector unusable, so
+        // an embedder that does not report one is a load failure rather than a
+        // model with an unknown shape.
+        match (kind, line.dims) {
+            (Kind::Embedding, Some(d)) if d > 0 => Ok(d),
+            (Kind::Embedding, other) => Err(Error::new(
+                Code::ModWorkerCrash,
+                "The embedding model loaded but did not report its width, so \
+                 nothing it produces could be stored.",
+            )
+            .with_context(format!("dims = {other:?}"))),
+            (Kind::Generate, _) => Ok(0),
+        }
+    }
+
+    /// The embedding width, once an embedder is loaded.
+    pub fn dims(&self) -> Option<usize> {
+        self.dims
     }
 
     pub fn unload(&mut self) -> Result<()> {

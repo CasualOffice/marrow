@@ -2274,6 +2274,7 @@ dependencies = [
  "libc",
  "marrow-core",
  "marrow-hw",
+ "marrow-index",
  "serde",
  "serde_json",
  "sha2",

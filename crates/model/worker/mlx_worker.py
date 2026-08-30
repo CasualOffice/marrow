@@ -50,6 +50,9 @@ class Worker:
         self.model = None
         self.tokenizer = None
         self.model_path = None
+        # Embedding models are loaded by a different library and called a
+        # different way; see `op_load`.
+        self.kind = "generate"
         # Reused across requests that share a token prefix (LLM-040).
         #
         # `LRUPromptCache` rather than one cache and a trim, because **not every
@@ -70,31 +73,52 @@ class Worker:
         emit({"id": req.get("id"), "event": "pong", "protocol": PROTOCOL_VERSION})
 
     def op_load(self, req):
-        # Imported here, not at module scope: a worker that is only ever asked
-        # to `ping` should not pay a multi-second import, and an import failure
-        # must arrive as a protocol error rather than a startup crash.
-        from mlx_lm import load
-
         path = req["model"]
-        log(f"loading {path}")
-        self.model, self.tokenizer = load(path)
+        kind = req.get("kind", "generate")
+        log(f"loading {path} as {kind}")
+
+        if kind == "embedding":
+            # **Not `mlx_lm`.** An embedding model is not a causal LM with the
+            # head removed: EmbeddingGemma carries the SentenceTransformers
+            # dense projection, and `mlx_lm.load` refuses it outright —
+            # "Received 6 parameters not in model: dense.0.weight, ...".
+            # Loading it as an LM and mean-pooling the base output would
+            # *work*, in the sense of producing numbers, while discarding the
+            # projection the model was trained to embed through.
+            from mlx_embeddings import load as load_embedding
+
+            self.model, self.tokenizer = load_embedding(path)
+        else:
+            # Imported here, not at module scope: a worker only ever asked to
+            # `ping` should not pay a multi-second import, and an import
+            # failure must arrive as a protocol error rather than a startup
+            # crash.
+            from mlx_lm import load
+
+            self.model, self.tokenizer = load(path)
+
+        self.kind = kind
         self.model_path = path
         self.cache = self._new_cache()
         self.cache_tokens = []
 
-        # Whether this model's cache can be trimmed decides whether a
-        # conversation reuses its preamble at all, so it is reported rather
-        # than discovered later as "why is this slow".
-        from mlx_lm.models.cache import can_trim_prompt_cache, make_prompt_cache
+        info = {"id": req.get("id"), "event": "loaded", "model": path, "kind": kind}
+        if kind == "embedding":
+            # The width, measured rather than read from a config: it is what
+            # every stored vector has to agree with, and a config that
+            # disagrees with the weights would be discovered one query at a
+            # time.
+            info["dims"] = int(self._embed(["dimension probe"]).shape[1])
+        else:
+            # Whether this model's cache can be trimmed decides whether a
+            # conversation reuses its preamble at all, so it is reported rather
+            # than discovered later as "why is this slow".
+            from mlx_lm.models.cache import can_trim_prompt_cache, make_prompt_cache
 
-        probe = make_prompt_cache(self.model)
-        emit({
-            "id": req.get("id"),
-            "event": "loaded",
-            "model": path,
-            "cacheTrimmable": bool(can_trim_prompt_cache(probe)),
-            "cacheKinds": sorted({type(c).__name__ for c in probe}),
-        })
+            probe = make_prompt_cache(self.model)
+            info["cacheTrimmable"] = bool(can_trim_prompt_cache(probe))
+            info["cacheKinds"] = sorted({type(c).__name__ for c in probe})
+        emit(info)
 
     def op_unload(self, req):
         import mlx.core as mx
@@ -298,21 +322,64 @@ class Worker:
         return text
 
     def op_embed(self, req):
-        import mlx.core as mx
-
         if self.model is None:
             raise Failure("MOD_NOT_INSTALLED", "No model is loaded.")
+        if self.kind != "embedding":
+            raise Failure(
+                "MOD_UNSUPPORTED_CAPABILITY",
+                "The loaded model generates text; it does not produce embeddings. "
+                "Load an embedding model first.",
+            )
         texts = req["texts"]
-        vectors = []
-        for t in texts:
-            ids = mx.array([self.tokenizer.encode(t)])
-            out = self.model(ids)
-            # Mean-pool the last hidden state. Deterministic, and the same
-            # pooling must be used at index time and at query time or the
-            # vectors are not comparable.
-            vec = out[0].mean(axis=0)
-            vectors.append([float(x) for x in vec])
-        emit({"id": req["id"], "event": "embeddings", "vectors": vectors})
+        if not texts:
+            emit({"id": req["id"], "event": "embeddings", "vectors": []})
+            return
+        vectors = self._embed(texts)
+        emit({
+            "id": req["id"],
+            "event": "embeddings",
+            "vectors": [[float(x) for x in row] for row in vectors],
+        })
+
+    # Longest sequence the embedder sees. Beyond this the tail is dropped
+    # rather than the request failing: a chunk that is slightly too long should
+    # still be findable, and Marrow's chunker already keeps them well under.
+    MAX_EMBED_TOKENS = 512
+
+    def _embed(self, texts):
+        """Batch of texts to a `(n, dims)` array.
+
+        **One at a time, and that is measured rather than cautious.** Padding a
+        batch to its longest member changes the shorter members' vectors: with
+        `mlx_embeddings` and EmbeddingGemma, the word "short" embedded beside a
+        40-token passage agrees with itself embedded alone at only 0.89. The
+        pooling masks padding correctly, so it is the attention that leaks —
+        and a chunk that lands somewhere different depending on what happened
+        to be batched with it makes the index disagree with the query for
+        reasons nobody can see.
+
+        Batching still happens, one level up: the caller sends many texts in
+        one message, which is where the round-trip cost was. What it does not
+        do is let them pad each other.
+
+        (`mlx_embeddings.utils.generate` exists and does not work either — it
+        calls the model with `input_ids=` and the model takes positional
+        `inputs`.)
+        """
+        import mlx.core as mx
+
+        rows = []
+        for text in texts:
+            enc = self.tokenizer.batch_encode_plus(
+                [text],
+                return_tensors="mlx",
+                padding=False,
+                truncation=True,
+                max_length=Worker.MAX_EMBED_TOKENS,
+            )
+            out = self.model(enc["input_ids"], enc["attention_mask"])
+            rows.append(out.text_embeds[0])
+        return mx.stack(rows)
 
 
 class Failure(Exception):

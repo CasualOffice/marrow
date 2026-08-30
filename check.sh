@@ -87,6 +87,7 @@ a_chunk_only_the_semantic_branch_found_is_still_rendered_and_citable
 a_vector_for_a_chunk_the_store_no_longer_has_is_dropped_not_rendered
 search_still_works_with_no_embeddings_at_all
 the_result_says_which_branches_actually_ran
+the_batch_size_is_a_working_size_not_a_round_number
 "
 missing=0
 for name in $INVARIANTS; do
