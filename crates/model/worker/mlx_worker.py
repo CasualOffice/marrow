@@ -14,7 +14,7 @@ Protocol
     <- {"id":"r1","event":"loaded","weightsBytes":3063000000}
 
     -> {"op":"generate","id":"r2","prompt":"...","maxTokens":512,
-        "thinkingTokens":0,"cachePrefixTokens":0}
+        "thinkingTokens":0,"cachedPrefixTokens":0}
     <- {"id":"r2","event":"token","text":"Hel"}
     <- {"id":"r2","event":"done","promptTokens":812,"outputTokens":41,
         "thinkingTokens":0,"cachedPrefixTokens":0,"stopReason":"stop"}

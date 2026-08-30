@@ -59,7 +59,14 @@ pub const IDLE_TIMEOUT_RANGE: (Duration, Duration) =
 ///        └──cooldown elapsed, conditions improved──▶ Ready
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case", tag = "state")]
+// Variants stay snake_case — the window reads them as `state` strings — but
+// the *fields* must be camelCase like every other payload, for the reason on
+// `Event` above.
+#[serde(
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    tag = "state"
+)]
 pub enum ModelState {
     Absent,
     Installed,
@@ -84,7 +91,17 @@ pub enum LoadStage {
 /// SUP-001: every transition carries its reason. "The model stopped working" is
 /// not a diagnosis.
 #[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", tag = "event")]
+// `rename_all_fields`, not only `rename_all`. On an enum the latter renames
+// the *variants*; the fields inside them keep their Rust spelling, which is how
+// `AskEvent` sent `output_tokens` to a window reading `outputTokens` and every
+// value arrived as `undefined` with nothing failing. This enum's own doc
+// comment says the UI subscribes to it, so it is one `Channel::send` away from
+// reproducing that exactly.
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "event"
+)]
 pub enum Event {
     StateChanged {
         model_id: String,

@@ -501,13 +501,35 @@ impl Worker {
         let deadline = Instant::now() + self.request_timeout;
         let mut text = String::new();
         let mut thinking = String::new();
+        // Counted as they arrive, because a cancel never reaches the `done`
+        // line that carries the totals. Reporting `Usage::default()` there put
+        // "0 tokens" in the footer directly under several hundred words the
+        // reader could see — not a missing number but a wrong one, which is the
+        // same silent-wrongness as the field-name bug it sat beside. One
+        // `token` line is one token, so these are exact rather than estimated.
+        let mut streamed = 0u32;
+        let mut streamed_thinking = 0u32;
         loop {
             if cancel.is_cancelled() {
                 // A worker mid-generation cannot be politely interrupted over
                 // a pipe it is not reading, so it is killed. The caller gets
                 // what streamed before the cancel.
                 self.kill();
-                return Ok((text, thinking, Usage::default(), StopReason::Cancelled));
+                return Ok((
+                    text,
+                    thinking,
+                    Usage {
+                        // The prompt totals only arrive with `done`, so they are
+                        // genuinely unknown here. Zero for a count nobody
+                        // measured is honest; zero for output that visibly
+                        // streamed was not.
+                        prompt_tokens: 0,
+                        output_tokens: streamed,
+                        thinking_tokens: streamed_thinking,
+                        cached_prefix_tokens: 0,
+                    },
+                    StopReason::Cancelled,
+                ));
             }
             // Poll rather than block for the whole budget, so a cancel is
             // felt inside the 500 ms of UX §10 rather than at the deadline.
@@ -539,9 +561,11 @@ impl Worker {
                         // the model's own words about untrusted content, which
                         // is exactly what must not be promoted to a claim.
                         thinking.push_str(&t);
+                        streamed_thinking += 1;
                         on_token(Token::Thinking(t));
                     } else {
                         text.push_str(&t);
+                        streamed += 1;
                         on_token(Token::Text(t));
                     }
                 }

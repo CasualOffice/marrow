@@ -31,7 +31,15 @@ const CHUNK: usize = 256 * 1024;
 
 /// Where a download is, in the words SKEL-006 requires.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase", tag = "stage")]
+// Correct today only because no variant field is more than one word, so
+// snake_case and camelCase happen to be identical. That is luck, not a
+// contract: the first `bytes_remaining` added here would blank a field in the
+// download row with nothing failing. See the note on `supervisor::Event`.
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "stage"
+)]
 pub enum Stage {
     Downloading {
         file: String,

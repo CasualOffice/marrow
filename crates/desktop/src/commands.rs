@@ -174,6 +174,18 @@ pub async fn add_workspace(
     .await
 }
 
+/// The projects available to scope a question to.
+///
+/// Exposed so the scope is a thing the user can *pick*, not only a parameter
+/// the API accepts. A capability the window cannot reach is the pattern this
+/// codebase keeps producing, and it is indistinguishable from not having built
+/// the capability at all.
+#[tauri::command]
+pub async fn list_projects(core: State<'_, Arc<Core>>) -> Res<Vec<crate::state::Project>> {
+    let core = Arc::clone(&core);
+    blocking(move || core.projects()).await
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexHealth {
@@ -472,6 +484,7 @@ pub async fn list_files(
 const COMMAND_NAMES: &[&str] = &[
     "search",
     "list_workspaces",
+    "list_projects",
     "add_workspace",
     "index_health",
     "reindex",
@@ -618,7 +631,7 @@ mod tests {
         // to the user's disk; when one does it needs a deliberate addition.
         // `reindex` is the closest — it re-reads granted folders and rewrites
         // Marrow's own derived index, which is rebuildable by definition.
-        assert_eq!(COMMAND_NAMES.len(), 22);
+        assert_eq!(COMMAND_NAMES.len(), 23);
         for n in COMMAND_NAMES {
             assert!(
                 !n.contains("write") && !n.contains("delete") && !n.contains("exec"),

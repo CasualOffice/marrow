@@ -83,8 +83,10 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::search,
             commands::list_workspaces,
+            commands::list_projects,
             commands::add_workspace,
             commands::index_health,
+            commands::reindex,
             commands::file_detail,
             commands::read_region,
             commands::open_path,

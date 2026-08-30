@@ -107,6 +107,14 @@ fn relative_to(path: &str, roots: &[String]) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
+/// One folder a question can be narrowed to.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Project {
+    pub path: String,
+    pub files: i64,
+}
+
 impl Core {
     pub fn open(path: std::path::PathBuf) -> Result<Self> {
         // The composition root assembles the migration chain: `index` depends
@@ -457,6 +465,60 @@ impl Core {
         })?;
         self.store.flush()?;
         Ok(root_id)
+    }
+
+    /// The projects a question can be scoped to, with how much each holds.
+    ///
+    /// Derived rather than configured: a "project" here is just a folder under
+    /// the workspace root that holds indexed files, and the depth is chosen the
+    /// same way [`crate::ask::projects_of`] chooses it when naming the projects
+    /// an answer drew from. The two must agree — a scope the user picks from a
+    /// list and a project named in an answer have to be the same kind of thing,
+    /// or picking one would not narrow to the other.
+    ///
+    /// One segment when that already distinguishes the folders, two when it does
+    /// not. Under a root whose only child is `services/`, one segment names the
+    /// container and nothing else, which is no use as a filter.
+    pub fn projects(&self) -> Result<Vec<Project>> {
+        let conn = self.store.reader()?;
+        let roots = marrow_query::catalog::roots(&conn)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT current_path FROM files
+                  WHERE status='ACTIVE' AND current_path IS NOT NULL",
+            )
+            .map_err(|e| marrow_store::map_sqlite(e, "listing files for projects"))?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| marrow_store::map_sqlite(e, "listing files for projects"))?;
+
+        let mut folders: Vec<Vec<String>> = Vec::new();
+        for row in rows {
+            let path = row.map_err(|e| marrow_store::map_sqlite(e, "reading a file path"))?;
+            let rel = relative_to(&path, &roots);
+            let segments: Vec<String> = rel.split('/').map(str::to_string).collect();
+            if segments.len() > 1 {
+                folders.push(segments[..segments.len() - 1].to_vec());
+            }
+        }
+
+        let at = |n: usize| -> std::collections::BTreeMap<String, i64> {
+            let mut counts = std::collections::BTreeMap::new();
+            for f in &folders {
+                if f.len() < n {
+                    continue;
+                }
+                *counts.entry(f[..n].join("/")).or_insert(0) += 1;
+            }
+            counts
+        };
+
+        let top = at(1);
+        let chosen = if top.len() > 1 { top } else { at(2) };
+        Ok(chosen
+            .into_iter()
+            .map(|(path, files)| Project { path, files })
+            .collect())
     }
 
     pub fn workspaces(&self) -> Result<Vec<WorkspaceRow>> {

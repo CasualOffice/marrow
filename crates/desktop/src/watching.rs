@@ -12,7 +12,7 @@
 //! re-read every loop because a degraded watcher makes the sweep the primary
 //! mechanism rather than a backstop.
 
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -44,6 +44,14 @@ struct RootState {
     health: Mutex<(String, Option<String>)>,
     last_change_ms: AtomicI64,
     files_applied: AtomicU64,
+    /// Set by [`Watchers::sweep_now`], cleared by the watcher thread when it
+    /// begins the sweep.
+    ///
+    /// A flag rather than a second ingest, because the thread that owns this
+    /// root is already the one sweeping it: starting another over the same
+    /// root would double the walk, double the hashing, and have two producers
+    /// racing to write the same versions through the one writer actor.
+    sweep_requested: AtomicBool,
 }
 
 /// Handles for every running watcher. Dropping this stops them.
@@ -116,6 +124,71 @@ impl Watchers {
                 }
             })
             .collect()
+    }
+
+    /// Ask every running watcher to reconcile at its next loop iteration.
+    ///
+    /// Returns how many roots were asked, so the caller can say what it started
+    /// rather than claiming something happened.
+    ///
+    /// This is what "Run an index" means from the window. It does **not** start
+    /// an ingest here: the watcher thread for a root is already the thing that
+    /// sweeps it, and a second concurrent walk of the same tree would duplicate
+    /// every hash and race the first one through the single writer actor. The
+    /// wait is bounded by the loop's 250 ms poll, which is below the threshold
+    /// where a person wonders whether the button did anything.
+    ///
+    /// The sweep is the same idempotent, resumable ingest as every other one
+    /// (invariant #7), so pressing this on an unchanged corpus costs one walk
+    /// and stores nothing.
+    ///
+    /// A root whose thread has stopped is skipped rather than counted: nothing
+    /// would ever pick the flag up, and a button that reports "checking your
+    /// folders" while nothing checks them is how the index went nine hours
+    /// stale without saying so. When *nothing* can be asked, that is the whole
+    /// answer, and it is an error with the reason in it.
+    pub fn sweep_now(&self) -> Result<usize> {
+        let roots = self.roots.lock().map_err(|_| {
+            marrow_core::Error::invariant("the watcher list was poisoned by a panic")
+        })?;
+        if roots.is_empty() {
+            return Err(marrow_core::Error::new(
+                marrow_core::Code::CfgInvalid,
+                "Marrow has not been given a folder yet, so there is nothing to \
+                 index. Add one with “Add a folder”.",
+            ));
+        }
+
+        let mut asked = 0usize;
+        let mut stopped: Vec<String> = Vec::new();
+        for (name, state) in roots.iter() {
+            let (health, why) = state
+                .health
+                .lock()
+                .map(|g| g.clone())
+                .unwrap_or_else(|_| ("unknown".into(), None));
+            if health == "stopped" {
+                stopped.push(match why {
+                    Some(r) => format!("{name} ({r})"),
+                    None => name.clone(),
+                });
+                continue;
+            }
+            state.sweep_requested.store(true, Ordering::Release);
+            asked += 1;
+        }
+
+        if asked == 0 {
+            return Err(marrow_core::Error::new(
+                marrow_core::Code::CfgInvalid,
+                format!(
+                    "Nothing is watching {}, so there is no thread left to run the \
+                     sweep. Reopening Marrow starts the watchers again.",
+                    stopped.join(", ")
+                ),
+            ));
+        }
+        Ok(asked)
     }
 
     /// True when at least one root is being watched at all.
@@ -267,12 +340,19 @@ fn watch_one(core: &Core, t: &Target, state: &Arc<RootState>, cancel: &Cancel) {
             set_health(core, t, state, &health);
         }
 
+        // Cleared *before* the sweep, not after: a request that arrives while
+        // one is already running asked about a disk state that sweep may have
+        // walked past, and one redundant idempotent pass is the cheaper
+        // mistake.
+        let asked = state.sweep_requested.swap(false, Ordering::AcqRel);
         let due = last_sweep.elapsed() >= marrow_scan::reconcile_interval(&health);
-        if hints.rescan_required || due {
+        if asked || hints.rescan_required || due {
             last_sweep = Instant::now();
             // A lost event demands a full sweep. Reconciliation is what makes
             // the index correct; the watcher is only a hint (WATCH-001).
-            let why = if hints.rescan_required {
+            let why = if asked {
+                "asked from the app"
+            } else if hints.rescan_required {
                 "events were lost"
             } else {
                 "scheduled sweep"
@@ -397,5 +477,81 @@ fn sql_health(h: &Health) -> WatcherHealth {
         Health::Live => WatcherHealth::Live,
         Health::Degraded(_) => WatcherHealth::Degraded,
         Health::PollOnly(_) => WatcherHealth::PollOnly,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `Watchers` with the given roots and no threads behind them.
+    ///
+    /// `sweep_now` only ever touches the flags and the health labels, so the
+    /// threads are exactly the part that does not need to exist for these —
+    /// and starting real ones would put a filesystem walk inside a unit test.
+    fn watchers(roots: &[(&str, &str)]) -> Watchers {
+        Watchers {
+            cancel: Cancel::new(),
+            roots: Mutex::new(
+                roots
+                    .iter()
+                    .map(|(name, health)| {
+                        (
+                            (*name).to_string(),
+                            Arc::new(RootState {
+                                health: Mutex::new(((*health).to_string(), None)),
+                                ..RootState::default()
+                            }),
+                        )
+                    })
+                    .collect(),
+            ),
+            threads: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn requested(w: &Watchers, name: &str) -> bool {
+        let roots = w.roots.lock().expect("not poisoned");
+        let (_, s) = roots.iter().find(|(n, _)| n == name).expect("that root");
+        s.sweep_requested.load(Ordering::Acquire)
+    }
+
+    #[test]
+    fn a_sweep_request_reaches_every_running_root() {
+        // "Run an index" means all of them, not the first one: a second folder
+        // that quietly never reconciles is the failure this app already had.
+        let w = watchers(&[("notes", "live"), ("photos", "poll-only")]);
+        assert_eq!(w.sweep_now().expect("both are watched"), 2);
+        assert!(requested(&w, "notes"));
+        assert!(requested(&w, "photos"));
+    }
+
+    #[test]
+    fn a_stopped_root_is_not_counted_as_asked() {
+        // Nothing would ever pick the flag up. Counting it would make the
+        // window report "checking your folders" while nothing checked them,
+        // which is the exact shape of the staleness bug this page reports on.
+        let w = watchers(&[("notes", "live"), ("archive", "stopped")]);
+        assert_eq!(w.sweep_now().expect("one is watched"), 1);
+        assert!(requested(&w, "notes"));
+        assert!(!requested(&w, "archive"));
+    }
+
+    #[test]
+    fn when_nothing_is_watching_the_refusal_names_the_folder_and_the_way_out() {
+        // A refusal that does not say which folder or what to do is a dead
+        // button with extra steps.
+        let w = watchers(&[("archive", "stopped")]);
+        let e = w.sweep_now().expect_err("nothing can sweep");
+        assert_eq!(e.code(), marrow_core::Code::CfgInvalid);
+        assert!(e.message().contains("archive"), "{}", e.message());
+        assert!(e.message().contains("Reopening"), "{}", e.message());
+    }
+
+    #[test]
+    fn with_no_folders_at_all_the_refusal_points_at_adding_one() {
+        // The empty install. "Nothing happened" would be true and useless.
+        let e = watchers(&[]).sweep_now().expect_err("no roots");
+        assert!(e.message().contains("Add a folder"), "{}", e.message());
     }
 }
