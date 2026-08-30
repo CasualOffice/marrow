@@ -303,3 +303,35 @@ close, with the reason in each case.
 | F4 (part) | The chunker's overlapping granularities put the same passage in a result twice — `kv.rs` as lines 418–434 *and* 356–435 | I built a collapse on span containment and reverted it: two existing tests failed because distinct chunks can legitimately share a byte range, and the rule was one-directional anyway. **Dropping real evidence to tidy a result list is a worse bug than a wasted row.** A safe version keys on the text being a substring, not the span |
 | C10 | `query/src/intelligence.rs` — 1,049 lines with no caller | It is a spec-shaped read model built ahead of its consumers. Deleting someone's tested work is not mine to decide, and wiring it wholesale is building ahead of the milestone. TRACKER now says so instead of ticking it |
 | — | Per-root walk policy (D47) | The exclusion list is a constant and D47's per-root policy was never built. A folder genuinely wanted that happens to be named `dist` or `build` is invisible *and* now actively marked deleted. Needs a `walk_policy` column, a way to see what a root excludes, and a way to override it |
+
+
+---
+
+## Found while adding search filters (2026-08-30)
+
+**The semantic branch cannot be filtered.** `marrow_index::VectorQuery` carries a
+workspace and nothing else, so the vector branch retrieves without regard to
+extension, path or date. The CLI therefore post-filters those hits with
+`Filters::admits` — which is deliberately the after-the-fact filtering the
+design warns against everywhere else, and the trade was made knowingly: showing
+a `.pdf` under `--type html` is a visible falsehood, while losing a deep
+semantic candidate is an invisible recall loss.
+
+It is still the wrong shape. Teaching `VectorQuery` to take `Filters` would
+push the predicate into the query where the lexical branch already has it, and
+`admits` would delete itself.
+
+**The HTML parser extracts no links.** No `IrKind::Link`, no `href` anywhere —
+roughly the `TagEnd::Link` handling `markdown.rs` already has. A genuine unmet
+requirement, and it belongs in the walker rather than in a competing parser.
+
+### And one non-finding, recorded so it is not re-litigated
+
+**CSS does not need a parser, and that is a decision rather than an omission.**
+The harm an HTML parser fixes is that content is buried *inside* markup that is
+not content. A stylesheet has no such split: the declarations are the file, so a
+parser would re-emit the same bytes under different node kinds. The only prose
+is comments — a real 5,957-line stylesheet in this corpus has 145 comment
+openers, about 2% — and the text parser already finds them and cites them to an
+exact line. No question has been logged that plain text failed to answer for
+CSS, and the rule is not to add a parser until a real file demands one.
