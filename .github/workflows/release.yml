@@ -54,11 +54,23 @@ jobs:
 
       # `tauri build` does the bundling; the binaries above are what the CLI
       # artifact ships. Unsigned deliberately — see the release notes.
+      #
+      # **Run from the app directory, not from the workspace root with
+      # `--config`.** Every relative path in `tauri.conf.json` — `frontendDist`
+      # of `./ui/dist`, `beforeBuildCommand` of `pnpm --dir ui build` — is
+      # relative to the Tauri app directory, which is wherever the config lives.
+      # Passing `--config crates/desktop/tauri.conf.json` from the root does not
+      # move the app directory there; tauri resolved it one level off and ran
+      # `pnpm --dir ui build` against `crates/ui`, which does not exist.
+      #
+      # The `--no-bundle` warm-up pass is gone with it. It was followed by
+      # `|| true`, so it could only ever hide a failure that the next line was
+      # about to hit anyway.
       - name: bundle
+        working-directory: crates/desktop
         run: |
           cargo install tauri-cli --version "^2" --locked || true
-          cargo tauri build --config crates/desktop/tauri.conf.json --no-bundle || true
-          cargo tauri build --config crates/desktop/tauri.conf.json
+          cargo tauri build
 
       - name: collect
         id: collect

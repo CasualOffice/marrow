@@ -5,7 +5,7 @@
   "identifier": "dev.marrow.desktop",
   "build": {
     "frontendDist": "./ui/dist",
-    "beforeBuildCommand": "pnpm --dir ui build"
+    "beforeBuildCommand": "pnpm build"
   },
   "app": {
     "windows": [
