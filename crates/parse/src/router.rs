@@ -75,6 +75,12 @@ impl ParserRouter {
         // 6. Plain text — 449 files, and the T1 fallback for everything else
         //    that decodes.
         r.register(Box::new(crate::text::TextParser));
+        // 7. Images — T4, so `register`'s sort puts it after every parser
+        //    above regardless of where it appears here. That is the right
+        //    place: OCR is the most expensive parse in the crate and the only
+        //    one whose output is a guess, so it must never win a file that
+        //    something above could have read exactly.
+        r.register(Box::new(crate::image::ImageParser));
         r
     }
 

@@ -53,5 +53,35 @@ tempfile = "3"
 # Chromium library to do what the OS already does — including per-character
 # bounding boxes, which is what makes an exact citation possible at all.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSURL", "NSData", "NSValue", "NSGeometry"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSURL", "NSData", "NSValue", "NSGeometry", "NSArray", "NSDictionary", "NSError"] }
 objc2-pdf-kit = { version = "0.3", features = ["PDFDocument", "PDFPage"] }
+
+# OCR, through Vision (D13 — the OCR engine is platform-native). Same argument
+# as PDFKit: the recogniser is already on the machine, needs no model download
+# and no network, and it reports a normalised bounding box per line, which is
+# the only reason an OCR'd image can be cited at all.
+#
+# Features are named per header rather than taking the default set: the default
+# pulls in AVFoundation, CoreMedia and CoreVideo for the video-frame request
+# handlers, none of which this crate has any use for.
+objc2-vision = { version = "0.3", default-features = false, features = [
+    "VNRequest",
+    "VNRequestHandler",
+    "VNRecognizeTextRequest",
+    "VNObservation",
+    "VNTypes",
+    "objc2-core-foundation",
+    "objc2-core-image",
+] }
+
+# CoreImage is here for `CIImage::extent`, not for filtering. Vision reports
+# boxes normalised to the image it was handed, so turning one back into pixels
+# needs that image's size — and taking it from the same `CIImage` Vision reads
+# is the only way to be sure the two agree about orientation and scale. Parsing
+# the dimensions out of the file header separately would be a second opinion,
+# and a second opinion is how a box ends up drawn in the wrong place.
+objc2-core-image = { version = "0.3", default-features = false, features = [
+    "CIImage",
+    "CIColor",
+    "objc2-core-foundation",
+] }

@@ -232,6 +232,15 @@ pub struct NodeAttrs {
     pub line_start: Option<u32>,
     /// 1-based inclusive end line.
     pub line_end: Option<u32>,
+    /// How sure the producer is that this node's text is what the source says,
+    /// in `[0, 1]`. Only meaningful where reading the text was a guess — OCR —
+    /// and `None` everywhere a parser simply read bytes, which is most places.
+    ///
+    /// Distinct from [`ParsedArtifact::provenance`], which classifies the whole
+    /// artifact: one blurry line in an otherwise crisp screenshot is a fact
+    /// about that line, and averaging it away would hide exactly the node a
+    /// reader most needs warning about.
+    pub confidence: Option<f32>,
 }
 
 impl NodeAttrs {

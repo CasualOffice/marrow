@@ -14,6 +14,8 @@
 //!        ├── structured::Structured…  T1  TOML / JSON / YAML key paths
 //!        ├── csv::CsvParser           T1  table / row / cell
 //!        ├── text::TextParser         T1  the catch-all, byte + line spans
+//!        ├── pdf::PdfParser           T2  PDFKit, page + bbox
+//!        ├── image::ImageParser       T4  Vision OCR, page 1 + bbox
 //!        │
 //!        └── (nothing matched)   →   ParsedArtifact::metadata_only()   T5
 //! ```
@@ -54,18 +56,24 @@
 //!
 //! # What this crate deliberately does not parse
 //!
-//! PDF (D4 — fourteen files in the entire home directory, deferred
-//! indefinitely), XLSX, DOCX, and image pixels. They route to the metadata-only
-//! terminal, which is a correct answer rather than a gap: PAR-013 makes a file
-//! with no parser discoverable, and M0 F6 found that EXIF is the whole image
-//! story anyway.
+//! XLSX, DOCX, audio and video. They route to the metadata-only terminal, which
+//! is a correct answer rather than a gap: PAR-013 makes a file with no parser
+//! discoverable.
+//!
+//! Two entries left this list. PDF was D4 — fourteen files in the whole home
+//! directory, deferred indefinitely — and [`pdf`] reads it now. Images were
+//! M0 F6 — "EXIF is the whole image story" — and that turned out to be true of
+//! photographs and false of everything else: a screenshot of an error, a
+//! photographed whiteboard and a diagram exported to PNG are documents stored
+//! as pixels, and [`image`] reads them through the OS's own recogniser (D13).
 
-// Not `forbid`: `pdf` calls PDFKit, which is Objective-C and therefore unsafe
-// by definition. The alternative is vendoring a multi-megabyte Chromium
-// library to do what the OS already does — including the per-character bounds
-// that make an exact citation possible. The unsafe is confined to that one
-// module and every call is a documented message send with no lifetime to get
-// wrong.
+// Not `forbid`: `pdf` calls PDFKit and `image` calls Vision, both of which are
+// Objective-C and therefore unsafe by definition. The alternative in each case
+// is vendoring a library to do what the OS already does — a multi-megabyte
+// Chromium PDF renderer, a bundled OCR engine — and losing the per-character
+// bounds and per-line boxes that make an exact citation possible. The unsafe is
+// confined to those two modules, each carries a module-level `#[allow]`, and
+// every call is a documented message send with no lifetime to get wrong.
 #![deny(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
@@ -74,6 +82,7 @@ pub mod chunk;
 pub mod code;
 pub mod csv;
 pub mod decode;
+pub mod image;
 pub mod ir;
 pub mod markdown;
 pub mod parser;
@@ -87,6 +96,7 @@ pub use chunk::{chunk, Chunk, ChunkKind, ChunkPolicy, CHUNKER_VERSION};
 pub use code::{CodeParser, Lang};
 pub use csv::CsvParser;
 pub use decode::Decoded;
+pub use image::ImageParser;
 pub use ir::{
     ArtifactBuilder, IrKind, IrNode, LineIndex, NodeAttrs, ParseOutcome, ParseWarning,
     ParsedArtifact, ParserTier, SymbolKind, Trust,
