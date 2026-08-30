@@ -13,6 +13,11 @@
      of one sheet; giving this edge an elevation would say a window is floating
      over the answer, when what is true is that the answer got narrower. */
   box-shadow: inset 1px 0 0 var(--line);
+}
+
+/* Focused because it just opened. The ring is drawn inside its own edge: the
+   sheet clips, and the default 1px offset would put half of it outside. */
+.panel:focus-visible {
   outline-offset: -3px;
 }
 
@@ -36,10 +41,13 @@
 /* ── the drag handle ────────────────────────────────────────────────────── */
 
 /* Wider than it looks: the visible seam is 1px, the thing you can grab is 9,
-   because a 1px target is a target you miss. */
+   because a 1px target is a target you miss. Entirely *inside* the panel rather
+   than straddling the seam, because the panel clips and a handle hanging over
+   the edge would have its outer half cut away — including the half that would
+   have been hit-tested. */
 .grip {
   position: absolute;
-  left: -4px;
+  left: 0;
   top: 0;
   bottom: 0;
   width: 9px;
@@ -52,7 +60,7 @@
 .grip::after {
   content: "";
   position: absolute;
-  left: 4px;
+  left: 0;
   top: 0;
   bottom: 0;
   width: 1px;

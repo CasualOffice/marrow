@@ -41,6 +41,13 @@ import {
   type ArtifactKind,
 } from "../store";
 
+/**
+ * There is at most one panel, ever — opening a second artifact replaces the
+ * first — so it can afford a fixed id, and a card that is already open uses it
+ * to move focus here instead of re-opening what is in front of you.
+ */
+export const ARTIFACT_PANEL_ID = "artifact-panel";
+
 /* ── naming the thing ─────────────────────────────────────────────────────── */
 
 /**
@@ -368,8 +375,13 @@ function Panel({ artifact }: { artifact: Artifact }) {
     const host = panel.current?.parentElement;
     if (!host) return;
     const ro = new ResizeObserver(() => {
+      const available = host.clientWidth;
+      // Below the takeover threshold the stored width is not being used for
+      // anything, and squeezing it to the minimum here would mean a window
+      // briefly made narrow costs the reader the width they chose.
+      if (available < ARTIFACT_W_MIN + CONVERSATION_W_MIN) return;
       const store = useUi.getState();
-      const capped = clamp(store.artifactWidth, host.clientWidth);
+      const capped = clamp(store.artifactWidth, available);
       if (capped !== store.artifactWidth) store.setArtifactWidth(capped);
     });
     ro.observe(host);
@@ -424,6 +436,7 @@ function Panel({ artifact }: { artifact: Artifact }) {
   return (
     <aside
       ref={panel}
+      id={ARTIFACT_PANEL_ID}
       tabIndex={-1}
       className={styles.panel}
       style={{ "--artifact-w": `${width}px` } as CSSProperties}

@@ -29,6 +29,7 @@ import { AskView } from "./components/AskView";
 import { ModelsView } from "./components/ModelsView";
 import { StatusView } from "./components/StatusView";
 import { SettingsView } from "./components/SettingsView";
+import { ArtifactPanel } from "./components/ArtifactPanel";
 import { QuickFind } from "./components/QuickFind";
 import { ShortcutsDialog } from "./components/ShortcutsDialog";
 import { Notice } from "./components/Notice";
@@ -210,6 +211,17 @@ export function App() {
         }
         return;
       }
+      // Esc closes the artifact panel first: it is the newest thing on screen
+      // and the one the key is most likely aimed at. Not while typing, because
+      // in the composer Esc already means "stop generating", and a key that
+      // does two things at once does neither predictably. The panel handles
+      // Esc itself whenever focus is inside it, so the control is never more
+      // than one Tab away.
+      if (e.key === "Escape" && ui.view === "ask" && ui.artifact !== null && !typing) {
+        e.preventDefault();
+        ui.closeArtifact();
+        return;
+      }
       if (e.key === "Escape") {
         e.preventDefault();
         if (s.query !== "") {
@@ -222,6 +234,16 @@ export function App() {
         return;
       }
       if (e.key === "Tab") {
+        /*
+         * Ask has no panes. The cycle moves between the sidebar, the results
+         * column and the detail pane, and two of those three are not even
+         * mounted here — so swallowing Tab in this view spent it on nothing and
+         * took the only key that reaches a button with it. A conversation is
+         * full of controls that have to be reachable: the artifact cards, the
+         * sources disclosure, the composer's mode switch, and everything in the
+         * artifact panel. Here Tab means Tab.
+         */
+        if (ui.view === "ask") return;
         e.preventDefault();
         cyclePane(e.shiftKey);
         return;
@@ -231,17 +253,26 @@ export function App() {
         ui.setShortcutsOpen(true);
         return;
       }
-      if (e.key === "ArrowDown" || (!typing && e.key === "j")) {
+      /*
+       * The verbs below move and act on the search ranking, and Ask has no
+       * ranking on screen — so in that view they are not shortcuts, they are
+       * three keys taken away from a surface that needs all of them. `↵` is how
+       * a button is pressed, which is how an artifact card is opened; the arrows
+       * are how a scroller is scrolled, which is how a long generated page is
+       * read. Neither had a keyboard equivalent while this swallowed them.
+       */
+      const inAsk = ui.view === "ask";
+      if (!inAsk && (e.key === "ArrowDown" || (!typing && e.key === "j"))) {
         e.preventDefault();
         s.move(1);
         return;
       }
-      if (e.key === "ArrowUp" || (!typing && e.key === "k")) {
+      if (!inAsk && (e.key === "ArrowUp" || (!typing && e.key === "k"))) {
         e.preventDefault();
         s.move(-1);
         return;
       }
-      if (e.key === "Enter") {
+      if (e.key === "Enter" && !inAsk) {
         // The anchor, not the hit: `⌘↵` and `⇧↵` must keep working when the
         // selected file has dropped out of the current ranking.
         const a = s.anchor;
@@ -341,6 +372,15 @@ export function App() {
           */}
           <div hidden={view !== "ask"} className={styles.keepAlive}>
             <AskView />
+            {/*
+              A sibling of the conversation, not a child of it. The artifact
+              belongs to the answer, but it is a *column*: nested inside the
+              thread it could only ever be as tall as a message and as wide as
+              the measure, which is the shape it was already failing in. Here
+              the conversation simply gets narrower, and closing gives the
+              width straight back.
+            */}
+            <ArtifactPanel />
           </div>
           {view === "models" && <ModelsView />}
           {view === "status" && <StatusView />}

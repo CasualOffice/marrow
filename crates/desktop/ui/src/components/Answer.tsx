@@ -1,267 +1,122 @@
 /**
- * A streamed answer: Markdown, diagrams, and previews.
+ * A streamed answer: Markdown prose, plus a card for anything the model built
+ * rather than wrote.
  *
  * The model's output is untrusted — it is a guess about documents that may
  * themselves contain hostile text — so nothing here executes it in this page.
- * Markdown is sanitised; Mermaid is rendered by a library that produces SVG,
- * not script; and an `html` fence goes into a **sandboxed iframe with no
- * same-origin access**, which is the only way to show a page without becoming
- * it.
+ * Markdown is sanitised before it reaches the DOM. A `mermaid` or `html` fence
+ * is not rendered here at all: it becomes an *artifact*, which opens in the
+ * side panel, and every line of the machinery that renders one without trusting
+ * it lives in `ArtifactPanel.tsx`.
+ *
+ * The card is the whole of what the answer shows. A generated page inline was a
+ * 340px viewport of a document that wants a screen, sitting in the middle of a
+ * 62-character column and taking the attention the prose around it needed;
+ * three lines that say what was made, and open it properly, cost the answer
+ * nothing and lose the reader nothing.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef } from "react";
 
 import styles from "./Answer.module.css";
 import { cx } from "../lib/cx";
+import { Icon } from "./Icon";
 import { linkCitations, parseAnswer, type Block } from "../lib/markdown";
-
-/**
- * Mermaid is about 2 MB. Loaded the first time a diagram appears rather than
- * at startup, because most answers have none and launch must not wait on it.
- */
-let mermaidPromise: Promise<typeof import("mermaid").default> | null = null;
-function loadMermaid() {
-  if (!mermaidPromise) {
-    mermaidPromise = import("mermaid").then((m) => m.default);
-  }
-  return mermaidPromise;
-}
-
-/**
- * Resolve the design tokens to real colours.
- *
- * Mermaid rejects `var(--el2)` outright — it parses colours rather than
- * emitting them — so the values have to be read from the document at render
- * time. Reading them also means a diagram follows the theme instead of being
- * baked at first paint.
- */
-function themeVariables(): Record<string, string> {
-  const cs = getComputedStyle(document.documentElement);
-  const v = (name: string, fallback: string) =>
-    cs.getPropertyValue(name).trim() || fallback;
-  // Only real colour tokens: `--el1`/`--el2` are elevation *shadows* and
-  // mermaid parses what it is given rather than emitting it.
-  const line = v("--line-strong", "#c9c9c2");
-  const fg = v("--fg", "#1c1c19");
-  return {
-    background: "transparent",
-    primaryColor: v("--sunken", "#f0efeb"),
-    primaryTextColor: fg,
-    primaryBorderColor: line,
-    secondaryColor: v("--sunken", "#f4f3ef"),
-    tertiaryColor: v("--sheet", "#fbfaf7"),
-    lineColor: line,
-    textColor: fg,
-    mainBkg: v("--sunken", "#f0efeb"),
-    nodeBorder: line,
-    clusterBkg: v("--sunken", "#f4f3ef"),
-    clusterBorder: v("--line", "#e2e1db"),
-    edgeLabelBackground: v("--sheet", "#ffffff"),
-    fontFamily: v("--sans", "system-ui, sans-serif"),
-    fontSize: "13px",
-  };
-}
-
-/** The theme a diagram was drawn for, so a toggle redraws it. */
-function currentTheme(): string {
-  const explicit = document.documentElement.getAttribute("data-theme");
-  if (explicit) return explicit;
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
-
-let diagramSeq = 0;
-
-function Diagram({ source }: { source: string }) {
-  const [svg, setSvg] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const id = useMemo(() => `mmd-${(diagramSeq += 1)}`, []);
-  const theme = useTheme();
-
-  useEffect(() => {
-    let live = true;
-    // A diagram mid-stream is usually incomplete, so a parse failure is the
-    // normal case rather than an error. It is only reported once the block has
-    // stopped changing.
-    const t = window.setTimeout(() => {
-      loadMermaid()
-        .then((m) => {
-          m.initialize({
-            startOnLoad: false,
-            // `loose` would let a diagram carry click handlers, which is
-            // exactly what untrusted output must not have.
-            securityLevel: "strict",
-            theme: "base",
-            themeVariables: themeVariables(),
-          });
-          return m.render(`${id}-${theme}`, source);
-        })
-        .then((r) => {
-          if (live) {
-            setSvg(r.svg);
-            setError(null);
-          }
-        })
-        .catch((e: unknown) => {
-          if (live) setError(e instanceof Error ? e.message : String(e));
-        });
-    }, 200);
-    return () => {
-      live = false;
-      window.clearTimeout(t);
-    };
-  }, [id, source, theme]);
-
-  if (error) {
-    return (
-      <figure className={styles.diagramFailed}>
-        <figcaption>That diagram could not be drawn.</figcaption>
-        <pre>{source}</pre>
-        <p className={styles.diagramWhy}>{error}</p>
-      </figure>
-    );
-  }
-  if (!svg) {
-    return <div className={cx(styles.diagram, styles.diagramPending)} aria-busy="true" />;
-  }
-  // The SVG came from Mermaid in `strict` mode, which strips script and event
-  // handlers; it never contains the model's raw text as markup.
-  return (
-    <figure className={styles.diagram} dangerouslySetInnerHTML={{ __html: svg }} />
-  );
-}
-
-/**
- * The last version of a source that stopped changing.
- *
- * Assigning `srcDoc` reloads the frame from scratch, so following the token
- * stream directly would mean a hundred reloads of a document that is
- * half-written in every one of them. Waiting for a pause costs a moment and
- * buys a frame that renders a page the model has at least finished a thought
- * in, once.
- */
-function useQuiet(source: string, streaming: boolean): string {
-  const [quiet, setQuiet] = useState(streaming ? "" : source);
-  useEffect(() => {
-    if (!streaming) {
-      setQuiet(source);
-      return;
-    }
-    const t = window.setTimeout(() => setQuiet(source), 500);
-    return () => window.clearTimeout(t);
-  }, [source, streaming]);
-  return quiet;
-}
-
-/**
- * A generated page, shown without being trusted.
- *
- * `sandbox` without `allow-same-origin` gives the frame an opaque origin: no
- * access to this document, no cookies, no storage, no network under our
- * identity. Scripts are allowed because a page with none is not the thing the
- * user asked to see — but they run somewhere that cannot reach anything.
- *
- * The page leads, the markup follows. Someone who asked for a page wants to
- * look at the page; opening on a wall of angle brackets makes them do the
- * rendering in their head to find out whether the model understood them.
- */
-function Preview({ source, streaming }: { source: string; streaming: boolean }) {
-  const [showSource, setShowSource] = useState(false);
-  const rendered = useQuiet(source, streaming);
-  const sourceEl = useRef<HTMLPreElement>(null);
-  /**
-   * Whether the source block is still where we put it. Anything that grows a
-   * scroller mid-stream can drag its offset along, and the user then meets the
-   * document at a random line in its middle. We put it back — but only while
-   * they have not scrolled it themselves, because overriding a deliberate
-   * scroll is the more annoying of the two failures.
-   */
-  const atTop = useRef(true);
-
-  useEffect(() => {
-    if (!showSource) {
-      atTop.current = true;
-      return;
-    }
-    const el = sourceEl.current;
-    if (el && atTop.current) el.scrollTop = 0;
-  }, [showSource, source, streaming]);
-
-  const lines = useMemo(() => source.split("\n").length, [source]);
-
-  return (
-    <figure className={styles.preview}>
-      <figcaption className={styles.previewHead}>
-        <div className={styles.previewTitle}>
-          <span>Generated page</span>
-          <span className={styles.previewSize}>
-            {lines} {lines === 1 ? "line" : "lines"} of HTML
-          </span>
-          <button
-            type="button"
-            className={styles.previewToggle}
-            onClick={() => setShowSource((s) => !s)}
-          >
-            {showSource ? "Run the page here" : "Show the HTML"}
-          </button>
-        </div>
-        {/* The isolation and the destination, stated. A preview that says
-            neither what it can reach nor where it will appear is a preview the
-            user has to guess about. */}
-        <span className={styles.previewNote}>
-          {showSource
-            ? "The HTML the model wrote. Run it to render the page below, sealed off from your files, your index and this window."
-            : "Running below in a sealed frame — no access to your files, your index or this window."}
-        </span>
-      </figcaption>
-      {showSource ? (
-        <pre
-          ref={sourceEl}
-          className={styles.previewSource}
-          onScroll={(e) => {
-            atTop.current = e.currentTarget.scrollTop === 0;
-          }}
-        >
-          {source}
-        </pre>
-      ) : rendered ? (
-        <iframe
-          className={styles.previewFrame}
-          title="Generated page"
-          sandbox="allow-scripts"
-          srcDoc={rendered}
-        />
-      ) : (
-        <div className={styles.previewPending} aria-busy="true">
-          Writing the page…
-        </div>
-      )}
-    </figure>
-  );
-}
+import {
+  ARTIFACT_PANEL_ID,
+  artifactSummary,
+  artifactTitle,
+} from "./ArtifactPanel";
+import { useUi, type ArtifactKind } from "../store";
 
 function Prose({ html, citations }: { html: string; citations: ReadonlySet<string> }) {
   const linked = useMemo(() => linkCitations(html, citations), [html, citations]);
   return <div className={styles.prose} dangerouslySetInnerHTML={{ __html: linked }} />;
 }
 
-/** Re-renders on a theme change, so diagrams are never baked at first paint. */
-function useTheme(): string {
-  const [theme, setTheme] = useState(currentTheme);
+/**
+ * The entry point to a generated page or diagram.
+ *
+ * `useId` rather than the block's position in the answer: it is stable for as
+ * long as this card is mounted and unique across every answer in the thread,
+ * which is exactly what the panel needs to tell "the artifact I am showing has
+ * more tokens" from "a different artifact was opened".
+ */
+function ArtifactCard({
+  kind,
+  source,
+  streaming,
+}: {
+  kind: ArtifactKind;
+  source: string;
+  streaming: boolean;
+}) {
+  const key = useId();
+  const openKey = useUi((s) => s.artifact?.key ?? null);
+  const open = useUi((s) => s.openArtifact);
+  const isOpen = openKey === key;
+  const button = useRef<HTMLButtonElement>(null);
+
+  const title = useMemo(() => artifactTitle(kind, source), [kind, source]);
+  const summary = useMemo(() => artifactSummary(kind, source), [kind, source]);
+
+  /* While this is the one on show, the panel follows the stream. Opening an
+     artifact mid-answer and watching it stop growing would be worse than not
+     being able to open it at all. */
   useEffect(() => {
-    const update = () => setTheme(currentTheme());
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    media.addEventListener("change", update);
-    const observer = new MutationObserver(update);
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["data-theme"],
-    });
-    return () => {
-      media.removeEventListener("change", update);
-      observer.disconnect();
-    };
-  }, []);
-  return theme;
+    if (isOpen) {
+      useUi.getState().refreshArtifact({ key, kind, title, source, streaming });
+    }
+  }, [isOpen, key, kind, title, source, streaming]);
+
+  /* If the answer that produced it goes away — Retry drops the turn and asks
+     again — the panel must not be left showing a page that nothing on screen
+     produced any more. */
+  useEffect(
+    () => () => {
+      const ui = useUi.getState();
+      if (ui.artifact?.key === key) ui.closeArtifact();
+    },
+    [key],
+  );
+
+  /* Closing hands focus back to the card it was opened from, so the keyboard
+     lands where the eye already is. Only on a real close: when a *different*
+     artifact replaced this one, focus belongs to the panel that now holds it. */
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (wasOpen.current && !isOpen && useUi.getState().artifact === null) {
+      button.current?.focus();
+    }
+    wasOpen.current = isOpen;
+  }, [isOpen]);
+
+  return (
+    <button
+      ref={button}
+      type="button"
+      className={cx(styles.card, isOpen && styles.cardOn)}
+      aria-pressed={isOpen}
+      onClick={() => {
+        if (isOpen) {
+          // Already on show, so the only useful thing left is to take you
+          // there rather than to re-open what is in front of you.
+          document.getElementById(ARTIFACT_PANEL_ID)?.focus();
+          return;
+        }
+        open({ key, kind, title, source, streaming });
+      }}
+    >
+      <span className={styles.cardText}>
+        <span className={styles.cardTitle}>{title}</span>
+        <span className={styles.cardMeta}>{summary}</span>
+      </span>
+      <span className={styles.cardOpen}>
+        {isOpen ? "In the panel" : "Open"}
+        <Icon name="arrowRight" size={12} />
+      </span>
+    </button>
+  );
 }
 
 export function Answer({
@@ -294,9 +149,9 @@ export function Answer({
           case "markdown":
             return <Prose key={i} html={b.html} citations={citations} />;
           case "mermaid":
-            return <Diagram key={i} source={b.source} />;
+            return <ArtifactCard key={i} kind="mermaid" source={b.source} streaming={streaming} />;
           case "html":
-            return <Preview key={i} source={b.source} streaming={streaming} />;
+            return <ArtifactCard key={i} kind="html" source={b.source} streaming={streaming} />;
         }
       })}
       {/* A caret while tokens are still arriving. It is the only motion on the

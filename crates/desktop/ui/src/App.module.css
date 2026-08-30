@@ -70,12 +70,22 @@
 
 /* A view that must not be unmounted. `hidden` alone leaves it in the flex
    flow in some engines, so the display rule is explicit; when shown it has to
-   fill the sheet exactly as an unwrapped view would. */
+   fill the sheet exactly as an unwrapped view would.
+ *
+ * It is also the box the conversation and the artifact panel share, which is
+ * why it names a container: the panel's own stylesheet asks how much room the
+ * *pair* has, and the answer is not the window's width — the sidebar collapses,
+ * and the sheet keeps a margin. `position: relative` is for the same panel,
+ * which stops being a column and covers this box once there is no width left to
+ * split.
+ */
 .keepAlive {
   display: flex;
   flex: 1;
   min-width: 0;
   min-height: 0;
+  position: relative;
+  container: ask / inline-size;
 }
 
 .keepAlive[hidden] {
