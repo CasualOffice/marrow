@@ -225,8 +225,11 @@ impl Matcher {
         if q.pattern.is_empty() {
             return Err(Error::new(
                 Code::CfgInvalid,
-                "A literal search needs something to look for. Give it the exact text, or use \
-                 `--regex` for a pattern.",
+                // Names no flag: this is a library, and the CLI, MCP and the
+                // desktop each spell the regular-expression option their own
+                // way. See the same note in `fts5.rs`.
+                "A literal search needs something to look for. Give it the exact text, or a \
+                 regular expression if you asked for one.",
             ));
         }
         let plain =
@@ -256,8 +259,8 @@ impl Matcher {
             .map_err(|e| {
                 Error::new(
                     Code::CfgInvalid,
-                    "That search pattern is not a valid regular expression. Fix the pattern, or \
-                     drop `--regex` to search for the text exactly.",
+                    "That search pattern is not a valid regular expression. Fix the pattern, \
+                     or ask for an exact search instead of a regular expression.",
                 )
                 .with_context(e.to_string())
             })?;

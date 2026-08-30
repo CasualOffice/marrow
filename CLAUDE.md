@@ -6,7 +6,7 @@ Instructions for agents working in this repository.
 
 **Marrow**: a local knowledge runtime in Rust. It indexes folders the user grants, understands their structure, answers with citations to the exact page/cell/line, and exposes the index over MCP so existing agent front-ends can use it.
 
-**Currently specification-only.** No code yet. Current milestone is in [TRACKER.md](TRACKER.md).
+**The code exists and is used daily.** Fourteen crates, a Tauri desktop app, a `marrow` CLI, an MCP server over stdio, and 800+ tests. The spec still runs ahead of the build in most places, so **the spec is the design, [TRACKER.md](TRACKER.md) is the state** — never infer from a spec section that something is implemented. Current milestone is at the top of the tracker; open findings are in [BUGS.md](BUGS.md).
 
 **This is a solo, personal, open-source project.** Not a product, no users, no deadlines. Optimise for the author shipping something they use daily, not for completeness.
 
@@ -21,7 +21,9 @@ Instructions for agents working in this repository.
 | Tables | [Part 5 §99](docs/Part_5_Capabilities.md) |
 | Anything touching files, paths, evidence or execution | **[Part 7 §126](docs/Part_7_Solo_Rescope.md) — the non-negotiables** |
 
-**Spec supersession:** the docs are 7 parts, written in order. **Later parts supersede earlier ones.** Part 7 re-scopes everything for solo use and supersedes Part 4 entirely. Never cite Part 1–6 guidance without checking whether Part 7 changed it.
+**Spec supersession:** the docs are **nine** parts, written in order. **Later parts supersede earlier ones.** Part 7 re-scopes everything for solo use and supersedes Part 4 entirely; never cite Part 1–6 guidance without checking whether Part 7 changed it. Part 8 (model runtime) and Part 9 (egress) came after Part 7 and supersede it in their own areas.
+
+**And [DECISIONS.md](DECISIONS.md) supersedes the spec.** Where building it taught something the spec got wrong, the decision is the answer and the spec text was left alone: D3 (SQLite FTS5, not Tantivy), D54 (PDFKit, not PDFium), D55 (an MLX sidecar, not Candle or Ollama), D42 (a GUI, which §130 deleted), D56 (the agent layer, which §130 also deleted). Check DECISIONS before citing any part.
 
 ## Hard rules
 
@@ -40,14 +42,18 @@ These are not style preferences. Violating them creates bugs that are expensive 
 
 ## Scope discipline
 
-The spec is ~7,900 lines and the author is one person. **The default answer to "should we also…" is no.**
+The spec is ~8,700 lines across nine parts and the author is one person. **The default answer to "should we also…" is no.**
 
 - Don't build ahead of the current milestone
 - Don't add a parser until a real file demanded it
 - Don't abstract for platforms, hardware tiers or users that don't exist
-- Don't build a UI ([D42](DECISIONS.md)) or the knowledge graph ([D43](DECISIONS.md))
+- Don't build the knowledge graph ([D43](DECISIONS.md)) — it is gated on three real questions that search and timeline could not answer, and none have been logged
 - Don't build an OS sandbox — settled, permanently
-- Don't rebuild the agent loop, model gateway or approval UX — [D-agent-layer](DECISIONS.md)
+
+**Two of these were reversed, and pretending otherwise is why they got reversed silently:**
+
+- **A UI is in scope.** [D42](DECISIONS.md) was reversed — the desktop app *is* the product. §130's UI deletion no longer applies; [docs/GUI.md](docs/GUI.md) §4 bounds what ships.
+- **The agent layer already exists.** [D-agent-layer](DECISIONS.md) refused an agent runtime, model gateway, approval UX and chat UI. All four were built anyway, and [D56](DECISIONS.md) records that as superseded *in fact* — not repealed by argument. That is a warning, not a licence: nothing there authorises more agent-layer work than the current milestone asks for, and [Part 7 §130](docs/Part_7_Solo_Rescope.md) is still the reason to keep it small.
 
 If you think something outside the current milestone is genuinely needed, add it to the TRACKER parking lot and say so. Don't just build it.
 

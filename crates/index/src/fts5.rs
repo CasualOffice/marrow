@@ -591,17 +591,31 @@ fn index_missing(message: &'static str) -> impl Fn(rusqlite::Error) -> Error {
 pub fn search(conn: &Connection, q: &TextQuery) -> Result<Vec<TextHit>> {
     let expr = match_expression(q)?;
     let fields = q.effective_fields();
-    // `snippet()` takes -1 for "pick the best column". Pin it when the caller
-    // scoped the query to exactly one field, so the snippet is from the field
-    // they asked about.
+    // **The excerpt is content, so it comes from the body.**
+    //
+    // `snippet()` takes -1 for "pick the best column", and the columns here are
+    // `path`, `title` and `body`. A query that matches the filename therefore
+    // made the *path* the excerpt, and a query that matches a heading made the
+    // breadcrumb the excerpt — both rendered as though they were text from the
+    // file. Audited over 25 queries against the real corpus, only 93 of 215
+    // checkable results carried an excerpt that was actually the file's content:
+    // 18 were the absolute path and 55 were the heading.
+    //
+    // For a model that is worse than useless. An agent reading `"excerpt":
+    // "/Users/…/supervisor.rs"` beside `"location": "supervisor.rs:390"` has
+    // been handed a path as evidence for a line it never saw. The desktop
+    // already pinned Body for exactly this reason; making it the default is
+    // what stops every other caller inheriting the trap.
+    //
+    // Why it matched — filename, heading or text — is a real thing to report,
+    // but it belongs in a field of its own rather than smuggled into the field
+    // that says what the file contains.
     let snippet_col = match q.snippet.column {
         // An explicit choice always wins: the caller knows whether the snippet
         // is for a human to skim or for a model to read.
         Some(f) => f.column_index(),
         None if fields.len() == 1 => fields[0].column_index(),
-        // FTS5 picks the best-matching column, which is what a result row
-        // wants and is a trap for anything else. See `SnippetOptions::column`.
-        None => -1,
+        None => TextField::Body.column_index(),
     };
     let tokens = q.snippet.tokens.clamp(1, MAX_SNIPPET_TOKENS) as i64;
     // `limit = 0` means zero results, which is a coherent request; the upper

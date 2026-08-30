@@ -1450,3 +1450,44 @@ fn a_deleted_file_is_not_searchable_even_though_its_index_row_survives() {
          to open the very path it returned"
     );
 }
+
+/// **An excerpt is what the file says, not what it is called.**
+///
+/// `snippet()` with column -1 returns the best-*matching* column, and the
+/// columns are `path`, `title`, `body`. So a query matching a filename made the
+/// path the excerpt, and a query matching a heading made the breadcrumb the
+/// excerpt — both presented as text from the file. Audited against the real
+/// corpus, only 93 of 215 checkable results carried a genuine excerpt.
+///
+/// For a model this is actively misleading: an excerpt of
+/// `/Users/…/supervisor.rs` beside `location: supervisor.rs:390` is a path
+/// offered as evidence for a line nothing read.
+#[test]
+fn the_excerpt_is_the_files_text_even_when_the_filename_is_what_matched() {
+    let f = Fixture::new();
+    let index = f.index();
+    let (file, version) = f.add_file("supervisor.rs");
+    f.add_indexed_chunk(&f.doc(
+        file,
+        version,
+        "supervisor.rs",
+        "impl Supervisor",
+        "the admission queue drains oldest first",
+    ));
+
+    // "supervisor" is in the path and in the title, and nowhere in the body.
+    let hits = index
+        .search(&TextQuery::new("supervisor").mode(MatchMode::Terms).limit(5))
+        .expect("search");
+    assert_eq!(hits.len(), 1, "the file must still be found by its name");
+
+    let excerpt = &hits[0].snippet.text;
+    assert!(
+        !excerpt.contains(&f.dir.path().display().to_string()),
+        "the excerpt is the file's own path, presented as its content: {excerpt}"
+    );
+    assert!(
+        excerpt.contains("admission queue"),
+        "the excerpt should be the body of the chunk, got: {excerpt}"
+    );
+}

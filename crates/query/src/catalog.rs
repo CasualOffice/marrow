@@ -128,9 +128,15 @@ pub fn workspace_stats(conn: &ReadConn) -> Result<Vec<WorkspaceStats>> {
                        JOIN file_versions v ON v.version_id=c.version_id
                        JOIN files f2 ON f2.file_id=v.file_id
                       WHERE f2.workspace_id=w.workspace_id AND c.status='ACTIVE'),
+                    -- `f3.status='ACTIVE'` matters: the file count beside this
+                    -- number has it and this did not, so the two disagreed by
+                    -- 4.02 GB (29%) on the author's index — a deleted file keeps
+                    -- its CURRENT version row, and 9,989 of them were still
+                    -- being weighed.
                     (SELECT COALESCE(sum(v2.size_bytes),0) FROM file_versions v2
                        JOIN files f3 ON f3.file_id=v2.file_id
-                      WHERE f3.workspace_id=w.workspace_id AND v2.status='CURRENT'),
+                      WHERE f3.workspace_id=w.workspace_id AND v2.status='CURRENT'
+                        AND f3.status='ACTIVE'),
                     (SELECT count(*) FROM files f4
                       WHERE f4.workspace_id=w.workspace_id AND f4.tier_state!='RESIDENT'),
                     (SELECT count(*) FROM files f5
@@ -192,8 +198,13 @@ pub fn index_stats(conn: &ReadConn) -> Result<IndexStats> {
     let (files, content_bytes, cloud_only, workspaces): (i64, i64, i64, i64) = conn
         .query_row(
             "SELECT (SELECT count(*) FROM files WHERE status='ACTIVE'),
-                    (SELECT COALESCE(sum(size_bytes),0) FROM file_versions
-                      WHERE status='CURRENT'),
+                    -- Joined to `files` for the same reason as above: without
+                    -- it this counted the bytes of deleted files, so one line
+                    -- of output reported a file count and a byte total that
+                    -- described different sets.
+                    (SELECT COALESCE(sum(v.size_bytes),0) FROM file_versions v
+                       JOIN files f ON f.file_id=v.file_id
+                      WHERE v.status='CURRENT' AND f.status='ACTIVE'),
                     (SELECT count(*) FROM files WHERE tier_state != 'RESIDENT'),
                     (SELECT count(*) FROM workspaces WHERE status='ACTIVE')",
             [],

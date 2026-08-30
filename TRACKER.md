@@ -1,6 +1,6 @@
 # Tracker
 
-**Current milestone:** M3 — Desktop shell · Part 8 S1–S3 done, S4 next
+**Current milestone:** M3 — desktop shell shipped, PDFs done, **tables not started** · Part 8 S1–S5 and S7 done; S5b, S6 and S8's confirmation prompt are what is left
 **Last updated:** 2026-08-30
 
 > This is the file that actually gets updated. [ROADMAP.md](ROADMAP.md) is the plan; this is the state.
@@ -15,11 +15,20 @@
 | M0 | Measure | `[x]` | 2026-08-30 | 2026-08-30 |
 | M1 | Index + query | `[x]` | 2026-08-30 | 2026-08-30 |
 | M2 | MCP server | `[x]` | 2026-08-30 | 2026-08-30 |
-| M3 | Desktop shell | `[~]` | 2026-08-30 | — |
-| M4 | Semantic | `[x]` | 2026-08-30 | 2026-08-30 |
+| M3 | Desktop shell + PDF + tables | `[~]` | 2026-08-30 | — |
+| M4 | Semantic | `[~]` | 2026-08-30 | — |
 | M5 | Write tools | `[ ]` | — | — |
 | M6 | Timeline | `[ ]` | — | — |
 | M7+ | Optional | `[ ]` | — | — |
+
+**M4 was ticked here while its own section had 11 of 13 items open, and the
+tick was wrong in substance too.** The vectors are built, but for a long time
+the vector index had exactly **one** consumer in the repo — the desktop's Ask
+path — so a 2¼-hour backfill changed nothing on any other surface. `marrow
+search` gained a semantic branch in the same pass as this correction. The
+desktop **Search** view (`Core::search`) and the MCP `search` tool still open
+only `Fts5Index`. `[~]` until every surface that says it searches can use what
+`marrow embed` built.
 
 ### Part 8 — model runtime ([§150](docs/Part_8_Model_Runtime.md))
 
@@ -81,10 +90,12 @@ find ~ -flags dataless 2>/dev/null | wc -l
 - [x] Job queue: idempotency keys, leases, backoff+jitter, resume-after-crash
 - [x] `origin_device_id` on canonical tables ([D49](DECISIONS.md)) — retrofit-expensive, done now
 - [x] Readers are `query_only=ON` — "never open a second write connection" enforced by SQLite
-- [ ] `tracing` subscriber wiring in the CLI
+- [x] `tracing` subscriber wiring in the CLI — `init_tracing`, stderr only so
+  stdout stays a clean pipe, `RUST_LOG` respected, colour off when redirected
 
 ### Discovery
-- [ ] Workspace + root model with explicit consent
+- [x] Workspace + root model with explicit consent — `marrow workspace add`, and
+  `add_workspace` from the desktop's Settings
 - [x] `ignore`-based scan, `.gitignore` **as per-root policy** (D47), symlinks off
 - [x] `blake3` content hashing — refuses non-Resident files, unreachable without a tier check
 - [x] **Cloud placeholder detection — never hydrate** ⚠️ — `SF_DATALESS` + `.icloud` stubs, metadata-only
@@ -95,23 +106,39 @@ find ~ -flags dataless 2>/dev/null | wc -l
 - [x] Watcher health `live`/`degraded`/`poll-only`, never silent (WATCH-009)
 - [x] Adaptive sweep interval: 6 h live → 15 min degraded → 5 min poll-only (WATCH-010)
 - [x] `marrow watch` — incremental indexing; a new file is searchable seconds later
-- [ ] Watch several roots at once (one thread per watcher + a shared cancel)
-- [ ] Unicode NFC/NFD normalization so macOS doesn't create duplicate identities
+- [x] Watch several roots at once (one thread per watcher + a shared cancel) —
+  `cli/src/watching.rs`, `thread::scope`, every thread joined on shutdown
+- [x] Unicode NFC/NFD normalization so macOS doesn't create duplicate identities
+  — the same work as the path-identity tick above; listed twice
 
 ### Parsing — ordered by M0 file counts, not by spec order
-- [ ] Parser trait + versioned IR with `source_span` on every node ⚠️
-- [ ] Parser subprocess with timeout + memory cap
-- [ ] Tree-sitter: Rust, TypeScript/TSX, JavaScript, Python, SQL (~1,300 files)
-- [ ] Plain text (449)
-- [ ] Markdown (289)
-- [ ] TOML / JSON / YAML (~165)
-- [ ] Image `META` — EXIF/XMP, metadata only, never decode pixels (3,478 files, 35% of corpus)
-- [ ] CSV with dialect + encoding detection (~90)
-- [ ] HTML / CSS (~94)
+
+This block was left entirely unticked long after the parsers shipped. Ticked
+against `crates/parse/src/` and `ParserRouter::with_default_parsers`.
+
+- [x] Parser trait + versioned IR with `source_span` on every node ⚠️ —
+  `parser.rs`, `ir.rs`
+- [~] Parser subprocess with timeout + memory cap — **not built.** `catch_unwind`
+  plus `budget.rs` is the in-process half; it cannot catch a segfault in a
+  Tree-sitter grammar, which is the case the subprocess exists for
+- [x] Tree-sitter: Rust, TypeScript/TSX, JavaScript, Python, SQL (~1,300 files)
+- [x] Plain text (449)
+- [x] Markdown (289)
+- [x] TOML / JSON / YAML (~165)
+- [ ] Image `META` — EXIF/XMP, metadata only, never decode pixels (3,478 files,
+  35% of corpus). Images are *excluded* from the text parser and terminate as
+  metadata-only, so they stay findable by name (T5); **no EXIF/XMP is read**
+- [x] CSV with dialect + encoding detection (~90) — delimiter sniffed unless the
+  extension names one; decoding and its loss reported by `decode.rs`
+- [ ] HTML / CSS (~94) — no parser registered; they fall to plain text
 - [ ] XLSX / DOCX (66 — low priority, may slip to M3)
-- [-] PDF — **dropped**, 14 files in the entire home dir (M0 F3)
-- [ ] Default-exclude app noise: `*.dat` `*.toc` `*.journal` `*.strings` `*.plist`, fonts (~2,700 files, 29%)
-- [ ] `.gitignore` respect as **per-root policy**, not global (M0 F9 — it hides 442 xlsx)
+- [x] PDF — **the drop was reversed.** M0 F3 counted 14 files and dropped it;
+  [D54](DECISIONS.md) built it in M3 on PDFKit, because per-character bounds are
+  what make a citation to a region possible at all
+- [x] Default-exclude app noise: `*.dat` `*.toc` `*.journal` `*.strings`
+  `*.plist`, fonts (~2,700 files, 29%) — the exclusion list in `text.rs`
+- [x] `.gitignore` respect as **per-root policy**, not global (M0 F9 — it hides
+  442 xlsx) — same item as the Discovery tick above; listed twice
 
 ### Ingest pipeline
 - [x] Staged pipeline, bounded channels, N hash workers ([LLD §2.6](docs/LLD.md))
@@ -133,9 +160,14 @@ find ~ -flags dataless 2>/dev/null | wc -l
 - [ ] CLI `file` — the file-intelligence panel
 - [x] CLI `status` — workspaces, file counts, bytes, cloud-only
 - [x] CLI `workspace add` / `list`, `index`
-- [x] `--json` on every command; colour auto-off when piped
-- [ ] "Why not found" explanation
-- [ ] Real SIGINT handler (currently the process default; safe to resume, but a UX gap)
+- [x] `--json` on every command; colour auto-off when piped — true again as of
+  this pass. It was not: `Cmd::Embed` and `Cmd::Watch` were dispatched without
+  `cli.json`, so on those two the global flag parsed and was discarded
+- [~] "Why not found" explanation — the desktop has a zero-results page and the
+  CLI prints a hint, but the desktop's version asserts things it has not checked
+  (BUGS C6), so this is not closed
+- [x] Real SIGINT handler — `cli/src/waiting.rs` installs one via `ctrlc` and
+  exits 128 + SIGINT
 
 ### Gates
 - [ ] `kill -9` mid-scan → resumes cleanly, no duplicate work
@@ -183,7 +215,11 @@ find ~ -flags dataless 2>/dev/null | wc -l
   database died with `CFG_UNSUPPORTED_VERSION`. One exported
   `marrow_index::MIGRATIONS`, both roots on it, a `check.sh` guard, and
   `SCHEMA_VERSION` pinned to what the chain actually reaches
-- [x] `marrow-query` landed (32 tests) — read path: RRF fusion shape, FI read model, explain
+- [x] `marrow-query` landed (32 tests) — read path: RRF fusion shape, FI read
+  model, explain. **Landed, not wired:** only `catalog` has callers (MCP and the
+  desktop). `search_hybrid`, `intelligence` and `explain` have none; the desktop
+  borrows `search::{RRF_K, LEXICAL, SEMANTIC, …}` and re-implements the fusion
+  inline. ~1,900 lines exercised only by their own tests
 - [x] Swapped MCP's and desktop's hand-rolled SQL onto `marrow_query::catalog`.
   Both had their own workspace listing and index status, and `roots()` was
   byte-identical in two crates — two statements answering one question about
@@ -191,11 +227,15 @@ find ~ -flags dataless 2>/dev/null | wc -l
 
 ---
 
-## M3 — PDF + tables
+## M3 — Desktop shell + PDF + tables
 
 **PDFs are done; tables are not started.** The milestone was scoped as one
 thing and is two, and the second half is a genuine body of work rather than
 a few unticked boxes.
+
+The **desktop shell** also shipped under M3 and has no checklist here — it is
+recorded only in the Log (`a8362be`, `c2141d1`, `cd9b50f`, `e883546`) and in
+[BUGS.md](BUGS.md), which is where its open work now lives.
 
 - [x] **PDFKit**, not PDFium ([D54](DECISIONS.md)) — text + page + per-character
   bbox, verified on a real 49-page document
@@ -231,7 +271,7 @@ nobody is asking.
 - [x] `profile` — Efficient / Balanced / Larger local / Cloud, defaulting by probe
 - [x] Models page reading all of the above — machine, live memory, tiering, per-model verdict with the arithmetic
 
-### S2 — registry `[~]`
+### S2 — registry `[x]`
 - [x] `Entry`, `Capabilities`, `Licence`, `Source`, `Format`
 - [x] Built-in catalogue: Qwen 3.5 4B · Nemotron Nano 4B · Granite 4 3B · Gemma 4B
 - [x] **Real digests, pinned to commits.** Six models, every file carrying its own published SHA-256; the small files HuggingFace publishes only a git SHA-1 for were fetched and hashed. Generated by `pin-catalogue.py`, never typed
@@ -265,7 +305,7 @@ nobody is asking.
 - [x] Citations clickable, self-written sources listed as excluded, egress disclosed
 - [ ] Skeletons on the *search* path (SKEL-001..008) — only the Ask path streams
 
-### S7 — creation tools `[~]`
+### S7 — creation tools `[x]`
 - [x] **The adversarial corpus** — 59 cases in `corpus/adversarial/`, all
   exercised. The TOCTOU coverage was mutation-tested: disabling the pre-write
   re-canonicalisation lets a symlink created between validation and write
@@ -300,14 +340,30 @@ nobody is asking.
 
 ## M4 — Semantic
 
-- [ ] Format-aware chunker with structural context prefix
+**Half-built, and the missing half is the half a user sees.** The producer
+works: `marrow embed` and the Models-page control fill `chunk_embeddings`. The
+consumers lagged it badly — for a long time only the desktop's Ask read a
+vector, so a finished backfill was invisible everywhere else. `marrow search`
+now opens `SqliteVectorIndex` too. **Still lexical-only:** the desktop's
+`Core::search` (the Search view) and `mcp/src/server.rs::search`, which is the
+one an agent actually calls. That gap is what made the progress table's `[x]`
+wrong.
+
+- [x] Format-aware chunker with structural context prefix — landed in M1
+  (structural boundaries, context prefix instead of overlap)
 - [ ] Chunk-stable IDs; IR diffing so unchanged chunks keep their vectors
-- [ ] Embedding provider trait
-- [ ] Local embeddings (Candle) or Ollama adapter — decide [D2/D31](DECISIONS.md)
-- [ ] Vector storage: brute-force cosine first
+- [x] Embedding provider trait — `EmbeddingProvider` in `model/src/provider.rs`
+- [x] Local embeddings — **neither Candle nor Ollama.** An MLX embedder in its
+  own worker process ([D55](DECISIONS.md)); Ollama/LM Studio are detected if
+  present but do not produce the index's vectors. [D2/D31](DECISIONS.md) is
+  answered by that, and should be moved to Settled
+- [x] Vector storage: brute-force cosine first — `index/src/vector.rs`,
+  in-memory row cache, exact, ceiling at 1M chunks ([D1](DECISIONS.md))
 - [ ] Content-addressed embedding cache
-- [ ] RRF fusion; weights in config, not code
-- [ ] `search --explain`
+- [~] RRF fusion; weights in config, not code — the constants live in
+  `query/src/search.rs` and the desktop's Ask fuses with them, but in code, not
+  config, and `search_hybrid` itself has no caller
+- [ ] `search --explain` — `query/src/explain.rs` exists; no CLI flag reaches it
 - [x] `marrow embed` — builds semantic search over what is already indexed.
   Separate from `index` on purpose: indexing must work with no model, no GPU
   and no network, so the meaning-based half is a thing you turn on. Resumable;
@@ -398,6 +454,7 @@ Short entries. What shipped, what surprised you, what changed.
 
 | Date | Entry |
 |---|---|
+| 2026-08-30 | **The files that tell you what this is were describing a different project** (BUGS C21–C23, C3, C4). `CLAUDE.md` — loaded into every agent's context as instructions — opened with "Currently specification-only. No code yet." against fourteen crates, a shipped desktop app, a CLI, an MCP server and 838 tests, and told every agent not to build a UI or an agent layer when [D42](DECISIONS.md) had been reversed and [D56](DECISIONS.md) records all four agent-layer refusals as already violated. The README named Tantivy (D3 chose FTS5), PDFium (D54 chose PDFKit), Candle-or-Ollama (D55 chose an MLX sidecar) and a UI "deferred past M6". This tracker ticked **M4 Semantic done** with 11 of its 13 items open and one consumer of the vector index in the whole repo. Two more ticks were false on inspection: `--json` "on every command" (`embed` and `watch` never received it — fixed in a parallel pass, so the tick is true again) and the whole M1 parsing block, which was still unticked long after the parsers shipped — including PDF, marked *dropped* while `pdf.rs` was in the router. Two library error messages were worse than stale: `marrow reindex` does not exist and "delete the index directory" resolves to deleting `marrow.db`, corrections and all, which hard rule 8 says is the one thing that cannot be rebuilt. The pattern is the same every time: nothing enforces a document, so a document drifts silently while the code moves, and the drift is invisible until someone acts on it. |
 | 2026-08-30 | **Six bugs from three screenshots, and every one was invisible to the test suite.** (1) Every answer's footer read `tokens in NaNm NaNs` — `#[serde(rename_all)]` on an enum renames the *variants*, not their fields, so every multi-word field crossed to the window in snake_case while the UI read camelCase. It silently suppressed the truncation notice too, which is part of why answers still looked like they stopped for no reason. (2) "What model are you using?" was answered *from the corpus*: retrieval found chunks containing the word "model", reported that no model name appeared in the documents, and offered "GPT-4" and "Llama-3" as examples of what it had not found — while the footer of that same answer read `qwen3.5-4b-mlx-q4`. The envelope has carried a FACT block with `trust=DETERMINISTIC_RUNTIME` since it was written and **nothing ever populated it**. (3) No text was selectable: `user-select: none` is right for chrome and wrong for an answer. (4) **No way to add a folder from the app at all** — the premise of the product needed a terminal. (5) Switching tabs destroyed the whole Ask conversation, and a generation in flight kept running with nothing to receive its tokens. (6) "Retry parsing" is a dead button aimed at a non-problem: of 46,129 parse results, **zero** are FAILED and 35,422 are METADATA_ONLY — photos and binaries with no parser, which the spec calls expected. The Status page presents that count with a warning triangle. |
 | 2026-08-30 | **Dogfooding the MCP server found that the index was silently stale, and every surface reported over it confidently.** Asked marrow about its own code and got `matches: 0` for symbols that plainly exist — 109 `.rs` files on disk, 50 indexed, last scan nine hours earlier. Three compounding causes: nothing ran a watcher (`marrow watch` existed; the desktop app had no watcher code at all), `watcher_health` defaulted to `LIVE` in the schema and **nothing ever wrote it**, and `last_reconciled_at` was never written either — so a database nobody had ever watched reported a live watcher and no reader could tell a current index from a stale one. Fixed: the desktop starts one watcher per root on launch, both watchers persist health and reconciliation time to the store so *other processes* (the MCP server, the CLI) can read freshness, and `index_status` now carries `last_indexed_ms`, `watcher`, `may_be_stale` and a sentence saying what that means. A fourth bug fell out while testing: **a watcher is not listening the instant it opens, and nothing listens while the app is shut** — so a change in either window emitted no event and waited for the *six-hour* scheduled sweep. Both watchers now sweep once before listening. That is the ordinary case, not the edge one: you edit files all day with the app closed, open it, and every answer came from whenever you last ran a scan. |
 | 2026-08-30 | **`search_literal` over MCP closes M2's last item of mine.** The tool that finds `});` and `TODO(name)` — the patterns FTS5 cannot express, because it tokenizes — is now callable by an agent rather than only from a terminal. The interesting part was not the scan but the payload: it reports `coverage` with `complete` and a count for every file it skipped, since a model that sees `matches: 0` and nothing else concludes the string is not on the disk, and on a 35,134-file index the scan stops on its time budget long before that is known. Fixing this surfaced a smaller one: the "no letters or digits" error came from the *library* and suggested `--literal`, a CLI flag, on every surface — over MCP that names nothing callable, and in the desktop nothing at all. The library now names no affordance and each surface names its own. |
