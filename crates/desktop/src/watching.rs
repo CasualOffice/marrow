@@ -60,6 +60,9 @@ pub struct Watchers {
     cancel: Cancel,
     /// Grows when a folder is granted while the app is running.
     roots: Mutex<Vec<(String, Arc<RootState>)>>,
+    /// Where the cross-process sweep locks live. Held here so a root granted
+    /// later is watched on the same terms as one found at launch.
+    locks: std::path::PathBuf,
     threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
 }
 
@@ -69,7 +72,7 @@ impl Watchers {
     /// Never fatal. A root that cannot be watched leaves the rest running and
     /// says why — refusing to open the app because one folder is on a
     /// disconnected volume would be the wrong trade.
-    pub fn start(core: Arc<Core>) -> Result<Self> {
+    pub fn start(core: Arc<Core>, data_dir: std::path::PathBuf) -> Result<Self> {
         let targets = targets(core.store())?;
         let cancel = Cancel::new();
         let mut roots = Vec::new();
@@ -84,9 +87,10 @@ impl Watchers {
 
             let core = Arc::clone(&core);
             let cancel = cancel.clone();
+            let locks = data_dir.clone();
             let built = std::thread::Builder::new()
                 .name(format!("marrow-watch-{}", t.name))
-                .spawn(move || watch_one(&core, &t, &state, &cancel));
+                .spawn(move || watch_one(&core, &t, &state, &cancel, &locks));
             match built {
                 Ok(h) => threads.push(h),
                 Err(e) => tracing::warn!(error = %e, "could not start a watcher thread"),
@@ -97,6 +101,7 @@ impl Watchers {
             cancel,
             roots: Mutex::new(roots),
             threads: Mutex::new(threads),
+            locks: data_dir,
         })
     }
 
@@ -204,6 +209,7 @@ impl Watchers {
     /// streams for folders that were fine — a newly granted folder must not
     /// cost the others a gap in coverage.
     pub fn watch_also(&self, core: Arc<Core>, root_id: RootId) -> Result<()> {
+        let data_dir = self.locks.clone();
         let Some(t) = targets(core.store())?
             .into_iter()
             .find(|t| t.root_id == root_id)
@@ -222,7 +228,7 @@ impl Watchers {
         let cancel = self.cancel.clone();
         let handle = std::thread::Builder::new()
             .name(format!("marrow-watch-{}", t.name))
-            .spawn(move || watch_one(&core, &t, &state, &cancel))
+            .spawn(move || watch_one(&core, &t, &state, &cancel, &data_dir))
             .map_err(|e| {
                 marrow_core::Error::new(
                     marrow_core::Code::CfgInvalid,
@@ -296,7 +302,13 @@ fn targets(store: &Store) -> Result<Vec<Target>> {
     Ok(out)
 }
 
-fn watch_one(core: &Core, t: &Target, state: &Arc<RootState>, cancel: &Cancel) {
+fn watch_one(
+    core: &Core,
+    t: &Target,
+    state: &Arc<RootState>,
+    cancel: &Cancel,
+    locks: &std::path::Path,
+) {
     let root = match AuthorizedRoot::open(&t.path) {
         Ok(r) => r,
         Err(e) => return stopped(core, t, state, e.message()),
@@ -325,7 +337,9 @@ fn watch_one(core: &Core, t: &Target, state: &Arc<RootState>, cancel: &Cancel) {
     // It is the same idempotent, resumable ingest the manual scan runs, so on
     // an unchanged corpus it costs one walk and stores nothing.
     let mut last_sweep = Instant::now();
-    sweep(core, t, &root, &policy, state, cancel, &health, "opened");
+    sweep(
+        core, t, &root, &policy, state, cancel, &health, "opened", locks,
+    );
 
     loop {
         if cancel.is_cancelled() {
@@ -357,7 +371,7 @@ fn watch_one(core: &Core, t: &Target, state: &Arc<RootState>, cancel: &Cancel) {
             } else {
                 "scheduled sweep"
             };
-            sweep(core, t, &root, &policy, state, cancel, &health, why);
+            sweep(core, t, &root, &policy, state, cancel, &health, why, locks);
             continue;
         }
         if hints.touched.is_empty() {
@@ -392,7 +406,26 @@ fn sweep(
     cancel: &Cancel,
     health: &Health,
     why: &str,
+    locks: &std::path::Path,
 ) {
+    // **One sweep per root, across processes.** The app watches while it is
+    // open and a terminal running `marrow watch` has no idea it exists, so both
+    // would walk the same 35,000 files and hand identical work to the one
+    // writer. Nothing was corrupted — the writer serialises and the ingest is
+    // idempotent — it was simply done twice, and neither process said so.
+    //
+    // Advisory: if the lock cannot be taken for any reason other than someone
+    // holding it, `acquire` returns a lock that owns nothing and the sweep
+    // proceeds. Reconciliation is what makes the index correct, and it must not
+    // be stoppable by a file.
+    let Some(lock) = marrow_scan::SweepLock::acquire(locks, t.root_id) else {
+        tracing::debug!(
+            root = %t.name,
+            "another process is already sweeping this folder; skipping"
+        );
+        return;
+    };
+
     let outcome = marrow_ingest::ingest_root_with_index(
         core.store(),
         t.workspace_id,
@@ -403,7 +436,11 @@ fn sweep(
         cancel,
         Some(core.index()),
     );
+    // Held until the sweep is recorded, so a second process cannot start one
+    // between the walk finishing and the freshness being written.
+    lock.refresh();
     record(core, t, state, health, outcome, why);
+    drop(lock);
 }
 
 /// Publish the result of one update, and persist the freshness it establishes.
@@ -522,6 +559,9 @@ mod tests {
                     .collect(),
             ),
             threads: Mutex::new(Vec::new()),
+            // No thread ever runs in these tests, so nothing reaches the lock
+            // directory; a path that does not exist proves that.
+            locks: std::path::PathBuf::from("/nonexistent"),
         }
     }
 

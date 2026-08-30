@@ -82,6 +82,19 @@ fn data_dir() -> PathBuf {
     PathBuf::from(std::env::var_os("HOME").expect("HOME")).join(".local/share/marrow")
 }
 
+/// A private sweep-lock directory per test.
+///
+/// The lock is deliberately cross-process, so tests sharing one directory would
+/// contend with each other and with a real `marrow watch` on this machine —
+/// which is exactly the coupling it exists to create in production and exactly
+/// what a test must not inherit.
+fn lock_dir() -> std::path::PathBuf {
+    let d = tempfile::tempdir().expect("lock dir");
+    let p = d.path().to_path_buf();
+    std::mem::forget(d);
+    p
+}
+
 /// The one root in a `watchable_workspace`.
 fn first_root(core: &Core) -> marrow_core::RootId {
     let conn = core.store().reader().expect("reader");
@@ -820,6 +833,7 @@ mod watching {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
+    use super::lock_dir;
     use marrow_desktop::Watchers;
 
     /// Poll until `f` holds or the deadline passes. Filesystem events are
@@ -839,7 +853,7 @@ mod watching {
     fn a_file_created_while_the_app_is_open_becomes_searchable_without_a_manual_scan() {
         let (dir, core) = super::watchable_workspace();
         let core = Arc::new(core);
-        let watchers = Watchers::start(Arc::clone(&core)).expect("watchers start");
+        let watchers = Watchers::start(Arc::clone(&core), lock_dir()).expect("watchers start");
 
         std::fs::write(
             dir.path().join("note.md"),
@@ -880,7 +894,7 @@ mod watching {
             "nothing has scanned yet, so this must not be findable"
         );
 
-        let watchers = Watchers::start(Arc::clone(&core)).expect("watchers start");
+        let watchers = Watchers::start(Arc::clone(&core), lock_dir()).expect("watchers start");
         let found = within(20, || {
             core.search("sublet", 5)
                 .map(|r| !r.hits.is_empty())
@@ -943,7 +957,7 @@ mod watching {
             "a database nobody has watched must not report itself fresh"
         );
 
-        let watchers = Watchers::start(Arc::clone(&core)).expect("watchers start");
+        let watchers = Watchers::start(Arc::clone(&core), lock_dir()).expect("watchers start");
         let fresh = within(20, || {
             marrow_query::catalog::index_stats(&core.store().reader().unwrap())
                 .map(|s| !s.may_be_stale())

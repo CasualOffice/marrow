@@ -919,7 +919,7 @@ fn watch(only: Option<&str>, json: bool, style: Style, out: &mut impl Write) -> 
     if !json {
         writeln!(out, "{}", style.dim("Ctrl-C to stop"))?;
     }
-    watching::run(&store, targets, &cancel, json, style, out)
+    watching::run(&store, targets, &cancel, json, style, out, &data_dir()?)
 }
 
 #[cfg(test)]

@@ -72,6 +72,8 @@ enum Report {
 /// Watch every target until interrupted.
 ///
 /// Returns once every thread has joined and the store has been flushed.
+#[allow(clippy::too_many_arguments)] // Each is a distinct input the command
+                                     // parsed; a struct would move the list.
 pub fn run(
     store: &marrow_store::Store,
     targets: Vec<Target>,
@@ -79,6 +81,9 @@ pub fn run(
     json: bool,
     style: Style,
     out: &mut impl Write,
+    // Where the cross-process sweep locks live, so this and the desktop app do
+    // not walk the same corpus twice.
+    locks: &std::path::Path,
 ) -> Result<()> {
     let (tx, rx) = channel::<Report>();
     let policy = Arc::new(IngestPolicy::default());
@@ -93,7 +98,7 @@ pub fn run(
             let tx = tx.clone();
             let cancel = cancel.clone();
             let policy = Arc::clone(&policy);
-            handles.push(scope.spawn(move || watch_one(store, t, &policy, &cancel, &tx)));
+            handles.push(scope.spawn(move || watch_one(store, t, &policy, &cancel, &tx, locks)));
         }
         // The main thread's own sender must go, or `rx` never disconnects and
         // the render loop waits forever for threads that have already stopped.
@@ -123,6 +128,73 @@ pub fn run(
 }
 
 /// One root's loop. Owns no output.
+/// One reconciliation, if nobody else is already doing it.
+///
+/// **One sweep per root, across processes.** The desktop app watches while it
+/// is open and a terminal running `marrow watch` has no idea it exists, so
+/// without this both walk the same corpus and hand identical work to the one
+/// writer. Nothing was corrupted — the writer serialises and the ingest is
+/// idempotent — it was simply done twice, and neither process said so.
+///
+/// Advisory. If the lock cannot be taken for any reason *other* than someone
+/// holding it, `acquire` hands back a lock that owns nothing and the sweep goes
+/// ahead: reconciliation is what makes the index correct, and it must not be
+/// stoppable by a file.
+#[allow(clippy::too_many_arguments)] // Each is a distinct input this call needs;
+                                     // a struct would move the list, not shorten it.
+fn sweep(
+    store: &marrow_store::Store,
+    t: &Target,
+    root: &AuthorizedRoot,
+    policy: &IngestPolicy,
+    cancel: &Cancel,
+    tx: &Sender<Report>,
+    locks: &std::path::Path,
+    index: &marrow_index::Fts5Index,
+    health: &marrow_scan::Health,
+    reason: &'static str,
+) {
+    let Some(lock) = marrow_scan::SweepLock::acquire(locks, t.root_id) else {
+        let _ = tx.send(Report::Swept {
+            name: t.name.clone(),
+            files: 0,
+            reason: "skipped — another process is sweeping this folder",
+        });
+        return;
+    };
+
+    let progress = Arc::new(Progress::new());
+    let outcome = marrow_ingest::ingest_root_with_index(
+        store,
+        t.workspace_id,
+        t.root_id,
+        root,
+        policy,
+        &progress,
+        cancel,
+        Some(index),
+    );
+    // Held until the freshness is written, so a second process cannot start
+    // between the walk finishing and the stamp landing.
+    lock.refresh();
+    match outcome {
+        Ok(o) => {
+            mark(store, t, health);
+            let _ = tx.send(Report::Swept {
+                name: t.name.clone(),
+                files: o.stored,
+                reason,
+            });
+        }
+        Err(e) => {
+            let _ = tx.send(Report::Failed {
+                name: t.name.clone(),
+                message: e.message().to_string(),
+            });
+        }
+    }
+}
+
 /// Persist how fresh this root is, and who is watching it.
 ///
 /// **The database is the only channel to the other processes.** The MCP server
@@ -147,6 +219,7 @@ fn watch_one(
     policy: &IngestPolicy,
     cancel: &Cancel,
     tx: &Sender<Report>,
+    locks: &std::path::Path,
 ) {
     let root = match AuthorizedRoot::open(&t.path) {
         Ok(r) => r,
@@ -194,32 +267,18 @@ fn watch_one(
     // a change in either window emits no event and would wait for the next
     // scheduled sweep, six hours away. The ingest is idempotent, so on an
     // unchanged corpus this costs one walk and stores nothing.
-    let progress = Arc::new(Progress::new());
-    match marrow_ingest::ingest_root_with_index(
+    sweep(
         store,
-        t.workspace_id,
-        t.root_id,
+        t,
         &root,
         policy,
-        &progress,
         cancel,
-        Some(&index),
-    ) {
-        Ok(o) => {
-            mark(store, t, &health);
-            let _ = tx.send(Report::Swept {
-                name: t.name.clone(),
-                files: o.stored,
-                reason: "started watching",
-            });
-        }
-        Err(e) => {
-            let _ = tx.send(Report::Failed {
-                name: t.name.clone(),
-                message: e.message().to_string(),
-            });
-        }
-    }
+        tx,
+        locks,
+        &index,
+        &health,
+        "started watching",
+    );
 
     loop {
         if cancel.is_cancelled() {
@@ -248,32 +307,9 @@ fn watch_one(
                 "scheduled sweep"
             };
             last_sweep = Instant::now();
-            let progress = Arc::new(Progress::new());
-            match marrow_ingest::ingest_root_with_index(
-                store,
-                t.workspace_id,
-                t.root_id,
-                &root,
-                policy,
-                &progress,
-                cancel,
-                Some(&index),
-            ) {
-                Ok(o) => {
-                    mark(store, t, &health);
-                    let _ = tx.send(Report::Swept {
-                        name: t.name.clone(),
-                        files: o.stored,
-                        reason,
-                    });
-                }
-                Err(e) => {
-                    let _ = tx.send(Report::Failed {
-                        name: t.name.clone(),
-                        message: e.message().to_string(),
-                    });
-                }
-            }
+            sweep(
+                store, t, &root, policy, cancel, tx, locks, &index, &health, reason,
+            );
             continue;
         }
 
