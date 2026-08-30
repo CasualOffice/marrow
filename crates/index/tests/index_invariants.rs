@@ -1365,3 +1365,88 @@ fn a_missing_index_asks_for_a_rebuild_rather_than_failing_obscurely() {
     let err = index.doc_count().unwrap_err();
     assert_eq!(err.code(), Code::IdxRebuildRequired);
 }
+
+/// **Search must answer from the disk as it is, not as it was.**
+///
+/// The index holds a row per indexed chunk and nothing removes one when a
+/// version is superseded or its file is deleted. `chunks.status` has a
+/// `SUPERSEDED` value that no code has ever written, so on the author's real
+/// corpus 32,436 index docs belonged to HISTORICAL versions and 34,069 to
+/// DELETED files, out of 131,519 — roughly half the index describing a disk
+/// that had moved on.
+///
+/// The result was not staleness, it was contradiction: search answered from a
+/// superseded version and cited `path:line` for text that line no longer
+/// contains, and it returned files that `read_file` refuses to open because
+/// they no longer exist.
+#[test]
+fn a_superseded_version_is_not_searchable_even_though_its_index_row_survives() {
+    let f = Fixture::new();
+    let index = f.index();
+    let (file, v1) = f.add_file("notes.md");
+    f.add_indexed_chunk(&f.doc(file, v1, "notes.md", "Notes", "the renewal is in January"));
+
+    let found = |q: &str| {
+        index
+            .search(&TextQuery::new(q).mode(MatchMode::Terms).limit(10))
+            .expect("search")
+            .len()
+    };
+    assert_eq!(found("renewal"), 1, "the current version must be findable");
+
+    // Supersede it, exactly as a second ingest of a changed file does: the old
+    // version becomes HISTORICAL and its index row is left in place.
+    let vid = v1;
+    f.commit(move |c| {
+        c.execute(
+            "UPDATE file_versions SET status='HISTORICAL' WHERE version_id = ?1",
+            [vid.to_string()],
+        )
+        .map(|_| ())
+        .map_err(|e| marrow_store::map_sqlite(e, "superseding a version"))
+    });
+
+    assert!(
+        f.doc_rows() > 0,
+        "the index row must still be there — that is the state being tested"
+    );
+    assert_eq!(
+        found("renewal"),
+        0,
+        "a superseded version was returned as current fact"
+    );
+}
+
+#[test]
+fn a_deleted_file_is_not_searchable_even_though_its_index_row_survives() {
+    let f = Fixture::new();
+    let index = f.index();
+    let (file, v1) = f.add_file("gone.md");
+    f.add_indexed_chunk(&f.doc(file, v1, "gone.md", "Gone", "the sublet clause applies"));
+
+    let found = |q: &str| {
+        index
+            .search(&TextQuery::new(q).mode(MatchMode::Terms).limit(10))
+            .expect("search")
+            .len()
+    };
+    assert_eq!(found("sublet"), 1);
+
+    let fid = file;
+    f.commit(move |c| {
+        c.execute(
+            "UPDATE files SET status='DELETED' WHERE file_id = ?1",
+            [fid.to_string()],
+        )
+        .map(|_| ())
+        .map_err(|e| marrow_store::map_sqlite(e, "deleting a file"))
+    });
+
+    assert!(f.doc_rows() > 0, "the index row must still be there");
+    assert_eq!(
+        found("sublet"),
+        0,
+        "search cited a file that no longer exists — `read_file` would refuse \
+         to open the very path it returned"
+    );
+}

@@ -150,3 +150,34 @@ silent.
 Two findings in the model crate (corrupt-install detection, a breaker never
 persisted) were relayed without supporting detail and are **not verified**. They
 are not on this list until someone looks.
+
+
+---
+
+## Real-corpus hunt (2026-08-30) — half the index described a disk that had moved on
+
+Run against the author's real 79,186-file index, every answer checked against
+SQLite and disk. **F1 and F2 are the same fix and are now done** (`fts5.rs`
+joins the canonical tables); the rest are open.
+
+| # | sev | What happens | Evidence |
+|---|---|---|---|
+| ~~F1~~ | ~~critical~~ | **FIXED.** Search answered from superseded versions and cited a line that says the opposite. 32,436 of 131,519 index docs belonged to HISTORICAL versions; `chunks.status` has a `SUPERSEDED` value **no code has ever written** (0 rows). "What milestone am I on" answered two milestones out of date, citing the file that says otherwise. Of 1,806 historical chunks checked against disk, **917 cited lines that no longer contain their text.** | `SELECT count(*) FROM text_index_docs d JOIN file_versions v USING(version_id) WHERE v.status='HISTORICAL'` |
+| ~~F2~~ | ~~critical~~ | **FIXED.** Search returned files the same product says are not indexed. 34,069 docs on `files.status='DELETED'` across 4,724 files. `search` cited a path that `read_file` refuses to open and `file_info` denies knowing. 12 of 248 audited results pointed at paths not on disk. | verified: a sampled deleted path does not exist |
+| F3 | **high** | **Only 43% of excerpts are the file's content at the cited line.** `snippet()` is called with column `-1` ("best column") over `path`/`title`/`body`, so when the query matches the filename or the heading, the excerpt *is* the path or the heading — presented as file content. Of 215 checkable results: 93 genuine, 18 the absolute path, 55 the breadcrumb, 14 real text at a different line. The desktop pins Body for exactly this reason; the shared default does not. | `fts5.rs:583` |
+| F4 | med | The same file and span returned 2–5× in one page — 10% of results over 20 queries. Partly a consequence of F1/F2; the rest is the chunker emitting overlapping parent/child chunks that search never collapses. | `search {"query":"the","limit":3}` returned three byte-identical results |
+| F5 | **high** | `marrow search --literal` reports "no matches" for strings that exist, **nondeterministically** — it depends on the OS page cache. Cold: 0 matches, 7,713 files scanned, TimeBudget. Warm: 5 matches. And the advice it prints ("narrow it with a workspace or a path") names flags the CLI does not have — copied from the MCP tool, which does. `--json` omits the incompleteness entirely. | 8 consecutive runs, 2 cold both returned 0 |
+| F6 | **high** | Three surfaces report 35,361 / 79,186 / 766,976 files for the same folder. 43,685 ACTIVE files live inside `target/` and `.git/`, indexed by an earlier build; the walker now prunes those directories, so reconciliation **can never see them** and they are never marked deleted. This is why `.git/config` outranks the actual docs for "admission control". 63% of the `unindexed` count is in pruned directories and can never become indexed by any action the user takes. | before/after a full `marrow index`: 43,685 unchanged |
+| F7 | med | `content_bytes` over-reports by 4.02 GB (29%) on every surface. The file count filters `status='ACTIVE'`; the byte sum on the same line does not. Three surfaces agree with each other and all disagree with the database. | `cli/src/main.rs:665`, `query/src/catalog.rs:131` |
+| F8 | med | `marrow status`, described as "Index health", reports no health. And `index_status` returns `files_indexed: 79186, searchable_chunks: 131519`, which reads as "all of them are searchable" — only **21,268 files have any chunk at all**. Its own description promises a skipped count it does not return; `list_workspaces` promises freshness it does not return. | |
+| F9 | med | `file_info` reports deleted files as `citable: true, indexed_for_search: true, tier_state: resident`, while `read_file` on the same path says the file no longer exists. An agent asking whether a source is trustworthy is told yes. | |
+| F10 | med | Semantic search covers **239 of 79,186 files** and no surface says so. Any semantic branch answers silently from 0.3% of the corpus. | `chunk_embeddings` = 2,304 rows |
+| — | low | `search` never says the result set was cut (`total` always equals what was returned) · MCP `limit` bounds advertised but silently clamped · `read_file` past EOF returns empty rather than saying where the file ends · `tier_state` stays `RESIDENT` for 11k files that no longer exist. | |
+
+### Clean
+
+FTS injection and hostile input (`*`, `"`, `NEAR()`, unterminated quotes — all
+escaped, no panics) · unicode and CJK · long/many-term queries bounded and
+honest · regex with no ReDoS · `read_file` path traversal refused · findability
+by name (IDX-001) holds including for files with no parser · exit codes · no
+pathological latency · **no panics, hangs or backtraces in any invocation**.

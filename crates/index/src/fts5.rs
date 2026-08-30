@@ -98,6 +98,23 @@ use crate::port::{
     TextQuery, MAX_QUERY_TERMS, MAX_SNIPPET_TOKENS, MAX_TERM_CHARS,
 };
 
+/// What a caller is told when the FTS5 tables are not there.
+///
+/// It names **no command and no directory**, for two separate reasons.
+///
+/// 1. Same reason as [`match_expression`]'s empty-query message: this is a
+///    library, and three surfaces show what it says. The CLI has `marrow
+///    index`, MCP and the desktop have their own controls. Naming one of them
+///    is wrong on the other two.
+/// 2. It previously said "delete the index directory". **There is no index
+///    directory.** The FTS5 tables live inside the canonical database (D3), so
+///    that sentence resolves to "delete `marrow.db`" — which takes the
+///    corrections with it, the one thing hard rule 8 says is not rebuildable.
+///    A rebuild instruction must never be able to be followed destructively.
+const INDEX_MISSING: &str = "The text index is missing and has to be rebuilt before search will \
+                             work. Re-index your workspaces to rebuild it from your files — the \
+                             index is derived, so nothing else is lost.";
+
 /// The metadata table. One row per indexed chunk; owns the FTS5 rowid.
 pub const DOCS_TABLE: &str = "text_index_docs";
 /// The FTS5 virtual table.
@@ -384,8 +401,9 @@ pub fn match_expression(q: &TextQuery) -> Result<String> {
     if tokens.len() > MAX_QUERY_TERMS {
         return Err(Error::new(
             Code::CfgInvalid,
+            // Names no flag, for the reason given on the message above.
             "That search has too many words to run as a lexical query. Shorten it to the terms \
-             that matter, or use `--literal` to scan for the text exactly.",
+             that matter, or run an exact scan to match the text as written.",
         )
         .with_context(format!("{} terms, limit {MAX_QUERY_TERMS}", tokens.len())));
     }
@@ -560,12 +578,7 @@ fn index_missing(message: &'static str) -> impl Fn(rusqlite::Error) -> Error {
     move |e| {
         let text = e.to_string();
         if text.contains("no such table") {
-            Error::new(
-                Code::IdxRebuildRequired,
-                "The text index is missing and has to be rebuilt before search will work. Run \
-                 `marrow reindex`, or delete the index directory to rebuild from your files.",
-            )
-            .with_context(text)
+            Error::new(Code::IdxRebuildRequired, INDEX_MISSING).with_context(text)
         } else {
             map_sqlite(e, message)
         }
@@ -596,6 +609,23 @@ pub fn search(conn: &Connection, q: &TextQuery) -> Result<Vec<TextHit>> {
     // mistake and should get a slow answer rather than an unbounded one.
     let limit = q.limit.min(10_000) as i64;
 
+    // **The index is not the truth about what exists.** It holds a row per
+    // indexed chunk and nothing removes a row when a file's version is
+    // superseded or the file is deleted — `chunks.status` has a `SUPERSEDED`
+    // value that no code has ever written, and a deleted file keeps its docs
+    // until something cascades. On the author's real corpus that was 32,436
+    // docs from HISTORICAL versions and 34,069 from DELETED files out of
+    // 131,519: roughly half the index describing a disk that has moved on.
+    //
+    // The consequence was not a stale result, it was a *wrong* one. Search
+    // answered from a superseded version and cited `path:line` for text that
+    // line no longer contains — the answer to "what milestone am I on" was two
+    // milestones out of date, citing the file that says otherwise — and it
+    // returned files that `read_file` refuses to open because they are gone.
+    //
+    // Joining the canonical tables here rather than trusting the derived one
+    // makes every existing database correct immediately, without a rebuild.
+    //
     // Parameters ?1..?9 are numbered because the weights and snippet arguments
     // are positional and must not shift when a filter is appended; the filter
     // parameters below are bare `?`, which SQLite numbers from 10 upwards in
@@ -607,8 +637,12 @@ pub fn search(conn: &Connection, q: &TextQuery) -> Result<Vec<TextHit>> {
                 snippet({FTS_TABLE}, ?4, ?5, ?6, ?7, ?8),
                 {FTS_TABLE}.title
            FROM {FTS_TABLE}
-           JOIN {DOCS_TABLE} d ON d.doc_id = {FTS_TABLE}.rowid
-          WHERE {FTS_TABLE} MATCH ?9"
+           JOIN {DOCS_TABLE} d  ON d.doc_id = {FTS_TABLE}.rowid
+           JOIN file_versions fv ON fv.version_id = d.version_id
+           JOIN files f          ON f.file_id     = d.file_id
+          WHERE {FTS_TABLE} MATCH ?9
+            AND fv.status = 'CURRENT'
+            AND f.status  = 'ACTIVE'"
     );
 
     let mut args: Vec<Box<dyn ToSql>> = vec![
@@ -648,12 +682,7 @@ pub fn search(conn: &Connection, q: &TextQuery) -> Result<Vec<TextHit>> {
 fn search_failed(e: rusqlite::Error) -> Error {
     let text = e.to_string();
     if text.contains("no such table") {
-        return Error::new(
-            Code::IdxRebuildRequired,
-            "The text index is missing and has to be rebuilt before search will work. Run \
-             `marrow reindex`, or delete the index directory to rebuild from your files.",
-        )
-        .with_context(text);
+        return Error::new(Code::IdxRebuildRequired, INDEX_MISSING).with_context(text);
     }
     if text.contains("fts5: syntax error") || text.contains("fts5:") {
         // The expression is built entirely by `match_expression`, so FTS5
@@ -661,9 +690,11 @@ fn search_failed(e: rusqlite::Error) -> Error {
         // here, never the user's input.
         return Error::new(
             Code::IntInvariantViolated,
+            // Names no flag: the workaround exists on all three surfaces under
+            // three different names, so the library describes the action.
             "The search could not be run because this build produced an invalid index query. \
-             Report this with the detail below; searching for the same words with `--literal` \
-             works in the meantime.",
+             Report this with the detail below; an exact scan over the same words works in the \
+             meantime.",
         )
         .with_context(text);
     }
