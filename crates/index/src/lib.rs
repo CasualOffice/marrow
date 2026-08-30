@@ -40,7 +40,7 @@ pub mod vector;
 /// Every migration this crate contributes to the shared database.
 ///
 /// **Composition roots must pass this, never a hand-written subset.** The
-/// chain is numbered across crates (`marrow-store` owns 1 and 3, this crate
+/// chain is numbered across crates (`marrow-store` owns 1, 3 and 5, this crate
 /// owns 2 and 4), and `Store::compose` rejects a chain that is unsorted, has a
 /// clash, or has a gap — but a chain that merely *stops early* is
 /// well-formed. `[1, 2, 3]` is a perfectly valid chain; it is also a build
@@ -57,8 +57,10 @@ pub const MIGRATIONS: &[marrow_store::migrate::Migration] = &[fts5::MIGRATION, v
 /// `marrow-store`'s chain.
 ///
 /// Distinct from [`marrow_core::SCHEMA_VERSION`], which is only what
-/// `marrow-store` alone would apply.
-pub const SCHEMA_VERSION: i64 = 4;
+/// `marrow-store` alone would apply. The two agree whenever the store holds the
+/// highest number in the chain, which it does at 5; they part again the next
+/// time this crate takes one.
+pub const SCHEMA_VERSION: i64 = 5;
 
 pub use fts5::{Fts5Index, StoreChunkSource};
 pub use literal::{
