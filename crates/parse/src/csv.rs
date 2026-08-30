@@ -31,7 +31,7 @@ use crate::ir::{
 use crate::parser::{ContentParser, FileProbe, ParseInput};
 
 /// Delimiters we sniff for, in preference order when the evidence ties.
-const CANDIDATE_DELIMITERS: [u8; 4] = [b',', b'\t', b';', b'|'];
+const CANDIDATE_DELIMITERS: [u8; 4] = *b",\t;|";
 
 /// Rows sampled when sniffing the dialect and the header.
 const SNIFF_ROWS: usize = 20;
