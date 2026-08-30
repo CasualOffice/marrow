@@ -34,8 +34,16 @@ const THEMES: ReadonlyArray<{ id: ThemeChoice; label: string }> = [
  * command's terms second.
  *
  * Every line here is checkable against `crates/desktop/src/commands.rs`: it
- * exposes eight commands, all read-only, and a test asserts the surface stays
- * that way in M1. Nothing below is speculation about a roadmap.
+ * exposes a fixed, named list, and a test pins its size. **It is no longer
+ * read-only**: granting a folder writes the database and starts watchers,
+ * downloading a model writes to disk and uses the network, and an index run
+ * rewrites the index. The page used to say "eight read-only commands" when
+ * there were twenty-eight and several mutate — body copy a user reads to
+ * understand the security posture, which makes it the worst place in the app to
+ * be wrong. The guarantee that survives is the one SEC-012 actually makes: the
+ * WebView has no ambient capability, only these named calls.
+ *
+ * Nothing below is speculation about a roadmap.
  */
 const CANNOT: ReadonlyArray<{ what: string; why: string; cmd: string }> = [
   {
@@ -44,9 +52,9 @@ const CANNOT: ReadonlyArray<{ what: string; why: string; cmd: string }> = [
     cmd: "workspace_remove",
   },
   {
-    what: "Start or schedule an index run",
-    why: "Indexing happens outside the window. This build can report what the index contains but cannot ask for more of it.",
-    cmd: "index_run",
+    what: "Schedule an index run for later",
+    why: "Starting one now works — the Status page has a button, and the app watches your folders while it is open. What does not exist is a schedule: nothing runs at a time you choose.",
+    cmd: "index_schedule",
   },
   {
     what: "Change what a workspace indexes",
@@ -145,10 +153,12 @@ export function SettingsView() {
           <section className={styles.section}>
             <h2 className={styles.heading}>Where it lives</h2>
             <p className={styles.lede}>
-              Everything Marrow knows is on this machine. Nothing is uploaded,
-              and the window itself is granted no filesystem, shell or network
-              permission at all (SEC-012) — the eight read-only commands it can
-              call are the entire surface between it and the disk.
+              Everything Marrow knows is on this machine, and the window itself
+              is granted no filesystem, shell or network permission at all
+              (SEC-012): the named commands it can call are the entire surface
+              between it and the disk. Some of them do change things — granting a
+              folder, downloading a model, starting an index run — and each one
+              says so where it is offered.
             </p>
             <ul className={styles.roots}>
               {rows.map((w) => (

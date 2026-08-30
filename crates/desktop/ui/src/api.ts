@@ -11,7 +11,7 @@
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * The capability manifest grants the WebView no filesystem, shell or network
- * permission (SEC-012), so the eight commands below are the complete surface
+ * permission (SEC-012), so the commands below are the complete surface
  * between this app and the disk.
  */
 
@@ -543,6 +543,15 @@ export interface ExcludedSource {
 }
 
 export type AskEvent =
+  /**
+   * The handle `cancelAsk` needs, sent before anything else happens.
+   *
+   * The `ask` promise also resolves with it — but only when the answer is
+   * *finished*, which is exactly too late: for the whole time the Stop button
+   * was on screen there was nothing for it to cancel, and both it and Esc did
+   * nothing.
+   */
+  | { readonly kind: "started"; readonly id: string }
   /** What the pipeline is doing right now (SKEL-003, SKEL-006). */
   | { readonly kind: "stage"; readonly stage: string; readonly detail: string }
   | {
@@ -631,6 +640,121 @@ export async function ask(
 
 export function forgetConversation(conversation: string): Promise<void> {
   return call<void>("forget_conversation", { conversation });
+}
+
+/* ── conversations ───────────────────────────────────────────────────────── */
+
+/** Mirrors `commands::ConversationSummary`. */
+export interface ConversationSummary {
+  readonly id: string;
+  readonly title: string;
+  /** The project it was last scoped to. `null` is every project. */
+  readonly scope: string | null;
+  readonly createdMs: number;
+  /**
+   * When it was last *used*, which is what the list is ordered by — a thread
+   * you came back to this morning belongs above one abandoned last week.
+   */
+  readonly updatedMs: number;
+  readonly turns: number;
+}
+
+/** Mirrors `commands::TurnUsage`, which mirrors the `done` event. */
+export interface TurnUsage {
+  readonly promptTokens: number;
+  readonly outputTokens: number;
+  readonly thinkingTokens: number;
+  readonly cachedPrefixTokens: number;
+  readonly stopReason: string;
+  readonly elapsedMs: number;
+}
+
+/** Mirrors `commands::StoredTurn`. */
+export interface StoredTurn {
+  readonly question: string;
+  readonly answer: string;
+  readonly thorough: boolean;
+  readonly model: string | null;
+  readonly scope: string | null;
+  /**
+   * Exactly what the answer cited, as it was cited. Not re-retrieved on
+   * reopening: the chunk behind a citation can be superseded or its file
+   * deleted in between, and a conversation that shows different sources than it
+   * was answered from is worse than one that shows none.
+   */
+  readonly citations: readonly Citation[];
+  readonly excluded: readonly ExcludedSource[];
+  /**
+   * Which projects the evidence came from. Derived in Rust from the stored
+   * citations by the same rule the live answer uses, so a reopened conversation
+   * says what it said the first time.
+   */
+  readonly projects: readonly string[];
+  readonly usage: TurnUsage | null;
+  readonly askedMs: number;
+}
+
+/** Mirrors `commands::ConversationDetail`. */
+export interface ConversationDetail {
+  readonly id: string;
+  readonly title: string;
+  readonly scope: string | null;
+  readonly turns: readonly StoredTurn[];
+}
+
+/** Mirrors `commands::NewTurn` — a finished exchange on its way to disk. */
+export interface NewTurn {
+  readonly question: string;
+  readonly answer: string;
+  readonly thorough: boolean;
+  readonly model: string | null;
+  readonly scope: string | null;
+  readonly citations: readonly Citation[];
+  readonly excluded: readonly ExcludedSource[];
+  readonly usage: TurnUsage | null;
+}
+
+/** Mirrors `commands::SavedTurn`. */
+export interface SavedTurn {
+  readonly id: string;
+  readonly title: string;
+}
+
+export function listConversations(limit = 200): Promise<ConversationSummary[]> {
+  return call<ConversationSummary[]>("list_conversations", { limit });
+}
+
+export function loadConversation(id: string): Promise<ConversationDetail> {
+  return call<ConversationDetail>("load_conversation", { id });
+}
+
+/**
+ * Persist a finished exchange.
+ *
+ * `conversation` is `null` for the first turn of a thread, and that first save
+ * is what creates it — a "New conversation" button that wrote a row when it was
+ * pressed would fill the list with threads nobody said anything in.
+ */
+export function saveTurn(
+  conversation: string | null,
+  turn: NewTurn,
+): Promise<SavedTurn> {
+  return call<SavedTurn>("save_turn", { conversation, turn });
+}
+
+export function renameConversation(id: string, title: string): Promise<void> {
+  return call<void>("rename_conversation", { id, title });
+}
+
+/**
+ * Take a conversation off the list.
+ *
+ * A **soft** delete: `status` moves to `DELETED` in the store and every row
+ * stays where it is. A conversation is the one thing in that database which
+ * cannot be re-derived from the user's files.
+ */
+export function deleteConversation(id: string): Promise<void> {
+  return call<void>("delete_conversation", { id });
 }
 
 export function cancelAsk(id: string): Promise<boolean> {

@@ -14,7 +14,7 @@
 import styles from "./ZeroResults.module.css";
 import { cx } from "../lib/cx";
 import { count, ms } from "../lib/format";
-import { unavailable } from "../actions";
+import { grantFolder, runIndex, unavailable } from "../actions";
 import { useIndexHealth, useWorkspaces } from "../queries";
 import type { UiError } from "../api";
 import { ErrorNotice } from "./ErrorNotice";
@@ -67,6 +67,14 @@ export function ZeroResults({
   const spaces = workspaces.data?.length;
   const cloudOnly = health.data?.cloudOnly ?? 0;
 
+  // Files with no searchable text, which is not a fault — a photo has no words
+  // — but is the reason a search can come back empty over a folder that is
+  // fully indexed.
+  const unreadable = (workspaces.data ?? []).reduce(
+    (n, w) => n + w.noParser + w.parseFailed + w.notProcessed,
+    0,
+  );
+
   const gaps: Gap[] = [];
 
   if (spaces === 0) {
@@ -77,7 +85,10 @@ export function ZeroResults({
       title: "workspaces have been added",
       detail: "Nothing is indexed yet, so nothing can match.",
       action: "Add a folder",
-      onClick: () => unavailable("policy"),
+      // Was `unavailable("policy")` — a notice about `workspace_set_policy`, a
+      // different feature entirely, on the button of the page a first-run user
+      // sees. `add_workspace` has existed since the Status page got it.
+      onClick: () => void grantFolder(),
     });
   }
 
@@ -91,7 +102,8 @@ export function ZeroResults({
         title: `files are indexed in ${w.name}`,
         detail: `The root is registered at ${w.path} but nothing in it has been read.`,
         action: "Run an index",
-        onClick: () => unavailable("policy"),
+        // Also `unavailable("policy")`, also the wrong feature's message.
+        onClick: () => void runIndex(),
       });
     }
   }
@@ -160,10 +172,22 @@ export function ZeroResults({
           </section>
         ) : (
           <section className={styles.section}>
-            <h2 className={styles.heading}>Nothing is missing from the index</h2>
+            <h2 className={styles.heading}>
+              {unreadable > 0
+                ? "Some files have no searchable text"
+                : "Nothing is missing from the index"}
+            </h2>
+            {/*
+              This used to say flatly "Every file in every workspace was read",
+              shown whenever three narrow checks passed — which is the ordinary
+              state. It was false on any real corpus: most files have no chunks,
+              and the count saying so arrives on the same query this component
+              already makes and never looked at.
+            */}
             <p className={styles.sub}>
-              Every file in every workspace was read. These words are not in any
-              of them.
+              {unreadable > 0
+                ? `${count(unreadable)} indexed ${unreadable === 1 ? "file has" : "files have"} no text to match — mostly images and binaries, which stay findable by name. These words are not in the rest.`
+                : "Every file in every workspace was read. These words are not in any of them."}
             </p>
           </section>
         )}

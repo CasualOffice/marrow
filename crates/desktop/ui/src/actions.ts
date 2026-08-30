@@ -4,7 +4,7 @@
  * keyboard equivalent" — enforced by there being nothing else to call).
  */
 
-import { asUiError, openPath, reindex, revealPath } from "./api";
+import { addWorkspace, asUiError, openPath, reindex, revealPath } from "./api";
 import type { Anchor } from "./store";
 import { useUi } from "./store";
 
@@ -85,6 +85,24 @@ export async function revealInFileManager(
  * pass over 78,000 files takes minutes. So the notice says what was started,
  * never that anything finished.
  */
+/**
+ * Grant Marrow a folder, from wherever the user is standing.
+ *
+ * Shared so the Status page and the zero-results page cannot drift: the second
+ * one spent its life raising a notice about `workspace_set_policy` — a
+ * different feature — on a button labelled "Add a folder", long after the
+ * command it needed existed.
+ */
+export async function grantFolder(): Promise<void> {
+  const { notify } = useUi.getState();
+  try {
+    const next = await addWorkspace();
+    if (next) notify("Indexing it now. It becomes searchable as it goes.");
+  } catch (e) {
+    notify(asUiError(e).message);
+  }
+}
+
 export async function runIndex(): Promise<void> {
   const { notify } = useUi.getState();
   try {
