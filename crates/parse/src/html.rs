@@ -962,13 +962,20 @@ mod tests {
         // `name_at` returns the name as written and the RAW set is lowercase,
         // so an exact `contains` skipped `<script>` and indexed `<SCRIPT>`.
         // Searching for a function name then hit every page that called it.
-        for (open, close) in [("SCRIPT", "SCRIPT"), ("Script", "script"), ("STYLE", "STYLE")] {
+        for (open, close) in [
+            ("SCRIPT", "SCRIPT"),
+            ("Script", "script"),
+            ("STYLE", "STYLE"),
+        ] {
             let src = format!(
                 "<html><body><p>keepme</p><{open}>secret_token_xyz</{close}></body></html>"
             );
             let a = parse(&src);
             a.validate().unwrap();
-            assert!(all_text(&a).contains("keepme"), "prose was dropped for <{open}>");
+            assert!(
+                all_text(&a).contains("keepme"),
+                "prose was dropped for <{open}>"
+            );
             assert!(
                 !all_text(&a).contains("secret_token_xyz"),
                 "<{open}> body was indexed as prose: {:?}",
@@ -997,7 +1004,10 @@ mod tests {
             "tokenizing {} bytes took {took:?}; the skip is quadratic again",
             src.len()
         );
-        assert!(!all_text(&a).contains('y'), "raw bodies leaked into the text");
+        assert!(
+            !all_text(&a).contains('y'),
+            "raw bodies leaked into the text"
+        );
     }
 
     #[test]
