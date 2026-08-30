@@ -353,3 +353,89 @@ fn the_failure_headline_always_equals_the_sum_of_its_groups() {
     );
     assert!(out.failed >= 2, "both unreadable files should be reported");
 }
+
+/// **The interrupted run, which used to lose files permanently.**
+///
+/// `record_version` commits in its own writer batch; the parse result, the
+/// chunks and the index write commit in a later one. A kill between the two —
+/// which CLAUDE.md says happens constantly during development — leaves a
+/// version row whose `content_hash` matches the disk and which has no chunks.
+///
+/// The old gate compared hashes only, found them equal, and skipped the file on
+/// every subsequent run. The file was permanently unsearchable, nothing
+/// reported it, and each interrupted run could add more.
+///
+/// Simulated by deleting what the second transaction wrote, which is exactly
+/// the state a kill in that window leaves behind.
+#[test]
+fn a_run_interrupted_between_the_version_row_and_its_chunks_recovers_on_the_next_run() {
+    let f = setup();
+    let first = run(&f);
+    assert!(first.chunks > 0, "the corpus must produce chunks at all");
+
+    let conn = f.store.reader().unwrap();
+    let (version_id, file_id, path): (String, String, String) = conn
+        .query_row(
+            "SELECT v.version_id, f.file_id, f.current_path
+               FROM file_versions v
+               JOIN files f ON f.file_id = v.file_id
+              WHERE v.status='CURRENT'
+                AND EXISTS (SELECT 1 FROM chunks c WHERE c.version_id = v.version_id)
+              LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .expect("a parsed file");
+    drop(conn);
+
+    // Undo precisely what the second transaction did, leaving the first's work
+    // in place. This is the crash window, reproduced.
+    let vid = version_id.clone();
+    f.store
+        .writer()
+        .submit(move |c| {
+            c.execute("DELETE FROM chunks WHERE version_id = ?1", [&vid])
+                .and_then(|_| c.execute("DELETE FROM parse_results WHERE version_id = ?1", [&vid]))
+                .map(|_| ())
+                .map_err(|e| marrow_store::map_sqlite(e, "simulating an interrupted run"))
+        })
+        .unwrap();
+    f.store.flush().unwrap();
+
+    let conn = f.store.reader().unwrap();
+    let orphaned: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM chunks WHERE version_id = ?1",
+            [&version_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    drop(conn);
+    assert_eq!(orphaned, 0, "the crash window must actually be reproduced");
+
+    // The file has not changed on disk, so a hash comparison alone says "done".
+    let second = run(&f);
+    assert!(
+        second.chunks > 0,
+        "the second run re-parsed nothing, so {path} is now permanently \
+         unsearchable — this is the bug"
+    );
+
+    // Asserted against the *file*, not the version: recovering re-records the
+    // version, so the chunks come back under a new version id. What matters is
+    // that the file is searchable again, which is the thing that was lost.
+    let conn = f.store.reader().unwrap();
+    let recovered: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM chunks c
+               JOIN file_versions v ON v.version_id = c.version_id
+              WHERE v.file_id = ?1 AND v.status = 'CURRENT'",
+            [&file_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        recovered > 0,
+        "{path} never got its chunks back, so it stays unsearchable forever"
+    );
+}

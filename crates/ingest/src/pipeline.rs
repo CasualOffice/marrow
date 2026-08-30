@@ -704,6 +704,23 @@ fn record(
         (None, _) => true,
     };
 
+    // **An unchanged file whose content stage never finished is not done.**
+    // `record_version` commits in its own writer batch and the chunks commit in
+    // a later one, so a kill between them leaves a version row that matches the
+    // disk and has nothing behind it. Comparing hashes alone then skips that
+    // file on every future run — permanently unsearchable, silently, and the
+    // damage accumulates because each interrupted run can add more.
+    //
+    // Hard rule 7 asks for idempotent and resumable, and resumable means the
+    // next run has to be able to *tell* that the last one stopped half way.
+    // The parse result is what says so: it shares a transaction with the chunks
+    // and the index write, so it exists only if all of them do.
+    let unfinished = match &current {
+        Some(c) if !changed => !marrow_store::read::content_stage_finished(conn, c.version_id)?,
+        _ => false,
+    };
+    let changed = changed || unfinished;
+
     let mut ids = None;
     if changed {
         // Authorship follows the bytes (invariant #9). Decided once at

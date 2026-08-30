@@ -714,6 +714,30 @@ pub fn insert_file_with_version(
     Ok((file_id, version_id))
 }
 
+/// Whether the content stage ever finished for this version.
+///
+/// **The version row is not the done-marker, and treating it as one loses
+/// files.** `record_version` commits in its own writer batch; the parse result
+/// and the chunks commit in a later one. A kill between the two — which happens
+/// constantly during development, and is exactly what hard rule 7 is about —
+/// leaves a version row whose `content_hash` matches the disk and which has no
+/// chunks at all. The next run compares hashes, finds them equal, and skips the
+/// file forever: permanently unsearchable, with nothing to notice it.
+///
+/// The parse result is the honest marker, because `record_parse`,
+/// `replace_chunks` and the index write share one closure and therefore one
+/// transaction. Either all three are there or none of them are.
+pub fn content_stage_finished(conn: &Connection, version_id: VersionId) -> Result<bool> {
+    let n: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM parse_results WHERE version_id = ?1",
+            [version_id.to_string()],
+            |r| r.get(0),
+        )
+        .map_err(|e| crate::map_sqlite(e, "checking whether a version was parsed"))?;
+    Ok(n > 0)
+}
+
 pub fn current_version(conn: &Connection, file_id: FileId) -> Result<Option<VersionRow>> {
     q(
         conn.query_row(
