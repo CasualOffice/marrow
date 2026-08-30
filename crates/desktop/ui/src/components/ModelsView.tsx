@@ -402,7 +402,14 @@ export function ModelsView() {
           <SkeletonPage />
         ) : (
           <>
-            <p className={styles.status}>{s.runtimeStatus}</p>
+            <p className={cx(styles.status, !s.runtimeReady && styles.statusWarn)}>
+              {s.runtimeStatus}
+            </p>
+            {s.runtimeSetup && (
+              /* The fix, not the problem. A setup step the user can copy beats
+                 a sentence telling them something is missing. */
+              <pre className={styles.setup}>{s.runtimeSetup}</pre>
+            )}
             {s.modelsDirProblem && (
               <p className={styles.dirProblem}>
                 <Icon name="warning" size={11} />

@@ -324,8 +324,10 @@ function devModels(): ModelsSnapshot {
       why: "Search is the product; the embedder does not go cold because generation did.",
     },
     models: DEV_MODELS,
+    runtimeReady: true,
+    runtimeSetup: null,
     runtimeStatus:
-      "No inference runtime is wired up yet, so nothing here can answer a question. This page reports what this machine could run and what is stopping each model, which is the part that has to be right before anything is downloaded.",
+      "MLX is available on this machine. A model that is installed and fits can answer questions locally — nothing leaves this device.",
   };
 }
 

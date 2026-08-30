@@ -50,11 +50,13 @@ class Worker:
         self.model = None
         self.tokenizer = None
         self.model_path = None
-        # Reused across requests that share a prompt prefix (LLM-040). Keyed by
-        # the prefix hash the supervisor computed, so the cache identity is
-        # decided in one place rather than two.
+        # Reused across requests that share a token prefix (LLM-040). Held
+        # alongside the exact tokens it was built from, because reuse is
+        # prefix-*exact*: a fuzzy match would continue from a state that never
+        # produced this prompt, which is a wrong-answer generator rather than
+        # an optimisation (LLM-041).
         self.cache = None
-        self.cache_key = None
+        self.cache_tokens = []
 
     # -- ops ---------------------------------------------------------------
 
@@ -72,7 +74,7 @@ class Worker:
         self.model, self.tokenizer = load(path)
         self.model_path = path
         self.cache = None
-        self.cache_key = None
+        self.cache_tokens = []
         emit({"id": req.get("id"), "event": "loaded", "model": path})
 
     def op_unload(self, req):
@@ -81,7 +83,7 @@ class Worker:
         self.model = None
         self.tokenizer = None
         self.cache = None
-        self.cache_key = None
+        self.cache_tokens = []
         # LLM-049: the cache goes with the weights. A model unloaded while its
         # cache stays resident has not been unloaded.
         mx.clear_cache()
@@ -98,13 +100,17 @@ class Worker:
         thinking_budget = int(req.get("thinkingTokens", 0))
         thinking_on = thinking_budget > 0
 
-        prompt = self._as_chat_turn(req["prompt"], thinking_on)
+        tokens = self._as_chat_turn(req["prompt"], thinking_on)
+        prompt, cached_prefix = self._prepare_cache(tokens)
 
         # Thorough is not a different code path — it is a larger budget and a
         # temperature that lets the model explore before it commits.
         sampler = make_sampler(temp=0.7 if thinking_on else 0.0)
 
-        prompt_tokens = 0
+        # The whole prompt, not just the part that had to be prefilled. mlx
+        # reports the latter, and "120 prompt tokens, 175 cached" is a sentence
+        # nobody can read.
+        prompt_tokens = len(tokens)
         output_tokens = 0
         thinking_tokens = 0
         stop_reason = "length"
@@ -124,8 +130,8 @@ class Worker:
             prompt,
             max_tokens=max_tokens + thinking_budget,
             sampler=sampler,
+            prompt_cache=self.cache,
         ):
-            prompt_tokens = getattr(chunk, "prompt_tokens", prompt_tokens) or prompt_tokens
             if getattr(chunk, "finish_reason", None):
                 stop_reason = chunk.finish_reason
 
@@ -182,13 +188,69 @@ class Worker:
             "promptTokens": prompt_tokens,
             "outputTokens": output_tokens,
             "thinkingTokens": thinking_tokens,
-            "cachedPrefixTokens": 0,
+            "cachedPrefixTokens": cached_prefix,
             "stopReason": stop_reason,
             "thinking": "".join(thoughts) or None,
         })
+        # The cache now holds the prompt plus everything generated. Record
+        # exactly that, or the next request's prefix comparison is against a
+        # state the cache is not in.
+        self.cache_tokens = self.cache_tokens + list(prompt)
+
+    def _prepare_cache(self, tokens):
+        """Reuse as much of the previous prompt's KV cache as is exactly shared.
+
+        Marrow's prompts share a large prefix by construction: the same system
+        instructions, the same envelope framing, and often the same documents
+        across a follow-up question. Recomputing that every turn is the single
+        largest avoidable cost in the feature.
+
+        Takes the fully-templated token ids, and returns
+        `(tokens_to_process, cached_prefix_tokens)`.
+        """
+        from mlx_lm.models.cache import (
+            can_trim_prompt_cache,
+            make_prompt_cache,
+            trim_prompt_cache,
+        )
+
+        if self.cache is None:
+            self.cache = make_prompt_cache(self.model)
+            self.cache_tokens = []
+            return tokens, 0
+
+        # Prefix-exact. One differing token and the rest of the cache describes
+        # a different conversation.
+        shared = 0
+        for a, b in zip(self.cache_tokens, tokens):
+            if a != b:
+                break
+            shared += 1
+
+        # Never reuse the whole prompt: the model needs at least one token to
+        # attend to, and a zero-length suffix has nothing to generate from.
+        shared = min(shared, len(tokens) - 1)
+
+        if shared <= 0 or not can_trim_prompt_cache(self.cache):
+            self.cache = make_prompt_cache(self.model)
+            self.cache_tokens = []
+            return tokens, 0
+
+        drop = len(self.cache_tokens) - shared
+        if drop > 0:
+            trimmed = trim_prompt_cache(self.cache, drop)
+            if trimmed != drop:
+                # The cache could not be trimmed to the shared prefix, so what
+                # is in it no longer matches what we think is in it. Start
+                # again rather than continue from a state we cannot describe.
+                self.cache = make_prompt_cache(self.model)
+                self.cache_tokens = []
+                return tokens, 0
+        self.cache_tokens = self.cache_tokens[:shared]
+        return tokens[shared:], shared
 
     def _as_chat_turn(self, envelope, thinking_on):
-        """Wrap the envelope in the model's own turn structure.
+        """Wrap the envelope in the model's own turn structure, as token ids.
 
         Without this an instruct model *continues* the prompt instead of
         answering it — it autocompletes the envelope, delimiters and all.
@@ -196,21 +258,28 @@ class Worker:
         The whole envelope goes in as one user turn. Its internal SYS/EVIDENCE
         blocks keep their meaning: the labelling that makes retrieved text
         inert is Marrow's delimiters, not the chat roles.
+
+        Token ids rather than text, because the KV cache is keyed on the exact
+        token sequence and re-encoding a rendered template is a second chance
+        to disagree with the first.
         """
-        tok = getattr(self.tokenizer, "apply_chat_template", None)
-        if tok is None or getattr(self.tokenizer, "chat_template", None) is None:
-            # A base model with no template. Returned as-is, and the caller
-            # gets continuation behaviour — which is correct for a base model.
-            return envelope
+        apply = getattr(self.tokenizer, "apply_chat_template", None)
+        if apply is None or getattr(self.tokenizer, "chat_template", None) is None:
+            # A base model with no template. The caller gets continuation
+            # behaviour, which is correct for a base model.
+            return self.tokenizer.encode(envelope)
         messages = [{"role": "user", "content": envelope}]
         try:
             # Qwen3 and friends gate reasoning on this flag, which is exactly
             # Marrow's Fast/Thorough switch reaching the model.
-            return tok(messages, add_generation_prompt=True,
-                       enable_thinking=thinking_on)
+            out = apply(messages, add_generation_prompt=True,
+                        enable_thinking=thinking_on)
         except TypeError:
             # Templates that do not know the flag.
-            return tok(messages, add_generation_prompt=True)
+            out = apply(messages, add_generation_prompt=True)
+        # `apply_chat_template` returns ids when it tokenizes and a string when
+        # it does not; both are in the wild.
+        return self.tokenizer.encode(out) if isinstance(out, str) else list(out)
 
     @staticmethod
     def _safe_prefix(text, tag):

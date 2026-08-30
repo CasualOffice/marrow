@@ -28,6 +28,7 @@ use marrow_model::queue::Cancel;
 use marrow_model::registry::Registry;
 use marrow_model::scratch::ModelWorkspace;
 use marrow_model::supervisor::{self, Command, Event, ModelState, Supervisor};
+use marrow_model::worker::Runtime;
 use serde::Serialize;
 
 /// How often the machine is sampled while the app is open.
@@ -132,10 +133,16 @@ pub struct ModelsSnapshot {
     pub generator: RoleRow,
     pub embedder: RoleRow,
     pub models: Vec<ModelRow>,
-    /// One sentence about what this build can and cannot do yet. Shown at the
-    /// top of the page, because a page full of models that cannot run needs to
-    /// say so before the user clicks one.
+    /// One sentence about what the runtime can do right now. Shown at the top
+    /// of the page, because a page full of models that cannot run needs to say
+    /// so before the user clicks one.
     pub runtime_status: String,
+    /// True when an inference runtime was found. False means every model on
+    /// the page can be downloaded and none can answer.
+    pub runtime_ready: bool,
+    /// The commands that would create one. Named, because "MLX is not
+    /// available" is a dead end and this is something the user can do.
+    pub runtime_setup: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -176,6 +183,11 @@ pub struct Hub {
     /// reported rather than worked around.
     workspace: Option<ModelWorkspace>,
     workspace_problem: Option<String>,
+    /// The Python interpreter and worker script, when one was found.
+    /// LLM-036: found is not the same as verified — starting a worker proves
+    /// it, and this only says a candidate exists.
+    runtime: Option<Runtime>,
+    data_dir: PathBuf,
     /// One entry per transfer in flight or recently finished, so a page that
     /// refetches every four seconds keeps showing the bar.
     downloads: Arc<Mutex<BTreeMap<String, Progress>>>,
@@ -264,8 +276,13 @@ impl Hub {
             })
             .expect("supervisor event thread");
 
+        let data_dir = models_dir.parent().unwrap_or(&models_dir).to_path_buf();
+        let runtime = Runtime::discover(&data_dir, worker_script());
+
         let profile = default_profile(&machine);
         Self {
+            runtime,
+            data_dir,
             machine,
             sampler,
             registry: Arc::new(Mutex::new(registry)),
@@ -516,7 +533,15 @@ impl Hub {
             generator: role_row(profile, Workload::Generation),
             embedder: role_row(profile, Workload::Embedding),
             models,
-            runtime_status: RUNTIME_STATUS.to_string(),
+            runtime_ready: self.runtime.is_some(),
+            runtime_status: match &self.runtime {
+                Some(_) => RUNTIME_READY.to_string(),
+                None => RUNTIME_MISSING.to_string(),
+            },
+            runtime_setup: self
+                .runtime
+                .is_none()
+                .then(|| Runtime::setup_hint(&self.data_dir)),
         }
     }
 
@@ -550,13 +575,31 @@ impl Hub {
     }
 }
 
-/// The one sentence at the top of the page. It says what this build cannot do,
-/// because a page listing four models that cannot run must not read as a page
-/// of four models that can.
-const RUNTIME_STATUS: &str = "No inference runtime is wired up yet, so nothing here can \
-     answer a question. This page reports what this machine could run and what \
-     is stopping each model, which is the part that has to be right before \
-     anything is downloaded.";
+/// The sentence at the top of the page when a runtime is present.
+const RUNTIME_READY: &str = "MLX is available on this machine. A model that is \
+     installed and fits can answer questions locally — nothing leaves this device.";
+
+/// And when it is not. A page listing six models that cannot run must not read
+/// as a page of six models that can, and it must name the fix rather than the
+/// problem.
+const RUNTIME_MISSING: &str = "No inference runtime is installed, so nothing here \
+     can answer a question yet. Models can still be downloaded, and search works \
+     without one.";
+
+/// Where the worker script lives beside the binary.
+///
+/// Shipped next to the executable rather than embedded, so a broken worker can
+/// be read and fixed without a rebuild — this is a personal tool, and that
+/// trade is the right way round.
+fn worker_script() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("mlx_worker.py")))
+        .filter(|p| p.is_file())
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../model/worker/mlx_worker.py")
+        })
+}
 
 fn poisoned() -> marrow_core::Error {
     marrow_core::Error::invariant("the model registry lock was poisoned")
@@ -686,15 +729,35 @@ mod tests {
     }
 
     #[test]
-    fn the_page_says_that_nothing_can_run_yet() {
-        // A page listing four models that cannot run must not read as a page
-        // of four models that can.
-        assert!(RUNTIME_STATUS.contains("No inference runtime"));
-        assert!(RUNTIME_STATUS.contains("answer a question"));
+    fn the_page_states_the_runtime_situation_either_way() {
+        // A page listing six models that cannot run must not read as a page of
+        // six models that can — and when there is no runtime it must name the
+        // fix rather than the problem.
+        assert!(RUNTIME_MISSING.contains("No inference runtime"));
         assert!(
-            !RUNTIME_STATUS.contains("coming soon"),
-            "say what is true now, not what is planned"
+            RUNTIME_MISSING.contains("search works"),
+            "search is unaffected"
         );
+        assert!(RUNTIME_READY.contains("nothing leaves this device"));
+        for s in [RUNTIME_MISSING, RUNTIME_READY] {
+            assert!(
+                !s.contains("coming soon"),
+                "say what is true now, not what is planned"
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_runtime_comes_with_the_commands_that_create_one() {
+        let t = tempfile::tempdir().unwrap();
+        // A data directory with no `runtime/mlx` in it.
+        let hub = Hub::start(t.path().join("models"), &[]);
+        let s = hub.snapshot();
+        assert!(!s.runtime_ready);
+        let setup = s.runtime_setup.expect("must name the fix");
+        assert!(setup.contains("mlx-lm"), "{setup}");
+        assert!(setup.contains("venv"), "{setup}");
+        hub.shutdown();
     }
 
     #[test]

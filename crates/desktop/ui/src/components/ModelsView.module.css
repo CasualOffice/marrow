@@ -662,3 +662,25 @@
   flex: none;
   margin-top: 2px;
 }
+
+/* No runtime: still information, but not good news. */
+.statusWarn {
+  background: var(--tint-warn-soft);
+  color: var(--warn-text);
+}
+
+/* The commands that create a runtime, selectable. */
+.setup {
+  margin: 0;
+  max-width: var(--prose-measure);
+  padding: var(--sp-5) var(--sp-6);
+  border-radius: var(--r-surf);
+  background: var(--sunken);
+  color: var(--fg2);
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-body);
+  white-space: pre-wrap;
+  overflow-x: auto;
+  user-select: text;
+}

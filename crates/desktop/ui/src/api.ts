@@ -403,6 +403,11 @@ export interface ModelsSnapshot {
   readonly embedder: RoleRow;
   readonly models: readonly ModelRow[];
   readonly runtimeStatus: string;
+  /** False means every model here can be downloaded and none can answer. */
+  readonly runtimeReady: boolean;
+  /** The commands that would create a runtime. Named, because "MLX is not
+   *  available" is a dead end and this is something the user can do. */
+  readonly runtimeSetup: string | null;
 }
 
 export function modelsOverview(): Promise<ModelsSnapshot> {

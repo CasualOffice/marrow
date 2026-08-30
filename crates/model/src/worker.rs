@@ -796,7 +796,7 @@ sleep 30"#
 #[cfg(test)]
 mod real {
     use super::*;
-    use crate::envelope::{Builder, Evidence, RandomNonce};
+    use crate::envelope::{Builder, Evidence, RandomNonce, Session};
     use crate::queue::Cancel;
     use crate::scratch::ModelWorkspace;
     use marrow_core::{Origin, ProvenanceClass, SourceSpan};
@@ -1062,6 +1062,83 @@ mod real {
         // property of the model, and a test that fails on it would be a test
         // of someone else's weights. The assertions above are the ones Marrow
         // can actually keep.
+    }
+
+    #[test]
+    #[ignore = "runs a real model twice"]
+    fn a_follow_up_question_reuses_the_shared_prefix() {
+        // LLM-040/045. Marrow's prompts share the system instructions, the
+        // envelope framing and usually the same documents; recomputing that
+        // every turn is the largest avoidable cost in the feature.
+        let (rt, dir, entry) = ready_worker();
+        // Several chunks, as retrieval actually returns (ASK-003: 5–15). With
+        // one short sentence the closing instruction dominates the prompt and
+        // the reuse fraction is misleadingly low.
+        let chunks = [
+            "The agreement runs from 1 January 2024 and renews on 31 December \
+             2029 unless either party gives notice in writing ninety days before \
+             the end of the then-current term.",
+            "Rent is 2,400 per calendar month, payable in advance on the first \
+             working day, and is reviewed annually against the published index \
+             with any increase capped at four per cent.",
+            "The tenant is responsible for internal decoration and for any \
+             alteration requiring consent; the landlord retains responsibility \
+             for the structure, the roof and the common parts.",
+            "Notices under this agreement are valid only if given in writing to \
+             the address in Schedule 1, or to such other address as either \
+             party has notified in writing.",
+        ];
+        // One session, so the delimiter — and therefore the whole preamble —
+        // is identical across the two turns.
+        let mut session = Session::new();
+        let mut ask = |q: &str| {
+            let mut b = Builder::new("You are Marrow, answering from local documents.", q);
+            for (i, c) in chunks.iter().enumerate() {
+                let mut e = ev(c);
+                e.id = format!("E{}", i + 1);
+                b = b.evidence(e);
+            }
+            b.finish(&mut session)
+        };
+
+        let mut w = Worker::start(&rt).unwrap();
+        w.load(&entry.id, &dir).unwrap();
+
+        let first = ask("What is the renewal date?");
+        let (_, _, u1, _) = w
+            .generate(&first, 48, 0, &Cancel::new(), &mut |_| {})
+            .unwrap();
+
+        let second = ask("Is it still active in 2028?");
+        let (_, _, u2, _) = w
+            .generate(&second, 48, 0, &Cancel::new(), &mut |_| {})
+            .unwrap();
+
+        eprintln!(
+            "\n--- prefix reuse ---\n  turn 1: {} tokens, {} cached\n  \
+             turn 2: {} tokens, {} cached ({} prefilled)\n",
+            u1.prompt_tokens,
+            u1.cached_prefix_tokens,
+            u2.prompt_tokens,
+            u2.cached_prefix_tokens,
+            u2.prompt_tokens - u2.cached_prefix_tokens,
+        );
+        assert_eq!(
+            u1.cached_prefix_tokens, 0,
+            "the first request has nothing to reuse"
+        );
+        // The whole preamble — system block and every evidence chunk — must be
+        // reused, not just the chat template's opening tokens. The remainder
+        // is the question and the closing instruction, which necessarily
+        // differ or follow something that does.
+        let reuse = u2.cached_prefix_tokens as f64 / u2.prompt_tokens as f64;
+        assert!(
+            reuse > 0.8,
+            "expected the evidence to be reused; only {:.0}% was ({} of {})",
+            reuse * 100.0,
+            u2.cached_prefix_tokens,
+            u2.prompt_tokens
+        );
     }
 
     #[test]
