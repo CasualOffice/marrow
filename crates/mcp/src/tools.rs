@@ -173,6 +173,53 @@ reading one would trigger a download of its contents.",
         },
     },
     Tool {
+        name: "read_table",
+        description: "\
+Read the tables in a file as structure — rows, columns, typed values — rather \
+than as text.
+
+Prefer this over `read_file` for a spreadsheet, a Markdown table or an HTML \
+table. Reading one as text hands you a wall of delimiters you then have to \
+re-derive a grid from, guessing which row was the header; the parser has \
+already made that guess with more evidence, and reports it with a confidence.
+
+**Every cell carries the range it came from**, so a claim about a value cites \
+the cell rather than the file it was somewhere inside. Each cell gives both the \
+raw text somebody typed and the typed value it was read as.
+
+`header_row` may be null: a header is inferred, never assumed to be the first \
+row, and a table whose top row is genuinely ambiguous is reported as having \
+none rather than being given one. Check `header_confidence` before relying on \
+column names.
+
+`reconstruction` says how well the grid came back — `exact`, `degraded` or \
+`failed`. A number read out of a degraded grid should not be quoted with the \
+confidence of one read out of a clean spreadsheet.
+
+Refuses files that are not indexed, and refuses cloud-only placeholder files, \
+whose contents were never read. A file with no tables is not a refusal: it \
+returns an empty list, because most files have none and that is worth saying \
+plainly. A very large table is cut and says so rather than being returned \
+whole.",
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path to an indexed file."
+                    },
+                    "table": {
+                        "type": "integer",
+                        "description": "Which table, numbered from 0 in document order. Omit for every table in the file.",
+                        "minimum": 0
+                    }
+                },
+                "required": ["path"]
+            })
+        },
+    },
+    Tool {
         name: "file_info",
         description: "\
 Everything Marrow knows about one file: its stable identity, content hash, \
@@ -578,6 +625,7 @@ mod tests {
             ],
         ),
         ("read_file", &["path", "start_line", "end_line"]),
+        ("read_table", &["path", "table"]),
         ("file_info", &["path"]),
         ("list_workspaces", &[]),
         ("index_status", &[]),

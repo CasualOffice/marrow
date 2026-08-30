@@ -27,6 +27,14 @@ const DEFAULT_LIMIT: usize = 20;
 /// turns into a context-window incident.
 const MAX_READ_BYTES: usize = 256 * 1024;
 
+/// Cells returned from one table before the answer is cut.
+///
+/// A 1001-row spreadsheet is 2,002 cells and several hundred kilobytes of JSON;
+/// handed to a model whole it is a context-window incident, and the shape of the
+/// table is legible long before the last row. The cut is reported rather than
+/// silent.
+const MAX_TABLE_CELLS: usize = 400;
+
 pub struct Server {
     store: Store,
     index: Fts5Index,
@@ -107,6 +115,7 @@ impl Server {
             "search_literal" => self.search_literal(&args),
             "read_file" => self.read_file(&args),
             "file_info" => self.file_info(&args),
+            "read_table" => self.read_table(&args),
             "list_workspaces" => self.list_workspaces(),
             "index_status" => self.index_status(),
             "create_file" | "create_diagram" | "create_page" => self.create(name, &args),
@@ -482,6 +491,121 @@ impl Server {
         }))
     }
 
+    /// The tables in one file, as structure rather than as prose.
+    ///
+    /// A spreadsheet read through `read_file` is a wall of comma-separated text
+    /// that a model then has to re-derive a grid from, guessing which row was
+    /// the header — which is exactly the guess the parser already made, with
+    /// more evidence and a recorded confidence. Handing back the guess instead
+    /// of the raw text is the whole point of having a Table IR.
+    ///
+    /// Every cell carries its own span (TBL-002), so a claim about a number can
+    /// cite the cell it came from rather than the file it was somewhere inside.
+    fn read_table(&self, args: &Value) -> Result<Value> {
+        let path = args
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| bad("`path` is required."))?;
+
+        let conn = self.store.reader()?;
+        // The same two refusals `read_file` makes, for the same reasons: this
+        // is not a general filesystem tool, and reading a cloud placeholder is
+        // what downloads it (invariant #5). Tables come from the index rather
+        // than the disk, so the second is about consistency of behaviour rather
+        // than about this call touching bytes.
+        let row: Option<(String, String)> = conn
+            .query_row(
+                "SELECT f.current_version_id, f.tier_state FROM files f
+                  WHERE f.current_path = ?1 AND f.status = 'ACTIVE' LIMIT 1",
+                [path],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok();
+        let Some((version_id, tier)) = row else {
+            return Err(bad(
+                "That file is not indexed, so it has no tables. Call list_workspaces to \
+                 see which folders Marrow has been granted.",
+            ));
+        };
+        if tier != "RESIDENT" {
+            return Err(bad(
+                "That file is cloud-only, so its contents were never read and no tables \
+                 were extracted from it.",
+            ));
+        }
+        let Ok(version_id) = version_id.parse() else {
+            return Err(marrow_core::Error::invariant("a malformed version id"));
+        };
+
+        let tables = marrow_store::read::tables_for(&conn, version_id)?;
+        if tables.is_empty() {
+            // Not an error: most files have no tables, and saying so plainly is
+            // more useful than a refusal a caller has to interpret.
+            return Ok(json!({
+                "path": path,
+                "tables": [],
+                "note": "This file is indexed and has no tables in it.",
+            }));
+        }
+
+        // One table by default. A file of forty tables returned whole is a
+        // context-window incident, and the caller almost always wants one.
+        let want = args
+            .get("table")
+            .and_then(Value::as_u64)
+            .map(|n| n as usize);
+        let selected: Vec<(usize, &marrow_store::read::TableRow)> = match want {
+            Some(i) => {
+                let Some(t) = tables.get(i) else {
+                    return Err(bad(&format!(
+                        "This file has {} tables, numbered from 0; {i} was asked for.",
+                        tables.len()
+                    )));
+                };
+                vec![(i, t)]
+            }
+            None => tables.iter().enumerate().collect(),
+        };
+
+        let mut out = Vec::new();
+        for (i, t) in selected {
+            let cells = marrow_store::read::cells_for(&conn, &t.table_id)?;
+            let shown = cells.len().min(MAX_TABLE_CELLS);
+            let rows = group_rows(&cells[..shown]);
+            out.push(json!({
+                "index": i,
+                "caption": t.caption,
+                "rows": t.n_rows,
+                "columns": t.n_cols,
+                "column_names": t.column_names.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
+                "column_types": t.column_types.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
+                // TBL-003: never "the first row is the header". The confidence
+                // is reported so a caller can distinguish a header the parser
+                // was sure of from one it guessed at.
+                "header_row": t.header_row_idx,
+                "header_confidence": t.header_confidence,
+                "extraction": t.extraction_method,
+                "provenance": t.provenance_class.to_lowercase(),
+                // TBL-018 and TBL-014: a reconstruction that went badly is
+                // labelled, so a number read out of a degraded grid is not
+                // quoted with the same confidence as one read out of a clean
+                // spreadsheet.
+                "reconstruction": t.reconstruction.to_lowercase(),
+                "cells_shown": shown,
+                "cells_total": cells.len(),
+                "truncated": shown < cells.len(),
+                "cells": rows,
+            }));
+        }
+
+        Ok(json!({
+            "path": path,
+            "tables": out,
+            "note": "Every cell carries the byte or cell range it came from, so a claim \
+                     about a value can cite the cell rather than the file.",
+        }))
+    }
+
     fn file_info(&self, args: &Value) -> Result<Value> {
         let path = args
             .get("path")
@@ -797,6 +921,40 @@ fn mode_name(mode: marrow_index::MatchMode) -> &'static str {
         // text field being typed into, and there is no such thing here.
         marrow_index::MatchMode::Prefix => "prefix",
     }
+}
+
+/// Cells grouped into rows, so a caller sees a grid rather than a flat list.
+///
+/// A hole stays a hole. The parser refuses to synthesise a cell because
+/// synthesising a cell means synthesising a location, and re-inventing one here
+/// would undo that at the last step.
+fn group_rows(cells: &[marrow_store::read::CellRow]) -> Vec<Value> {
+    let mut rows: Vec<Value> = Vec::new();
+    let mut current: Vec<Value> = Vec::new();
+    let mut at: Option<i64> = None;
+
+    for c in cells {
+        if at != Some(c.row_idx) {
+            if at.is_some() {
+                rows.push(Value::Array(std::mem::take(&mut current)));
+            }
+            at = Some(c.row_idx);
+        }
+        current.push(json!({
+            "row": c.row_idx,
+            "col": c.col_idx,
+            // Both, always. TBL-005: a number that parsed is still a string
+            // somebody wrote, and the typed value is the parser's reading of it.
+            "text": c.raw_text,
+            "value": c.typed_value,
+            "type": c.value_type,
+            "span": serde_json::from_str::<Value>(&c.cell_span).unwrap_or(Value::Null),
+        }));
+    }
+    if !current.is_empty() {
+        rows.push(Value::Array(current));
+    }
+    rows
 }
 
 /// One sentence about whether these counts can be trusted as current.
