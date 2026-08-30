@@ -60,7 +60,13 @@
 //! with no parser discoverable, and M0 F6 found that EXIF is the whole image
 //! story anyway.
 
-#![forbid(unsafe_code)]
+// Not `forbid`: `pdf` calls PDFKit, which is Objective-C and therefore unsafe
+// by definition. The alternative is vendoring a multi-megabyte Chromium
+// library to do what the OS already does — including the per-character bounds
+// that make an exact citation possible. The unsafe is confined to that one
+// module and every call is a documented message send with no lifetime to get
+// wrong.
+#![deny(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
 pub mod budget;
@@ -71,6 +77,7 @@ pub mod decode;
 pub mod ir;
 pub mod markdown;
 pub mod parser;
+pub mod pdf;
 pub mod router;
 pub mod structured;
 pub mod text;

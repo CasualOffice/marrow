@@ -67,7 +67,12 @@ impl ParserRouter {
         r.register(Box::new(crate::structured::StructuredParser));
         // 4. CSV — ~90 files.
         r.register(Box::new(crate::csv::CsvParser));
-        // 5. Plain text — 449 files, and the T1 fallback for everything else
+        // 5. PDF — before the text fallback, which would otherwise decode a
+        //    PDF's compressed streams into replacement characters and call it
+        //    content. On a non-macOS build this refuses and the file stays
+        //    findable by name.
+        r.register(Box::new(crate::pdf::PdfParser));
+        // 6. Plain text — 449 files, and the T1 fallback for everything else
         //    that decodes.
         r.register(Box::new(crate::text::TextParser));
         r

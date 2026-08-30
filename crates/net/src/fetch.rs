@@ -1254,6 +1254,67 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod pinning {
+    use super::*;
+
+    /// The resolver never blocks, so its deadline is irrelevant here.
+    fn no_timeout() -> ureq::unversioned::transport::NextTimeout {
+        ureq::unversioned::transport::NextTimeout {
+            after: ureq::unversioned::transport::time::Duration::NotHappening,
+            reason: ureq::Timeout::Global,
+        }
+    }
+
+    /// The guarantee the whole SSRF check rests on.
+    ///
+    /// "Resolve, validate, connect" is the shape of a DNS-rebinding attack
+    /// when the *connect* step resolves again: the name answers with a public
+    /// address for the check and a private one a moment later, and three 2026
+    /// CVEs are exactly that. The defence is not a better check — it is
+    /// connecting to the addresses that were checked, and never asking the
+    /// name a second time.
+    #[test]
+    fn the_pinned_resolver_ignores_the_name_it_is_given() {
+        let checked: SocketAddr = "93.184.216.34:443".parse().unwrap();
+        let pinned = Pinned(vec![checked]);
+
+        // A different host entirely, and a hostile one.
+        for uri in [
+            "https://example.com/",
+            "https://localhost/",
+            "https://169.254.169.254/latest/meta-data/",
+        ] {
+            let out = ureq::unversioned::resolver::Resolver::resolve(
+                &pinned,
+                &uri.parse::<ureq::http::Uri>().unwrap(),
+                &ureq::config::Config::builder().build(),
+                no_timeout(),
+            )
+            .expect("the pinned resolver must answer");
+            assert_eq!(
+                out.as_ref(),
+                [checked],
+                "{uri} resolved to something other than the checked address"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pinned_resolver_with_nothing_in_it_refuses_rather_than_falling_back() {
+        // An empty pin must not become "resolve normally". That would turn the
+        // one defence into a no-op precisely when the check found nothing.
+        let pinned = Pinned(Vec::new());
+        let out = ureq::unversioned::resolver::Resolver::resolve(
+            &pinned,
+            &"https://example.com/".parse::<ureq::http::Uri>().unwrap(),
+            &ureq::config::Config::builder().build(),
+            no_timeout(),
+        );
+        assert!(out.is_err());
+    }
+}
+
 /// Against the real network. `#[ignore]` by default (NET-063): `cargo test`
 /// must stay runnable on a plane.
 ///
