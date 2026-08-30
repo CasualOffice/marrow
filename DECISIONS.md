@@ -299,6 +299,18 @@ Two rules follow. **Freshness is persisted, not held in memory** — the MCP ser
 
 The corollary is that the app has to *earn* the fresh state: the desktop now runs a watcher per root, and both watchers sweep once before they start listening. A watcher is not live the instant it opens, and nothing is listening while the app is shut — so without that first sweep a change in either window waits six hours for the scheduled reconciliation, which is indistinguishable from having no watcher at all.
 
+### D60 — Image OCR: Vision, and two things it does that nobody documents *(settled 2026-08-30)*
+
+D13 settled the engine as platform-native and this is the implementation. Vision is on every Mac, needs no download, and runs locally, so images stop being findable by filename alone. Two behaviours were found by measuring and are the reason this entry exists rather than a one-line note.
+
+**Vision composites transparent images onto black.** A diagram exported with a transparent background and dark ink — which is the default in Excalidraw, Figma and draw.io — returns *zero* text observations. Not poor results: none, indistinguishable from a photograph of a wall. Confirmed in a standalone Swift program so it is the framework's behaviour and not ours. The fix is a single retry composited on white, gated on formats that can carry alpha, so JPEG and BMP photographs never pay for it. This is the kind of gap that would never have been noticed from a test corpus of screenshots, because screenshots are opaque.
+
+**A wall-clock budget cannot bound the recogniser.** `performRequests:` is one uninterruptible call, and a cold model load alone can take nine seconds of a ten-second budget. Checking the clock after it returns does not bound anything — it only discards a reading that already completed and cost the time. The pixel ceiling, checked before any work starts, is the real bound. The general lesson: a budget enforced after an uninterruptible call is not a budget, it is a way to waste the work twice.
+
+**`Approximate`, not `Degraded`.** PDFKit reads text that genuinely is in the file and only reconstructs its layout. Here nothing in the file is text; every character is inferred from pixels. Part 3 §63's T4 row says Approximate, and per-line confidence is recorded so a low-confidence reading can be down-weighted rather than trusted equally.
+
+The parser is registered last, so OCR never wins a file something could read exactly.
+
 ### D59 — Context window, structured output and the 4B ceiling *(settled 2026-08-30)*
 
 Prompted by a review of the model layer. Four of the five points hold; two land differently in this stack than they would in llama.cpp, and one was already validated by our own measurements.
