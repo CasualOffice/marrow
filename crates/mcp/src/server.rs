@@ -77,6 +77,7 @@ impl Server {
         // a JSON-RPC error.
         let outcome = match name {
             "search" => self.search(&args),
+            "search_literal" => self.search_literal(&args),
             "read_file" => self.read_file(&args),
             "file_info" => self.file_info(&args),
             "list_workspaces" => self.list_workspaces(),
@@ -104,9 +105,17 @@ impl Server {
             .unwrap_or("")
             .trim();
         if query.is_empty() {
-            return Err(marrow_core::Error::new(
-                marrow_core::Code::CfgInvalid,
-                "`query` is required and must not be empty.",
+            return Err(bad("`query` is required and must not be empty."));
+        }
+        // The surface names its own escape hatch. The index rejects a query
+        // that tokenizes to nothing, but its message cannot know whether the
+        // caller has a flag, a tool or a button — and a suggestion the caller
+        // cannot act on is worse than none.
+        if !query.chars().any(char::is_alphanumeric) {
+            return Err(bad(
+                "This searches words, so a pattern with no letters or digits cannot be \
+                 expressed as one. Call `search_literal` with the same pattern — it reads \
+                 the files themselves and matches punctuation exactly.",
             ));
         }
         let limit = args
@@ -166,6 +175,179 @@ impl Server {
             "total": results.len(),
             "results": results,
         }))
+    }
+
+    /// The escape hatch (CAP-005), over MCP.
+    ///
+    /// `search` tokenizes, so a pattern with punctuation in it is unfindable
+    /// through the index. This reads the files instead — which makes invariant
+    /// #5 the thing that shapes the whole tool: the tier is checked before
+    /// every open and a cloud-only file is skipped **unread**, never hydrated.
+    ///
+    /// The payload's job is to stop a partial scan reading as a complete one.
+    /// A model that sees `"matches": 0` and no coverage block concludes the
+    /// string is not on the disk; on a 35,000-file index the scan routinely
+    /// stops on its time budget long before that is known.
+    fn search_literal(&self, args: &Value) -> Result<Value> {
+        let pattern = args
+            .get("pattern")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if pattern.is_empty() {
+            return Err(bad("`pattern` is required and must not be empty."));
+        }
+        let flag = |k: &str| args.get(k).and_then(Value::as_bool).unwrap_or(false);
+        let limit = args
+            .get("limit")
+            .and_then(Value::as_u64)
+            .map(|n| (n as usize).clamp(1, MAX_LIMIT))
+            .unwrap_or(DEFAULT_LIMIT);
+
+        let workspace = match args.get("workspace").and_then(Value::as_str) {
+            Some(name) => Some(self.workspace_by_name(name)?),
+            None => None,
+        };
+        let (targets, origins) =
+            self.literal_targets(workspace, args.get("path_contains").and_then(Value::as_str))?;
+        let in_scope = targets.len();
+
+        let q = marrow_index::LiteralQuery {
+            pattern: pattern.to_string(),
+            kind: if flag("regex") {
+                marrow_index::PatternKind::Regex
+            } else {
+                marrow_index::PatternKind::Literal
+            },
+            case: if flag("ignore_case") {
+                marrow_index::CaseMode::Insensitive
+            } else {
+                marrow_index::CaseMode::Sensitive
+            },
+            whole_word: flag("whole_word"),
+            max_total_matches: limit,
+            ..marrow_index::LiteralQuery::new(pattern)
+        };
+
+        // Stateless server, one request at a time: nothing else can cancel it,
+        // and the query's own time budget is what bounds the scan.
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let outcome = marrow_index::literal_search(&targets, &q, &never)?;
+        let roots = self.roots()?;
+
+        let matches: Vec<Value> = outcome
+            .hits
+            .iter()
+            .map(|h| {
+                let path = h.path.display().to_string();
+                // Invariant #13 again: a literal hit in a file this system
+                // wrote is not independent corroboration, and the payload has
+                // to say so rather than leaving the caller to infer it.
+                let origin = origins
+                    .get(&h.file_id)
+                    .copied()
+                    .unwrap_or(marrow_core::Origin::User);
+                json!({
+                    "path": path,
+                    "relative_path": relative(&path, &roots),
+                    "location": format!("{path}:{}", h.line),
+                    "line": h.line,
+                    "span": h.span,
+                    "line_span": h.line_span,
+                    "excerpt": h.snippet.text,
+                    // Reading the bytes is as precise as provenance gets.
+                    "provenance": "exact",
+                    "origin": lower(&origin),
+                    "citable": origin == marrow_core::Origin::User,
+                    "file_id": h.file_id.to_string(),
+                })
+            })
+            .collect();
+
+        Ok(json!({
+            "pattern": pattern,
+            "matches": matches.len(),
+            "results": matches,
+            "coverage": coverage(&outcome, in_scope),
+        }))
+    }
+
+    /// Files the scan may consider, and what each one's origin is.
+    ///
+    /// The tier comes from the index rather than a fresh `stat` — it is what
+    /// the last scan recorded, and `literal_search` re-checks nothing. A caller
+    /// that supplies a wrong tier is how invariant #5 gets broken by the
+    /// caller rather than by the engine, so this is the one place that decides
+    /// it.
+    #[allow(clippy::type_complexity)]
+    fn literal_targets(
+        &self,
+        workspace: Option<marrow_core::WorkspaceId>,
+        path_contains: Option<&str>,
+    ) -> Result<(
+        Vec<marrow_index::LiteralTarget>,
+        std::collections::HashMap<marrow_core::FileId, marrow_core::Origin>,
+    )> {
+        let conn = self.store.reader()?;
+        let mut sql = String::from(
+            "SELECT file_id, current_path, tier_state, origin FROM files
+              WHERE status='ACTIVE' AND current_path IS NOT NULL",
+        );
+        let mut binds: Vec<String> = Vec::new();
+        if let Some(ws) = workspace {
+            sql.push_str(" AND workspace_id = ?");
+            sql.push_str(&(binds.len() + 1).to_string());
+            binds.push(ws.to_string());
+        }
+        if let Some(sub) = path_contains {
+            sql.push_str(" AND current_path LIKE ?");
+            sql.push_str(&(binds.len() + 1).to_string());
+            // Bound, not interpolated: a path fragment is caller input.
+            binds.push(format!("%{}%", sub.replace('%', "\\%")));
+        }
+
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| marrow_store::map_sqlite(e, "listing files to scan"))?;
+        let rows = stmt
+            .query_map(
+                marrow_store::rusqlite::params_from_iter(binds.iter()),
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .map_err(|e| marrow_store::map_sqlite(e, "listing files to scan"))?;
+
+        let mut targets = Vec::new();
+        let mut origins = std::collections::HashMap::new();
+        for row in rows {
+            let (id, path, tier, origin) =
+                row.map_err(|e| marrow_store::map_sqlite(e, "reading a file to scan"))?;
+            let Ok(file_id) = id.parse::<marrow_core::FileId>() else {
+                continue;
+            };
+            let tier = match tier.as_str() {
+                "PLACEHOLDER" => TierState::Placeholder,
+                "HYDRATING" => TierState::Hydrating,
+                "UNAVAILABLE" => TierState::Unavailable,
+                _ => TierState::Resident,
+            };
+            origins.insert(
+                file_id,
+                if origin == "SELF" {
+                    marrow_core::Origin::SelfWritten
+                } else {
+                    marrow_core::Origin::User
+                },
+            );
+            targets.push(marrow_index::LiteralTarget::new(file_id, path, tier));
+        }
+        Ok((targets, origins))
     }
 
     fn read_file(&self, args: &Value) -> Result<Value> {
@@ -390,6 +572,41 @@ impl Server {
     fn roots(&self) -> Result<Vec<String>> {
         marrow_query::catalog::roots(&self.store.reader()?)
     }
+}
+
+/// Everything the scan did not look at, in a shape a model can branch on.
+///
+/// `complete` is the field that matters. Without it, "0 matches in 8,427 of
+/// 35,134 files" reads as "we looked everywhere" when the scan gave up after
+/// five seconds — the most misleading thing this tool can say.
+fn coverage(o: &marrow_index::LiteralOutcome, in_scope: usize) -> Value {
+    let stopped = match o.stopped {
+        marrow_index::StopReason::Completed => "completed",
+        marrow_index::StopReason::TimeBudget => "time_budget",
+        marrow_index::StopReason::Cancelled => "cancelled",
+        marrow_index::StopReason::MatchLimit => "match_limit",
+    };
+    json!({
+        "complete": !o.has_gaps(),
+        "stopped_because": stopped,
+        "files_in_scope": in_scope,
+        "files_scanned": o.files_scanned,
+        // Invariant #5: skipped without being opened. Never a silent zero —
+        // a scan that quietly omitted the cloud-only half of a folder is the
+        // most misleading possible "no matches".
+        "files_skipped_cloud_only": o.files_skipped_not_resident,
+        "files_skipped_binary": o.files_skipped_binary,
+        "files_skipped_too_large": o.files_skipped_too_large,
+        "files_unreadable": o.files_failed,
+        "files_with_more_matches": o.files_truncated,
+        "advice": if o.has_gaps() {
+            "This scan did not cover everything in scope, so no match here does \
+             not mean the pattern is absent. Narrow it with `workspace` or \
+             `path_contains` and scan again."
+        } else {
+            "Every file in scope was read."
+        },
+    })
 }
 
 fn bad(msg: &str) -> marrow_core::Error {

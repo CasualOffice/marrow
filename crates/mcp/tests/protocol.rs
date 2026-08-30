@@ -434,3 +434,247 @@ mod writes {
         }
     }
 }
+
+/// `search_literal` — the escape hatch, over MCP.
+///
+/// Every test here pins a reason the tool exists rather than the shape of its
+/// output. The index tokenizes; this reads bytes; and because it reads bytes
+/// it inherits the two rules that make reading safe — never open a cloud
+/// placeholder, and never let what this system wrote count as corroboration.
+mod literal {
+    use super::*;
+    use marrow_core::{ContentHash, FileId, FileStatus, Origin, TierState};
+    use marrow_store::{NewFile, NewVersion};
+
+    /// One workspace, and files actually written to disk so a scan can read
+    /// them. Returns the directory so paths can be asserted against.
+    fn scannable(files: &[(&str, &str, TierState, Origin)]) -> (tempfile::TempDir, Server) {
+        let dir = tempfile::tempdir().unwrap();
+        let store =
+            Store::open_with_migrations(dir.path().join("marrow.sqlite"), marrow_index::MIGRATIONS)
+                .unwrap();
+        let now = Timestamp::now();
+        let ws = store
+            .upsert_workspace(NewWorkspace {
+                workspace_id: marrow_core::WorkspaceId::new(),
+                name: "notes".into(),
+                at: now,
+            })
+            .unwrap();
+        let root = store
+            .upsert_root(NewRoot {
+                root_id: marrow_core::RootId::new(),
+                workspace_id: ws,
+                canonical_path: dir.path().to_string_lossy().into_owned(),
+                volume_identity: None,
+                grant_token: None,
+                storage_kind: StorageKind::Local,
+                cloud_provider: None,
+                at: now,
+            })
+            .unwrap();
+
+        for (name, body, tier, origin) in files {
+            let path = dir.path().join(name);
+            std::fs::write(&path, body).unwrap();
+            let file = FileId::new();
+            let f = NewFile {
+                file_id: file,
+                workspace_id: ws,
+                root_id: root,
+                current_path: Some(path.to_string_lossy().into_owned()),
+                fs_identity: Some(name.to_string()),
+                tier_state: *tier,
+                origin: *origin,
+                origin_txn_id: None,
+                external_source_url: None,
+                status: FileStatus::Active,
+                at: now,
+            };
+            let v = NewVersion::new(
+                file,
+                *name,
+                body.len() as i64,
+                ContentHash::of(body.as_bytes()),
+            );
+            store
+                .writer()
+                .submit(move |c| {
+                    marrow_store::read::insert_file_with_version(c, &f, &v).map(|_| ())
+                })
+                .unwrap();
+        }
+        store.flush().unwrap();
+        (dir, Server::new(store).unwrap())
+    }
+
+    fn call(server: &Server, args: Value) -> Value {
+        let out = exchange(
+            server,
+            &[json!({
+                "jsonrpc":"2.0","id":1,"method":"tools/call",
+                "params": { "name":"search_literal", "arguments": args }
+            })],
+        );
+        let r = out.into_iter().next().expect("a call gets a response");
+        let text = r["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no text in {r}"))
+            .to_string();
+        serde_json::from_str(&text).expect("the payload must be JSON")
+    }
+
+    /// **The whole reason the tool exists.** FTS5 tokenizes, so a pattern that
+    /// is punctuation cannot be expressed as a word query at all — and the
+    /// zero-results path has been suggesting a literal scan since M1.
+    #[test]
+    fn a_pattern_the_word_index_cannot_express_is_found_by_reading_the_bytes() {
+        let (_d, s) = scannable(&[(
+            "app.rs",
+            "fn main() {\n    todo!(\"TODO(sachin): });\");\n}\n",
+            TierState::Resident,
+            Origin::User,
+        )]);
+        let v = call(&s, json!({ "pattern": "});" }));
+        assert_eq!(v["matches"], json!(1), "{v}");
+        assert_eq!(v["results"][0]["line"], json!(2));
+        assert_eq!(v["results"][0]["provenance"], json!("exact"));
+        assert_eq!(v["coverage"]["complete"], json!(true));
+    }
+
+    /// **Invariant #5.** The file is not on this disk; opening it is what
+    /// downloads it. It must be skipped unread *and* counted — a scan that
+    /// quietly omitted the cloud-only half of a folder would be the most
+    /// misleading possible "no matches".
+    #[test]
+    fn a_cloud_only_file_is_skipped_unread_and_counted() {
+        let (_d, s) = scannable(&[
+            ("here.md", "needle\n", TierState::Resident, Origin::User),
+            ("cloud.md", "needle\n", TierState::Placeholder, Origin::User),
+        ]);
+        let v = call(&s, json!({ "pattern": "needle" }));
+        assert_eq!(v["matches"], json!(1), "the placeholder must not be read");
+        assert_eq!(v["coverage"]["files_skipped_cloud_only"], json!(1));
+        assert_eq!(
+            v["coverage"]["complete"],
+            json!(false),
+            "a scan that skipped a file has not covered its scope: {v}"
+        );
+    }
+
+    /// **Invariant #9.** A hit inside a file this system wrote is not
+    /// independent corroboration, and the payload says so rather than leaving
+    /// the caller to work it out from the path.
+    #[test]
+    fn a_hit_in_a_file_this_system_wrote_is_not_citable() {
+        let (_d, s) = scannable(&[
+            (
+                "mine.md",
+                "the finding\n",
+                TierState::Resident,
+                Origin::User,
+            ),
+            (
+                "agent.md",
+                "the finding\n",
+                TierState::Resident,
+                Origin::SelfWritten,
+            ),
+        ]);
+        let v = call(&s, json!({ "pattern": "the finding" }));
+        assert_eq!(v["matches"], json!(2));
+        let by_origin: std::collections::HashMap<&str, bool> = v["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                (
+                    r["origin"].as_str().unwrap(),
+                    r["citable"].as_bool().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(by_origin.get("user"), Some(&true));
+        assert_eq!(
+            by_origin.get("self_written"),
+            Some(&false),
+            "a self-written hit must be marked uncitable: {v}"
+        );
+    }
+
+    /// A partial scan must never read as a complete one. `matches: 0` with no
+    /// coverage block is how a model concludes a string is absent from a disk
+    /// it only looked at a tenth of.
+    #[test]
+    fn stopping_early_is_reported_rather_than_looking_like_an_exhaustive_answer() {
+        let (_d, s) = scannable(&[
+            ("a.md", "hit\nhit\nhit\n", TierState::Resident, Origin::User),
+            ("b.md", "hit\nhit\nhit\n", TierState::Resident, Origin::User),
+        ]);
+        let v = call(&s, json!({ "pattern": "hit", "limit": 2 }));
+        assert_eq!(v["matches"], json!(2));
+        assert_eq!(v["coverage"]["stopped_because"], json!("match_limit"));
+        assert_eq!(v["coverage"]["complete"], json!(false));
+        assert!(
+            v["coverage"]["advice"]
+                .as_str()
+                .unwrap()
+                .contains("does not mean"),
+            "the advice must say what an absent match does not prove: {v}"
+        );
+    }
+
+    /// Narrowing is the documented fix for an incomplete scan, so it has to
+    /// actually narrow — and `path_contains` is caller input going into SQL.
+    #[test]
+    fn narrowing_by_path_reduces_the_scope_rather_than_filtering_the_results() {
+        let (_d, s) = scannable(&[
+            ("keep.md", "needle\n", TierState::Resident, Origin::User),
+            ("drop.md", "needle\n", TierState::Resident, Origin::User),
+        ]);
+        let v = call(&s, json!({ "pattern": "needle", "path_contains": "keep" }));
+        assert_eq!(v["matches"], json!(1));
+        assert_eq!(
+            v["coverage"]["files_in_scope"],
+            json!(1),
+            "the filter must shrink the scan, not the result list: {v}"
+        );
+        // A quote in the fragment must not end the statement it is bound into.
+        let v = call(
+            &s,
+            json!({ "pattern": "needle", "path_contains": "' OR 1=1 --" }),
+        );
+        assert_eq!(v["matches"], json!(0));
+        assert_eq!(v["coverage"]["files_in_scope"], json!(0));
+    }
+
+    #[test]
+    fn an_empty_pattern_is_refused_rather_than_matching_everything() {
+        let (_d, s) = scannable(&[("a.md", "x\n", TierState::Resident, Origin::User)]);
+        let out = exchange(
+            &s,
+            &[json!({
+                "jsonrpc":"2.0","id":1,"method":"tools/call",
+                "params": { "name":"search_literal", "arguments": { "pattern": "  " } }
+            })],
+        );
+        assert_eq!(out[0]["result"]["isError"], json!(true));
+    }
+
+    #[test]
+    fn a_regex_is_only_a_regex_when_asked_for() {
+        let (_d, s) = scannable(&[(
+            "a.md",
+            "literal a.c here\nand abc there\n",
+            TierState::Resident,
+            Origin::User,
+        )]);
+        // `.` is a character, not a wildcard, unless regex is set.
+        let plain = call(&s, json!({ "pattern": "a.c" }));
+        assert_eq!(plain["matches"], json!(1));
+        assert_eq!(plain["results"][0]["line"], json!(1));
+
+        let re = call(&s, json!({ "pattern": "a.c", "regex": true }));
+        assert_eq!(re["matches"], json!(2), "{re}");
+    }
+}

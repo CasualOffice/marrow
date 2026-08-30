@@ -164,8 +164,18 @@ find ~ -flags dataless 2>/dev/null | wc -l
   screen had been suggesting it since M1 while the flag did not exist. It
   reports how many files it did *not* reach: "0 matches in 7,195 of 35,134
   files" plus the reason it stopped
-- [ ] `search_literal` over MCP — the CLI proves the wiring; the tool is not
-  exposed yet
+- [x] `search_literal` over MCP — the escape hatch is now reachable from an
+  agent, not only from a terminal. Carries a `coverage` block naming every file
+  it did not read and why, because `matches: 0` with no coverage is how a model
+  concludes a string is absent from a disk it saw a tenth of. Cloud-only files
+  are skipped unread (#5) and a hit in a self-written file is returned
+  `citable: false` (#9) — both mutation-verified
+- [x] Each surface names its own escape hatch. `marrow search "});"` and the
+  `search` MCP tool both used to answer with a library message suggesting
+  `--literal` — a CLI flag, which over MCP is a suggestion that leads nowhere
+  and in the desktop names nothing at all. The library message now names no
+  affordance; the CLI names the flag (shell-quoted, so the printed command
+  actually runs) and MCP names the tool
 - [x] **The CLI and MCP could not open a real index at all** until the migration
   chain was unified. The composition roots had drifted: the CLI passed
   `fts5::MIGRATION` alone (chain to v3) while the desktop passed both (v4), so
@@ -388,6 +398,7 @@ Short entries. What shipped, what surprised you, what changed.
 
 | Date | Entry |
 |---|---|
+| 2026-08-30 | **`search_literal` over MCP closes M2's last item of mine.** The tool that finds `});` and `TODO(name)` — the patterns FTS5 cannot express, because it tokenizes — is now callable by an agent rather than only from a terminal. The interesting part was not the scan but the payload: it reports `coverage` with `complete` and a count for every file it skipped, since a model that sees `matches: 0` and nothing else concludes the string is not on the disk, and on a 35,134-file index the scan stops on its time budget long before that is known. Fixing this surfaced a smaller one: the "no letters or digits" error came from the *library* and suggested `--literal`, a CLI flag, on every surface — over MCP that names nothing callable, and in the desktop nothing at all. The library now names no affordance and each surface names its own. |
 | 2026-08-30 | **The CLI and the MCP server could not open the app's own index, and the suite was green.** Two composition roots assembled the migration chain by hand and drifted — the CLI to v3, the desktop to v4 — so `marrow search`, `marrow status` and `marrow mcp` all died with `CFG_UNSUPPORTED_VERSION` against a real database. `Store::compose` rejects a chain that is unsorted, clashing or gapped, but one that merely *stops early* is well-formed, so nothing caught it. The tests missed it because the e2e and MCP fixtures built their own partial-chain databases: they tested a shape no binary writes. Fixed with one exported `marrow_index::MIGRATIONS`, both roots and every fixture on it, and a `check.sh` guard that fails if any file assembles a chain itself. Found by running `marrow embed` against the real index — not by a test. |
 | 2026-08-30 | **Semantic search was built, tested, and doing nothing.** 54,687 chunks, 0 vectors: `SemanticStatus` was in the Models snapshot and the UI never read it, and `start_semantic_backfill` was a registered command with no caller. Added `marrow embed` and the Models-page control. Measured on the real corpus: **6.4 chunks/s**, so a 35,134-file index is a ~2¼-hour build — which is exactly why the page now says so before you press the button rather than after. |
 | 2026-08-30 | Spec complete (7 parts). Re-scoped for solo/open-source in Part 7. Repo initialised. M0 started. |

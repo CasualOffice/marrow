@@ -27,6 +27,22 @@ pub fn run(
     style: Style,
     out: &mut impl Write,
 ) -> Result<()> {
+    // The surface names its own escape hatch. The index rejects a query that
+    // tokenizes to nothing, but its message cannot know whether the caller has
+    // a flag, a tool or a button — so it names none and each surface names its.
+    if !query.chars().any(char::is_alphanumeric) {
+        return Err(marrow_core::Error::new(
+            marrow_core::Code::CfgInvalid,
+            format!(
+                // Single-quoted, because the patterns that land here are
+                // exactly the ones a shell would eat: `});`, `$foo`, `*`.
+                "The index searches words, so `{query}` cannot be expressed as one. \
+                 Run `marrow search --literal '{query}'` — it reads the files themselves \
+                 and matches punctuation exactly."
+            ),
+        ));
+    }
+
     let started = std::time::Instant::now();
     let q = TextQuery::new(query).mode(MatchMode::Terms).limit(limit);
     let hits = index.search(&q)?;

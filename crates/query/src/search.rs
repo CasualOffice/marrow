@@ -678,8 +678,13 @@ fn validate(req: &SearchRequest) -> Result<()> {
         // and it is what `marrow-index` already returns for the same case.
         return Err(Error::new(
             Code::CfgInvalid,
-            "A search needs at least one letter or digit. Type a word to search for, or use \
-             `--literal` to search for punctuation exactly.",
+            // Deliberately names no flag and no tool. This is a library, and
+            // three surfaces show this message — a CLI flag, an MCP tool and a
+            // desktop control. Each names its own; a message that names one of
+            // them is wrong on the other two, which is a suggestion that leads
+            // nowhere.
+            "A search needs at least one letter or digit. Type a word to search for, or run \
+             an exact scan to match punctuation.",
         )
         .with_context(format!(
             "query had {} characters, 0 searchable terms",

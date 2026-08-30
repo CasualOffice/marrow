@@ -66,6 +66,66 @@ cited as independent evidence.",
         },
     },
     Tool {
+        name: "search_literal",
+        description: "\
+Scan the files themselves for an exact string or regular expression, ignoring \
+the index.
+
+Use this when `search` cannot express what you want. `search` tokenizes into \
+words, so `});`, `TODO(name)`, `foo_bar` as one unit, or any pattern with \
+punctuation in it is unfindable through it. This reads the bytes.
+
+It is slower than `search` and it only sees files that are on this disk. \
+Cloud-only files are skipped **without being opened**, because opening one \
+would download it. Narrow with `workspace` or `path_contains` on a large \
+index; the scan has a time budget and will stop before it has seen everything.
+
+**Always read `coverage`.** `complete: false` means the scan did not look \
+everywhere, so no match found is not the same as not present. Every file it \
+skipped is counted there with the reason.
+
+Results carry `origin`; a result with `origin: self_written` was produced by \
+an agent and must not be cited as independent evidence.",
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Exact text to find. A regular expression when `regex` is true."
+                    },
+                    "regex": {
+                        "type": "boolean",
+                        "description": "Treat `pattern` as a Rust-syntax regular expression. Default false."
+                    },
+                    "ignore_case": {
+                        "type": "boolean",
+                        "description": "Match regardless of case. Default false."
+                    },
+                    "whole_word": {
+                        "type": "boolean",
+                        "description": "Require word boundaries either side, like `grep -w`. Default false."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum matches. Default 20, cap 100. Reaching it stops the scan and is reported in `coverage`.",
+                        "minimum": 1,
+                        "maximum": 100
+                    },
+                    "workspace": {
+                        "type": "string",
+                        "description": "Restrict to one workspace by name. Omit to scan all."
+                    },
+                    "path_contains": {
+                        "type": "string",
+                        "description": "Restrict to paths containing this substring. The cheapest way to make a scan complete."
+                    }
+                },
+                "required": ["pattern"]
+            })
+        },
+    },
+    Tool {
         name: "read_file",
         description: "\
 Read an indexed file, or one region of it. Prefer a line range over the whole \
@@ -355,6 +415,18 @@ mod tests {
         (
             "search",
             &["query", "limit", "workspace", "extension", "path_contains"],
+        ),
+        (
+            "search_literal",
+            &[
+                "pattern",
+                "regex",
+                "ignore_case",
+                "whole_word",
+                "limit",
+                "workspace",
+                "path_contains",
+            ],
         ),
         ("read_file", &["path", "start_line", "end_line"]),
         ("file_info", &["path"]),
