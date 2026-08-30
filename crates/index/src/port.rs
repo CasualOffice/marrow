@@ -422,6 +422,176 @@ pub trait TextIndex: Send + Sync {
     fn doc_count(&self) -> Result<u64>;
 }
 
+// ------------------------------------------------------------------ vectors
+
+/// A unit-length embedding.
+///
+/// Normalized at construction, so similarity is a dot product and nothing
+/// downstream has to remember to divide. That is not a micro-optimisation: a
+/// cosine computed against one un-normalized vector is silently wrong rather
+/// than obviously wrong, and it is the kind of bug that shows up as "semantic
+/// search is a bit worse than it should be" for months.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Embedding(Vec<f32>);
+
+impl Embedding {
+    /// Normalize and wrap. `None` for an empty or zero vector — there is no
+    /// direction to keep, and a zero vector matches everything equally, which
+    /// is the worst possible answer to give confidently.
+    pub fn new(values: impl Into<Vec<f32>>) -> Option<Self> {
+        let mut v: Vec<f32> = values.into();
+        if v.is_empty() {
+            return None;
+        }
+        let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if !norm.is_finite() || norm <= f32::EPSILON {
+            return None;
+        }
+        for x in &mut v {
+            *x /= norm;
+        }
+        Some(Self(v))
+    }
+
+    pub fn dims(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn as_slice(&self) -> &[f32] {
+        &self.0
+    }
+
+    /// Cosine similarity, in `[-1, 1]`. Both sides are unit length, so this is
+    /// the dot product.
+    ///
+    /// Vectors of different length return `None` rather than comparing what
+    /// they have in common: two embedding models' outputs are not comparable
+    /// at all, and a truncated comparison would return plausible nonsense.
+    pub fn similarity(&self, other: &Embedding) -> Option<f32> {
+        (self.dims() == other.dims()).then(|| {
+            self.0
+                .iter()
+                .zip(&other.0)
+                .map(|(a, b)| a * b)
+                .sum::<f32>()
+                .clamp(-1.0, 1.0)
+        })
+    }
+
+    /// Little-endian `f32` bytes, for storage.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.0.iter().flat_map(|x| x.to_le_bytes()).collect()
+    }
+
+    /// Read back. `None` when the length is not a whole number of `f32`s —
+    /// a truncated blob would otherwise decode to a shorter vector and quietly
+    /// stop matching anything.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.is_empty() || bytes.len() % 4 != 0 {
+            return None;
+        }
+        let values: Vec<f32> = bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        // Already normalized when it was written; re-normalizing is cheap
+        // insurance against a blob written by an older build.
+        Self::new(values)
+    }
+}
+
+/// One embedded chunk, on its way into or out of the vector index.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VectorDoc {
+    pub chunk_id: ChunkId,
+    pub file_id: FileId,
+    pub version_id: VersionId,
+    pub workspace_id: WorkspaceId,
+    pub embedding: Embedding,
+}
+
+/// What a vector search returns. Deliberately thin: the caller fuses by
+/// **rank** (§113.2), so a score from this branch is never compared against
+/// one from another.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VectorHit {
+    pub chunk_id: ChunkId,
+    pub file_id: FileId,
+    pub workspace_id: WorkspaceId,
+    /// Cosine similarity, for display and for a floor — not for fusion.
+    pub score: f32,
+}
+
+/// A vector query.
+#[derive(Clone, Debug)]
+pub struct VectorQuery {
+    pub embedding: Embedding,
+    pub limit: usize,
+    pub workspace: Option<WorkspaceId>,
+    /// Results below this are not returned at all.
+    ///
+    /// A nearest-neighbour search always returns *something*; without a floor
+    /// the branch contributes its least-bad guesses to every query, and RRF
+    /// then promotes them for having a rank at all.
+    pub min_similarity: f32,
+}
+
+impl VectorQuery {
+    pub fn new(embedding: Embedding) -> Self {
+        Self {
+            embedding,
+            limit: 20,
+            workspace: None,
+            // Empirically the point below which two unrelated passages score
+            // as well as two related ones. Conservative on purpose: a missing
+            // semantic result is a worse search, and a wrong one is a wrong
+            // answer with a citation on it.
+            min_similarity: 0.30,
+        }
+    }
+
+    pub fn limit(mut self, n: usize) -> Self {
+        self.limit = n;
+        self
+    }
+
+    pub fn workspace(mut self, w: WorkspaceId) -> Self {
+        self.workspace = Some(w);
+        self
+    }
+
+    pub fn min_similarity(mut self, s: f32) -> Self {
+        self.min_similarity = s;
+        self
+    }
+}
+
+/// Semantic retrieval (§113.2's vector branch).
+///
+/// A separate port from [`TextIndex`] rather than a method on it: lexical
+/// search must keep working with no model, no GPU and no network (hard rule
+/// 10), and a single trait would make the vector half's absence a special case
+/// in every implementation instead of a missing object.
+pub trait VectorIndex: Send + Sync {
+    /// Insert or replace by `chunk_id`.
+    fn upsert(&self, docs: &[VectorDoc]) -> Result<()>;
+
+    fn delete(&self, ids: &[ChunkId]) -> Result<()>;
+
+    fn search(&self, q: &VectorQuery) -> Result<Vec<VectorHit>>;
+
+    /// How many chunks have an embedding. Compared against the chunk count to
+    /// answer "is semantic search ready yet", which is a question the UI has to
+    /// be able to answer honestly while a backfill is running.
+    fn doc_count(&self) -> Result<u64>;
+
+    /// The model these vectors came from.
+    ///
+    /// Vectors from two models are not comparable, so a change here invalidates
+    /// everything rather than mixing.
+    fn model_id(&self) -> Result<Option<String>>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

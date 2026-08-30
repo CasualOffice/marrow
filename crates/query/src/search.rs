@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use marrow_core::{ChunkId, Code, Error, Origin, ProvenanceClass, Result, Timestamp, WorkspaceId};
-use marrow_index::{Filters, MatchMode, TextHit, TextIndex, TextQuery};
+use marrow_index::{Embedding, Filters, MatchMode, TextHit, TextIndex, TextQuery, VectorIndex};
 use marrow_store::rusqlite::{params, Connection};
 use marrow_store::{map_sqlite, ReadConn, Store};
 use serde::Serialize;
@@ -53,10 +53,24 @@ pub const RRF_K: f32 = 60.0;
 /// in `search --explain`.
 pub const LEXICAL: &str = "lexical";
 
-/// The lexical branch's fusion weight (§113.2 table). A parameter, not a truth:
-/// §113.4 requires weights to be config and versioned once there is a second
-/// branch to weigh it against.
+/// The semantic branch's name.
+pub const SEMANTIC: &str = "semantic";
+
+/// The lexical branch's fusion weight (§113.2 table).
 pub const LEXICAL_WEIGHT: f32 = 1.0;
+
+/// The semantic branch's weight.
+///
+/// Deliberately below lexical, and this is the second branch §113.4 was
+/// waiting for. The reason is not that embeddings are worse — it is that this
+/// product's promise is a citation to an exact span, and a lexical hit is one
+/// the user can *see* is a hit. A semantic result they cannot trace to a word
+/// on the page reads as a guess, so it earns its place by agreeing with the
+/// lexical branch more often than by outvoting it.
+///
+/// A parameter, not a truth. §113.4 wants these in config and versioned; they
+/// are here until there is a measurement to set them from.
+pub const SEMANTIC_WEIGHT: f32 = 0.8;
 
 /// `origin = SELF` multiplier (§113.3).
 ///
@@ -410,13 +424,131 @@ pub fn relative_path(path: &str, roots: &[String]) -> String {
 /// `query_only` WAL reader costs a connection open plus four pragmas — real,
 /// but far below the 50 ms first-result budget (LLD §8) and cheaper than the
 /// lifetime question a cached handle would raise.
+/// Fetch chunks the semantic branch found and the lexical branch did not.
+///
+/// A `TextHit` is what everything downstream renders and cites from, so a
+/// semantic-only candidate has to become one. The snippet is the chunk's own
+/// opening rather than a match window: there is no matched term to centre on,
+/// and inventing highlight markers would claim a match that did not happen.
+fn hydrate_chunks(conn: &marrow_store::ReadConn, ids: &[ChunkId]) -> Result<Vec<TextHit>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    const PREVIEW: usize = 320;
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        let row = conn
+            .query_row(
+                "SELECT c.text, COALESCE(c.context_prefix,''), c.provenance_class,
+                        v.path_at_observation, v.mtime_ms, f.file_id, f.workspace_id, f.origin,
+                        c.version_id
+                   FROM chunks c
+                   JOIN file_versions v ON v.version_id = c.version_id
+                   JOIN files f ON f.file_id = v.file_id
+                  WHERE c.chunk_id = ?1 AND c.status = 'ACTIVE'",
+                [id.to_string()],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, i64>(4)?,
+                        r.get::<_, String>(5)?,
+                        r.get::<_, String>(6)?,
+                        r.get::<_, String>(7)?,
+                        r.get::<_, String>(8)?,
+                    ))
+                },
+            )
+            .map(Some)
+            .or_else(|e| match e {
+                marrow_store::rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(marrow_store::map_sqlite(
+                    other,
+                    "hydrating a semantic result",
+                )),
+            })?;
+
+        // A vector for a chunk the canonical store no longer has. The derived
+        // index is rebuildable, so this is a stale row rather than a crisis —
+        // but it must not become a result nobody can open.
+        let Some((text, title, provenance, path, mtime, file, ws, origin, version)) = row else {
+            tracing::warn!(chunk = %id, "the vector index has a chunk the store does not");
+            continue;
+        };
+        let (Ok(file_id), Ok(workspace_id), Ok(version_id)) = (
+            file.parse(),
+            ws.parse(),
+            version.parse::<marrow_core::VersionId>(),
+        ) else {
+            continue;
+        };
+
+        let preview: String = text.chars().take(PREVIEW).collect();
+        out.push(TextHit {
+            chunk_id: *id,
+            file_id,
+            version_id,
+            workspace_id,
+            path,
+            title,
+            // Branch-local and never compared across branches (§113.2). The
+            // fusion uses rank; this is here because the type has the field.
+            score: 0.0,
+            span: marrow_core::SourceSpan::Whole,
+            snippet: marrow_index::Snippet {
+                text: preview,
+                // No matched term to point at. Claiming one would put a
+                // highlight on a word the user never searched for.
+                matches: Vec::new(),
+            },
+            provenance: match provenance.as_str() {
+                "DEGRADED" => marrow_core::ProvenanceClass::Degraded,
+                "APPROXIMATE" => marrow_core::ProvenanceClass::Approximate,
+                "METADATA_ONLY" => marrow_core::ProvenanceClass::MetadataOnly,
+                _ => marrow_core::ProvenanceClass::Exact,
+            },
+            origin: if origin == "SELF" {
+                marrow_core::Origin::SelfWritten
+            } else {
+                marrow_core::Origin::User
+            },
+            modified: marrow_core::Timestamp::from_millis(mtime),
+        });
+    }
+    Ok(out)
+}
+
 pub fn search(store: &Store, index: &dyn TextIndex, req: &SearchRequest) -> Result<SearchResults> {
+    search_hybrid(store, index, None, req)
+}
+
+/// Search with the semantic branch as well, when there is one.
+///
+/// Two branches rather than a "semantic mode": a question is answered better by
+/// both than by either, and a mode switch makes the user responsible for
+/// guessing which kind of query they have typed. RRF fuses them by rank, so
+/// neither branch's scores need normalizing against the other's — which is
+/// what makes adding a branch cheap.
+///
+/// `vectors` is `None` when no embedding model is installed, when the backfill
+/// has not run, or when this query could not be embedded. In every one of those
+/// cases lexical search answers alone (hard rule 10), and the result says which
+/// branches ran rather than pretending both did.
+pub fn search_hybrid(
+    store: &Store,
+    index: &dyn TextIndex,
+    vectors: Option<(&dyn VectorIndex, &Embedding)>,
+    req: &SearchRequest,
+) -> Result<SearchResults> {
     let started = Instant::now();
     validate(req)?;
 
     let reader = store.reader()?;
     let spaces = load_workspaces(&reader)?;
     let filters = resolve_filters(&req.filters, &spaces)?;
+    let workspace_filter = filters.workspace;
 
     // Retrieve deeper than the caller asked for, so the multipliers below have
     // something to reorder. See CANDIDATE_DEPTH.
@@ -426,15 +558,52 @@ pub fn search(store: &Store, index: &dyn TextIndex, req: &SearchRequest) -> Resu
         .limit(req.limit.max(CANDIDATE_DEPTH));
     let text_hits = index.search(&q)?;
 
-    let branches = vec![Branch {
+    let mut branches = vec![Branch {
         name: LEXICAL,
         weight: LEXICAL_WEIGHT,
         ranked: text_hits.iter().map(|h| h.chunk_id).collect(),
     }];
+
+    // The semantic branch returns chunk ids the lexical branch may never have
+    // seen, so its hits are hydrated separately below. A vector failure is not
+    // a search failure: the branch drops out with a line in the log, because
+    // returning nothing would be worse than returning the lexical half.
+    let mut vector_hits: Vec<marrow_index::VectorHit> = Vec::new();
+    if let Some((store_of_vectors, embedding)) = vectors {
+        let vq =
+            marrow_index::VectorQuery::new(embedding.clone()).limit(req.limit.max(CANDIDATE_DEPTH));
+        let vq = match workspace_filter {
+            Some(w) => vq.workspace(w),
+            None => vq,
+        };
+        match store_of_vectors.search(&vq) {
+            Ok(hits) => {
+                branches.push(Branch {
+                    name: SEMANTIC,
+                    weight: SEMANTIC_WEIGHT,
+                    ranked: hits.iter().map(|h| h.chunk_id).collect(),
+                });
+                vector_hits = hits;
+            }
+            Err(e) => tracing::warn!(error = %e, "the semantic branch failed; answering lexically"),
+        }
+    }
+
     let fused = rrf(&branches, RRF_K);
     let total = fused.len();
 
-    let by_chunk: HashMap<ChunkId, &TextHit> = text_hits.iter().map(|h| (h.chunk_id, h)).collect();
+    // Semantic-only candidates need their text fetched: the lexical branch
+    // never saw them, so there is no `TextHit` to render from.
+    let semantic_only: Vec<ChunkId> = vector_hits
+        .iter()
+        .map(|h| h.chunk_id)
+        .filter(|id| !text_hits.iter().any(|t| t.chunk_id == *id))
+        .collect();
+    let hydrated = hydrate_chunks(&reader, &semantic_only)?;
+
+    let mut by_chunk: HashMap<ChunkId, &TextHit> =
+        text_hits.iter().map(|h| (h.chunk_id, h)).collect();
+    by_chunk.extend(hydrated.iter().map(|h| (h.chunk_id, h)));
     let by_workspace: HashMap<WorkspaceId, &WorkspaceInfo> =
         spaces.iter().map(|w| (w.workspace_id, w)).collect();
 
@@ -445,6 +614,9 @@ pub fn search(store: &Store, index: &dyn TextIndex, req: &SearchRequest) -> Resu
         // step could not resolve. Dropping it is right either way: a result we
         // cannot render or cite is not a result.
         let Some(hit) = by_chunk.get(&candidate.chunk_id) else {
+            // A chunk the vector index knows and the canonical store does not.
+            // Dropping it is right: a result that cannot be rendered or cited
+            // is not a result, and the derived index is rebuildable.
             tracing::warn!(chunk = %candidate.chunk_id, "fused candidate with no hit; dropped");
             continue;
         };

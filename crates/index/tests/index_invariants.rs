@@ -986,7 +986,10 @@ fn the_migration_is_idempotent_and_records_its_version() {
     let mut composed: Vec<i64> = marrow_store::migrate::MIGRATIONS
         .iter()
         .map(|m| m.version)
-        .chain(std::iter::once(fts5::MIGRATION.version))
+        .chain([
+            fts5::MIGRATION.version,
+            marrow_index::vector::MIGRATION.version,
+        ])
         .collect();
     composed.sort_unstable();
     assert_eq!(
@@ -994,12 +997,15 @@ fn the_migration_is_idempotent_and_records_its_version() {
         (1..=composed.len() as i64).collect::<Vec<_>>(),
         "the composed migration chain must be contiguous from 1: {composed:?}"
     );
-    assert!(
-        !marrow_store::migrate::MIGRATIONS
-            .iter()
-            .any(|m| m.version == fts5::MIGRATION.version),
-        "the store took the number this crate occupies; one of them would be skipped"
-    );
+    for m in [fts5::MIGRATION, marrow_index::vector::MIGRATION] {
+        assert!(
+            !marrow_store::migrate::MIGRATIONS
+                .iter()
+                .any(|s| s.version == m.version),
+            "the store took version {} as well; one of them would be skipped",
+            m.version
+        );
+    }
 
     // Opening again, and calling the migration directly again, both no-op.
     let second = f.index();

@@ -35,6 +35,7 @@
 pub mod fts5;
 pub mod literal;
 pub mod port;
+pub mod vector;
 
 pub use fts5::{Fts5Index, StoreChunkSource};
 pub use literal::{
@@ -42,6 +43,8 @@ pub use literal::{
     StopReason,
 };
 pub use port::{
-    extension_of, ChunkSource, FieldWeights, Filters, MatchMode, MatchRange, Snippet,
-    SnippetOptions, TextDoc, TextField, TextHit, TextIndex, TextQuery,
+    extension_of, ChunkSource, Embedding, FieldWeights, Filters, MatchMode, MatchRange, Snippet,
+    SnippetOptions, TextDoc, TextField, TextHit, TextIndex, TextQuery, VectorDoc, VectorHit,
+    VectorIndex, VectorQuery,
 };
+pub use vector::SqliteVectorIndex;
