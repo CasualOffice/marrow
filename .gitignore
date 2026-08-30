@@ -43,12 +43,21 @@ dist/
 .vscode/
 *.swp
 
-# Secrets — belt and braces; nothing here should ever exist (SEC-005: use the OS keyring)
+# Secrets - belt and braces; nothing here should ever exist (SEC-005: use the OS keyring)
 .env
 .env.*
 *.pem
 *.key
-secrets.*
+# Config files called `secrets.*`, anywhere. Deliberately NOT bare `secrets.*`:
+# that also matched `crates/model/src/secrets.rs`, the module that talks to the
+# keyring, so the file was silently left out of every commit and CI failed on a
+# missing module while it sat in the working tree. `git add` says nothing when
+# it skips an ignored path, which is what made it invisible for a whole day.
+secrets.json
+secrets.toml
+secrets.yaml
+secrets.yml
+secrets.env
 
 # Spike is throwaway; keep the source, drop the build
 /spike/target/
