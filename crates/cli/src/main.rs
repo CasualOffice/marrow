@@ -38,6 +38,8 @@ mod exit {
     /// Distinct from `INDEX_UNAVAILABLE` because search still works — a script
     /// that falls back to `marrow search` needs to tell the two apart.
     pub const MODEL_UNAVAILABLE: i32 = 5;
+    /// The network could not be reached, or refused.
+    pub const NETWORK_UNAVAILABLE: i32 = 6;
     pub const INTERRUPTED: i32 = super::EXIT_INTERRUPTED;
     pub const INTERNAL: i32 = 70;
 }
@@ -141,7 +143,13 @@ fn exit_code_for(e: &Error) -> i32 {
         Filesystem => exit::NOT_FOUND,
         Storage | Index => exit::INDEX_UNAVAILABLE,
         Policy => 3,
+        // A refused write is the user's to resolve — re-read the file, pick
+        // another name — so it exits like a usage error rather than a fault.
+        Action => exit::USAGE,
         Model => exit::MODEL_UNAVAILABLE,
+        // Reaching outward failed. Distinct from the index being unavailable:
+        // a script that retries on one should not retry on the other.
+        Network => exit::NETWORK_UNAVAILABLE,
         Internal => exit::INTERNAL,
         Parse => exit::OK,
     }

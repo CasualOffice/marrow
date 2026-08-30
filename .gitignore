@@ -19,7 +19,12 @@
 
 # Benchmark and corpus output (may contain real paths/filenames)
 /bench/results/
-/corpus/
+/corpus/*
+# …except the adversarial corpus, which is source: it is the gate every write
+# tool ships behind, and a gate that is not in the repository is not a gate.
+# (Git cannot re-include a path inside an excluded *directory*, which is why
+# the line above ends in `*` rather than `/`.)
+!/corpus/adversarial/
 *.bench.json
 
 # Diagnostics and logs

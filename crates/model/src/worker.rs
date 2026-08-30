@@ -77,6 +77,12 @@ struct Line {
     stop_reason: Option<String>,
     #[serde(default)]
     vectors: Option<Vec<Vec<f32>>>,
+    /// Whether this model's KV cache can be trimmed. See
+    /// [`Worker::cache_trimmable`].
+    #[serde(default)]
+    cache_trimmable: Option<bool>,
+    #[serde(default)]
+    cache_kinds: Option<Vec<String>>,
 }
 
 /// Where the Python interpreter and the worker script live.
@@ -140,6 +146,15 @@ pub struct Worker {
     next_id: AtomicU64,
     request_timeout: Duration,
     loaded: Option<String>,
+    /// `None` until a model is loaded.
+    ///
+    /// Whether prompt-prefix reuse can work at all for this model. Qwen 3.5 4B
+    /// mixes `ArraysCache` with `KVCache` and cannot be trimmed, so a
+    /// conversation re-prefills its preamble every turn; Qwen 3 0.6B is pure
+    /// `KVCache` and reuses about 80%. It is a property of the architecture,
+    /// not of this code, and it is reported rather than hidden because
+    /// otherwise it surfaces as an unexplained difference in speed.
+    cache_trimmable: Option<bool>,
 }
 
 impl std::fmt::Debug for Incoming {
@@ -238,6 +253,7 @@ impl Worker {
             next_id: AtomicU64::new(0),
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             loaded: None,
+            cache_trimmable: None,
         };
 
         let ready = w.read_line(HANDSHAKE_TIMEOUT)?.ok_or_else(|| {
@@ -273,6 +289,11 @@ impl Worker {
         self.loaded.as_deref()
     }
 
+    /// Whether a follow-up in the same conversation can reuse the prompt.
+    pub fn cache_trimmable(&self) -> Option<bool> {
+        self.cache_trimmable
+    }
+
     /// Load weights. Slow — minutes for a large model on a cold cache.
     pub fn load(&mut self, model_id: &str, weights_dir: &Path) -> Result<()> {
         let id = self.send("load", |o| {
@@ -282,7 +303,14 @@ impl Worker {
             );
         })?;
         let line = self.await_event(&id, "loaded", Duration::from_secs(600))?;
-        let _ = line;
+        self.cache_trimmable = line.cache_trimmable;
+        if let (Some(false), Some(kinds)) = (line.cache_trimmable, line.cache_kinds.as_ref()) {
+            tracing::info!(
+                model = model_id,
+                kinds = ?kinds,
+                "this model's KV cache cannot be trimmed; a follow-up will re-prefill its prompt"
+            );
+        }
         self.loaded = Some(model_id.to_string());
         Ok(())
     }

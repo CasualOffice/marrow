@@ -11,14 +11,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![forbid(unsafe_code)]
 
-mod ask;
-mod commands;
-mod models;
-mod state;
-
 use std::sync::Arc;
 
-use state::Core;
+use marrow_desktop::{commands, models, Core};
 
 /// Per-user, never machine-wide (MULTI-002). Shared with the CLI, so indexing
 /// from a terminal and searching from the app see the same database.

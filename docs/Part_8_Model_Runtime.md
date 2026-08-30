@@ -164,6 +164,8 @@ request 2   [ system | envelope | doc A | doc B | question 2 ]
 | LLM-044 | Cache eviction is **LRU with a byte cap**, and the cap is a fraction of the model's own footprint, not a fixed number. A 1 GB cache beside a 4 GB model is a different decision from one beside a 40 GB model. |
 | LLM-045 | Cache hits and misses are **observable** (`marrow models stats`, and the Ask footer under verbose). "Why was the second question faster" must be answerable. |
 | LLM-046 | Quantized KV cache (Q8) is offered where the runtime supports it, **off by default and labelled**. It roughly halves cache memory and it is a quality trade; making it silent would mean answers that differ between runs for reasons the user cannot see. |
+| LLM-060 | **Whether prefix reuse is possible at all is a property of the model, and is reported.** Measured: Qwen 3 0.6B is pure `KVCache`, can be trimmed, and reuses ~80% of a follow-up's prompt. Qwen 3.5 4B mixes `ArraysCache` with `KVCache`, `can_trim_prompt_cache` returns false, and a follow-up re-prefills everything. A design that assumes trimming works reuses nothing on precisely the model it was built for, and does so silently. |
+| LLM-061 | The evidence set is **carried forward across a conversation** rather than re-retrieved per turn. Retrieval is question-dependent, so a follow-up that simply re-retrieves produces a different prefix and reuses nothing — measured at zero of 552 tokens before this. A chunk retrieved again is refreshed in place; one that is not is kept, because it is what the two of you were already looking at. |
 
 **Not a semantic cache.** Marrow does not cache *answers* by question
 similarity. Two questions that look alike can want different answers, and a
@@ -678,11 +680,11 @@ leaderboard, which measures things this product never asks for.
 | Prefix | Topic | Count |
 |---|---|---|
 | `HW` (extended) | Live sampling | 5 |
-| `LLM` (extended) | Registry, runtimes, MLX, KV-cache reuse, lifecycle, providers | 38 |
+| `LLM` (extended) | Registry, runtimes, MLX, KV-cache reuse, lifecycle, providers | 40 |
 | `SUP` | Supervisor, queues, model workspace | 15 |
 | `GEN` (extended) | Fast/Thorough reasoning switch | 9 |
 | `TIER` (extended) | Tiered intelligence and the AI preference | 10 |
 | `ASK` | The ask pipeline | 7 |
 | `EVAL` | Product evaluation axes | 8 |
 | `SKEL` | Loading states | 8 |
-| **Total added** | | **100** |
+| **Total added** | | **102** |

@@ -6,6 +6,14 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+# A library as well as a binary, so the pipeline can be exercised from an
+# integration test. A bin-only crate whose logic cannot be reached from outside
+# is how the seam between indexing, retrieval and generation went untested for
+# as long as it did.
+[lib]
+name = "marrow_desktop"
+path = "src/lib.rs"
+
 [[bin]]
 name = "marrow-desktop"
 path = "src/main.rs"

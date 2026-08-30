@@ -35,8 +35,8 @@ so this is a dependency rather than a detour.
 | S5 | Ask pipeline (§148), streaming, Markdown/Mermaid/HTML | `[x]` | A conversation, not a one-shot box |
 | S5b | Eval harness across the shortlist (§149) | `[ ]` | Two measurements taken; no harness yet |
 | S6 | Cloud providers behind the same trait | `[ ]` | — |
-| S7 | MCP creation tools (file, mermaid, html) | `[ ]` | Gated on the adversarial corpus (M5) |
-| S8 | MCP fetch and research | `[ ]` | Needs an egress policy first |
+| S7 | Creation tools (file, mermaid, html) | `[~]` | Corpus green, guard built; **MCP wiring left** |
+| S8 | Fetch and research | `[~]` | Policy written, client built; **MCP wiring left** |
 
 ---
 
@@ -231,21 +231,28 @@ nobody is asking.
 - [x] Citations clickable, self-written sources listed as excluded, egress disclosed
 - [ ] Skeletons on the *search* path (SKEL-001..008) — only the Ask path streams
 
-### S7 — creation tools `[ ]`
-**Gated.** CLAUDE.md: the adversarial corpus must be green before any write
-tool ships, and it does not exist yet. Everything written must be marked
-`origin = SELF` so it can never be cited back (invariant #9), canonicalized at
-operation time (#5), and stale-checked immediately before the write (#6).
-- [ ] The adversarial corpus itself
-- [ ] `create_file` / `create_diagram` / `create_page` over MCP
+### S7 — creation tools `[~]`
+- [x] **The adversarial corpus** — 59 cases in `corpus/adversarial/`, all
+  exercised. The TOCTOU coverage was mutation-tested: disabling the pre-write
+  re-canonicalisation lets a symlink created between validation and write
+  escape the workspace, and the case goes red
+- [x] One guarded write path: canonicalize at operation time, refuse excluded
+  and protected subtrees, stale-check at commit, atomic rename, `origin = SELF`
+- [x] `create_file` / `create_diagram` / `create_page`
+- [ ] **MCP wiring, and the part it must not skip:** `Written::origin()` is
+  returned but nothing persists it. Until the write path records
+  `origin = 'SELF'`, the next scan reclassifies agent output as the user's own
+  and it becomes citable — invariant #9 is only half closed
 
-### S8 — fetch and research `[ ]`
-**Needs a policy before code.** Fetched content is `external = true` and
-`UNTRUSTED_CONTENT`; the request itself is egress and must be disclosed
-(UX-013). Loopback and private ranges refused by default, or the tool is an
-SSRF primitive pointed at the user's own network.
-- [ ] The egress policy, written down
-- [ ] `fetch_url` with the policy enforced
+### S8 — fetch and research `[~]`
+- [x] **The policy**, written first: [Part 9](docs/Part_9_Egress.md), 63 `NET-`
+  requirements. HTTPS only, port 443 only, no persisted allow-list, and
+  100.64.0.0/10 refused — which breaks Tailscale hosts on purpose
+- [x] `marrow-net`: resolves the host and checks the **resolved IP**, re-checks
+  on every redirect, caps bytes, time and hops, and returns what was disclosed
+- [x] 44 of 63 requirements have a named test; 14 are structural; 3 are
+  deferred to the UI; 2 are implemented and honestly marked untested
+- [ ] MCP wiring, and the confirmation prompt half of NET-018/023/024/050/058
 - [ ] Multi-step research on top of it
 
 ---

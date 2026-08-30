@@ -134,6 +134,27 @@ codes! {
     /// budget (GEN-013).
     ModUnsupportedCapability => "MOD_UNSUPPORTED_CAPABILITY", Model, false;
 
+    // NET_ — egress (Part 9). Reaching outward is a different kind of failure
+    // from a volume that will not mount, and a log that conflates them makes
+    // "why did this not work" harder than it needs to be.
+    NetUnreachable          => "NET_UNREACHABLE",     Network, true;
+    NetTimeout              => "NET_TIMEOUT",         Network, true;
+    /// The server answered, and not with success. Not retryable: the same
+    /// request gets the same answer.
+    NetBadStatus            => "NET_BAD_STATUS",      Network, false;
+
+    // ACT_ — a write the user asked for, refused. Never retryable as-is: the
+    // caller has to look at what changed and decide again.
+    /// The file changed since the caller read it (invariant #6). The user has
+    /// it open in their editor, and the write would discard their work.
+    ActStaleVersion         => "ACT_STALE_VERSION",   Action, false;
+    /// The target exists and the caller asked to create, not replace. There is
+    /// deliberately no unconditional-overwrite request to fall back to.
+    ActAlreadyExists        => "ACT_ALREADY_EXISTS",  Action, false;
+    /// The name is not one this system will create — a NUL, a control
+    /// character, a reserved device name, an over-long component.
+    ActNameRejected         => "ACT_NAME_REJECTED",   Action, false;
+
     // POL_ — policy (never retryable)
     PolDenied               => "POL_DENIED",                 Policy, false;
     PolApprovalRequired     => "POL_APPROVAL_REQUIRED",      Policy, false;
@@ -162,6 +183,13 @@ pub enum Class {
     Index,
     Storage,
     Model,
+    /// A write the user asked for. Distinct from `Policy`: a policy refusal is
+    /// about what is allowed, and an action refusal is about what is *true* —
+    /// the file moved, the name is not writable, something already exists.
+    Action,
+    /// Reaching outward (Part 9). Distinct from `Filesystem`: a host that will
+    /// not answer and a volume that will not mount are different problems.
+    Network,
     Policy,
     Config,
     Internal,
@@ -319,6 +347,8 @@ mod tests {
                 Class::Index => "IDX",
                 Class::Storage => "DB",
                 Class::Model => "MOD",
+                Class::Action => "ACT",
+                Class::Network => "NET",
                 Class::Policy => "POL",
                 Class::Config => "CFG",
                 Class::Internal => "INT",

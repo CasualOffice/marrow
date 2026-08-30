@@ -1,0 +1,107 @@
+# Names the write path will not create.
+#
+# None of these escape anything. They are refused because the file that would
+# appear is not the file that was asked for: the name is truncated at a NUL,
+# stripped by a sync client, mangled on the Windows machine it syncs to, or
+# rejected by the syscall with an error the user would read as "something went
+# wrong". POL_DENIED rather than FS_PATH_ESCAPE_BLOCKED, because the caller's
+# fix is different — pick another name.
+
+[[case]]
+id      = "name-with-a-control-character"
+attacks = "name mangling"
+why     = "A control character in a filename survives on APFS and breaks every tool that later prints, logs or shells out with that name."
+input   = { op = "create_file", path = "notes\u0007alert.md", body = "x" }
+expect  = { outcome = "refused", code = "ACT_NAME_REJECTED", message_contains = "control character" }
+
+[[case]]
+id      = "name-with-a-nul-byte"
+attacks = "name mangling"
+why     = "A NUL truncates the name at the syscall boundary, so the file that appears has a different name than the one recorded — invariant #2 arriving through the back door."
+input   = { op = "create_file", path = "notes\u0000.md", body = "x" }
+expect  = { outcome = "refused", code = "ACT_NAME_REJECTED", message_contains = "NUL byte" }
+
+[[case]]
+id      = "name-with-a-trailing-space"
+attacks = "name mangling"
+why     = "Windows and several sync clients silently strip it, so the file syncs back under a name that no longer matches the index."
+input   = { op = "create_file", path = "notes.md ", body = "x" }
+expect  = { outcome = "refused", code = "ACT_NAME_REJECTED", message_contains = "space or a dot" }
+
+[[case]]
+id      = "name-with-a-trailing-dot"
+attacks = "name mangling"
+why     = "Same stripping, and `notes.md.` also reads as a different extension to anything that splits on the last dot."
+input   = { op = "create_file", path = "notes.md.", body = "x" }
+expect  = { outcome = "refused", code = "ACT_NAME_REJECTED", message_contains = "space or a dot" }
+
+[[case]]
+id      = "reserved-device-name-com1"
+attacks = "name mangling"
+why     = "macOS creates COM1.md happily; the colleague who checks the repo out on Windows cannot, and the checkout fails for the whole tree."
+input   = { op = "create_file", path = "COM1.md", body = "x" }
+expect  = { outcome = "refused", code = "ACT_NAME_REJECTED", message_contains = "reserved device name" }
+
+[[case]]
+id      = "reserved-device-name-nul"
+attacks = "name mangling"
+why     = "`nul` is reserved with or without an extension and in any case, which is exactly the sort of rule that gets half-implemented."
+input   = { op = "create_file", path = "notes/nul.txt", body = "x" }
+expect  = { outcome = "refused", code = "ACT_NAME_REJECTED", message_contains = "reserved device name" }
+
+[[case]]
+id      = "empty-path-segment"
+attacks = "name mangling"
+why     = "`a//b` has two spellings for one path, and a path with two spellings is a file with two identities."
+input   = { op = "create_file", path = "notes//summary.md", body = "x" }
+expect  = { outcome = "refused", code = "ACT_NAME_REJECTED", message_contains = "empty segment" }
+
+[[case]]
+id      = "no-path-at-all"
+attacks = "name mangling"
+why     = "An empty path joins to the workspace root, and a write to the root directory is a very confusing way to fail."
+input   = { op = "create_file", path = "   ", body = "x" }
+expect  = { outcome = "refused", code = "ACT_NAME_REJECTED", message_contains = "No file name" }
+
+[[case]]
+id      = "target-is-an-existing-directory"
+attacks = "name mangling"
+why     = "rename(2) onto a non-empty directory fails with ENOTEMPTY, which reaches the user as the generic 'file could not be read' mapping."
+setup   = [{ kind = "file", path = "notes/keep.md", contents = "x" }]
+input   = { op = "create_file", path = "notes", body = "x" }
+expect  = { outcome = "refused", code = "POL_DENIED", message_contains = "directory already exists" }
+
+[[case]]
+id      = "diagram-named-as-something-else"
+attacks = "name mangling"
+why     = "A Mermaid document called `.txt` is invisible to every renderer that would have drawn it, and one called `.rs` gets compiled."
+input   = { op = "create_diagram", path = "src/flow.rs", mermaid = "flowchart TD\n  a-->b" }
+expect  = { outcome = "refused", code = "POL_DENIED", message_contains = "must be named" }
+
+[[case]]
+id      = "page-named-as-source-code"
+attacks = "name mangling"
+why     = "An HTML document written into a source tree as `.rs` is compiled, linted and reviewed as if it were code."
+input   = { op = "create_page", path = "src/report.rs", title = "Report", body = "<p>x</p>" }
+expect  = { outcome = "refused", code = "POL_DENIED", message_contains = "must be named" }
+
+[[case]]
+id      = "diagram-with-no-source"
+attacks = "name mangling"
+why     = "An empty diagram is a blank file with a name that promises a picture; the caller lost their content somewhere upstream and should hear about it."
+input   = { op = "create_diagram", path = "flow.md", mermaid = "   \n" }
+expect  = { outcome = "refused", code = "POL_DENIED", message_contains = "not a diagram" }
+
+[[case]]
+id      = "name-longer-than-the-filesystem-allows"
+attacks = "name mangling"
+why     = "ENAMETOOLONG from the syscall reaches the user as \"the file could not be read\", which is the generic-message defect SUP-001 is about."
+input   = { op = "create_file", path = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.md", body = "x" }
+expect  = { outcome = "refused", code = "ACT_NAME_REJECTED", message_contains = "over the 255-byte" }
+
+[[case]]
+id      = "path-longer-than-the-filesystem-allows"
+attacks = "name mangling"
+why     = "Every component is legal and the whole is not; the limit that bites is PATH_MAX, and the directories would already have been created by the time the syscall said so."
+input   = { op = "create_file", path = "deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/deep/notes.md", body = "x" }
+expect  = { outcome = "refused", code = "ACT_NAME_REJECTED", message_contains = "over the 900-byte" }

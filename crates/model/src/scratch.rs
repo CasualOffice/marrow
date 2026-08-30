@@ -168,20 +168,94 @@ impl Scratch {
     ///
     /// SUP-013: a worker gets scratch and its weights, and nothing else. A
     /// relative `../../` is the whole attack, and it arrives as data.
+    ///
+    /// **Canonicalized, not folded.** An earlier version of this resolved `..`
+    /// as a string and compared prefixes, which invariant #5 says outright is
+    /// not sufficient — and it is not: a worker that creates a symlink *inside
+    /// its own scratch* pointing at `~/.ssh` and then resolves a path through
+    /// it escapes cleanly, because lexical folding says `link/../x` is `x`
+    /// while the kernel says it is `x` relative to the symlink's target.
+    ///
+    /// The file usually does not exist yet, so it is the **parent** that is
+    /// canonicalized. Every component up to it must already resolve inside
+    /// scratch, and the final component is checked for being a link itself.
     pub fn resolve(&self, relative: &str) -> Result<PathBuf> {
-        let candidate = self.path.join(relative);
-        // Lexical, because the file usually does not exist yet, so
-        // `canonicalize` would fail before it could refuse.
-        let normalised = normalise(&candidate);
-        if !normalised.starts_with(&self.path) {
-            return Err(Error::new(
+        let escaped = |why: &str| {
+            Err(Error::new(
                 Code::FsPathEscapeBlocked,
                 "The model tried to write outside its working directory. \
                  The request was stopped.",
             )
-            .with_context(relative.to_string()));
+            .with_context(format!("{relative}: {why}")))
+        };
+
+        let candidate = self.path.join(relative);
+        let Some(parent) = candidate.parent() else {
+            return escaped("no parent");
+        };
+        let Some(name) = candidate.file_name() else {
+            return escaped("no file name");
+        };
+
+        // The deepest existing ancestor, resolved by the kernel. Components
+        // that do not exist yet cannot be a symlink, so resolving the ones
+        // that do is sufficient — and it is the only check that sees through
+        // a link.
+        let mut existing = parent.to_path_buf();
+        let mut tail: Vec<std::ffi::OsString> = Vec::new();
+        let real = loop {
+            match existing.canonicalize() {
+                Ok(p) => break p,
+                Err(_) => match (existing.file_name(), existing.parent()) {
+                    (Some(n), Some(up)) => {
+                        tail.push(n.to_os_string());
+                        existing = up.to_path_buf();
+                    }
+                    _ => return escaped("no resolvable ancestor"),
+                },
+            }
+        };
+
+        let root = self.canonical_root()?;
+        if !real.starts_with(&root) {
+            return escaped("resolves outside the working directory");
         }
-        Ok(normalised)
+        // A component that does not exist may still be named `..`.
+        if tail.iter().any(|c| c == ".." || c == ".") || relative.contains("..") {
+            return escaped("contains a relative component");
+        }
+
+        let mut out = real;
+        for c in tail.iter().rev() {
+            out.push(c);
+        }
+        out.push(name);
+
+        // The final component may itself already be a symlink pointing out.
+        if let Ok(meta) = std::fs::symlink_metadata(&out) {
+            if meta.file_type().is_symlink() {
+                match out.canonicalize() {
+                    Ok(t) if t.starts_with(&root) => {}
+                    _ => return escaped("the target is a symlink leaving the directory"),
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The scratch root as the kernel sees it.
+    ///
+    /// Resolved every time rather than cached: invariant #5 says the check
+    /// happens at operation time, and a root that was replaced by a symlink
+    /// since construction is exactly the case a cached value would miss.
+    fn canonical_root(&self) -> Result<PathBuf> {
+        self.path.canonicalize().map_err(|e| {
+            Error::new(
+                Code::FsPathEscapeBlocked,
+                "The working directory could not be resolved. The request was stopped.",
+            )
+            .with_source(e)
+        })
     }
 }
 
@@ -208,8 +282,44 @@ fn normalise(p: &Path) -> PathBuf {
     out
 }
 
+/// Whether `child` is inside `ancestor`, as the kernel sees it.
+///
+/// Canonicalized, not folded, for the same reason `Scratch::resolve` is:
+/// a model area that reaches an indexed root *through a symlink* passes a
+/// string comparison and fails the rule (invariant #5, SUP-011).
+///
+/// Neither path need exist yet, so each is resolved as deeply as it can be and
+/// the unresolved tail is appended. That is conservative in the right
+/// direction: an unresolvable component cannot be a link.
 fn within(child: &Path, ancestor: &Path) -> bool {
-    normalise(child).starts_with(normalise(ancestor))
+    match (deepest_real(child), deepest_real(ancestor)) {
+        (Some(c), Some(a)) => c.starts_with(a),
+        // Nothing on either path resolves, so there is no link to see through
+        // and the lexical answer is the only one available.
+        _ => normalise(child).starts_with(normalise(ancestor)),
+    }
+}
+
+/// `path` with its deepest existing prefix resolved by the kernel.
+fn deepest_real(path: &Path) -> Option<PathBuf> {
+    let mut existing = normalise(path);
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    loop {
+        if let Ok(real) = existing.canonicalize() {
+            let mut out = real;
+            for c in tail.iter().rev() {
+                out.push(c);
+            }
+            return Some(out);
+        }
+        match (existing.file_name(), existing.parent()) {
+            (Some(n), Some(up)) => {
+                tail.push(n.to_os_string());
+                existing = up.to_path_buf();
+            }
+            _ => return None,
+        }
+    }
 }
 
 fn dir_size(p: &Path) -> u64 {
@@ -263,6 +373,22 @@ mod tests {
     }
 
     #[test]
+    fn a_model_area_that_reaches_an_indexed_folder_through_a_symlink_is_refused() {
+        // SUP-011 with the same lesson as `resolve`: a string comparison sees
+        // a path beside the workspace, and the kernel sees a path inside it.
+        let t = temp();
+        let indexed = t.path().join("Documents");
+        fs::create_dir_all(indexed.join("nested")).unwrap();
+        let link = t.path().join("models-link");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(indexed.join("nested"), &link).unwrap();
+
+        let e = ModelWorkspace::open(&link, std::slice::from_ref(&indexed)).unwrap_err();
+        assert_eq!(e.code(), Code::CfgInvalid);
+        assert!(e.message().contains("cited back"), "{}", e.message());
+    }
+
+    #[test]
     fn a_model_area_beside_an_indexed_folder_is_fine() {
         let t = temp();
         let indexed = t.path().join("Documents");
@@ -287,6 +413,58 @@ mod tests {
         }
         assert!(s.resolve("out/result.json").is_ok());
         assert!(s.resolve("./a/./b").is_ok());
+    }
+
+    #[test]
+    fn a_symlink_inside_scratch_cannot_be_used_to_climb_out() {
+        // Invariant #5: a string prefix check is not sufficient, and this is
+        // the case that proves it. Lexical folding says `link/../x` is `x`;
+        // the kernel says it is `x` beside whatever `link` points at. The
+        // worker owns its scratch directory, so it can create the link.
+        let t = temp();
+        let ws = ModelWorkspace::open(t.path(), &[]).unwrap();
+        let s = ws.scratch(RequestId::new()).unwrap();
+
+        let outside = t.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, s.path().join("link")).unwrap();
+
+        let e = s.resolve("link/stolen.txt").unwrap_err();
+        assert_eq!(e.code(), Code::FsPathEscapeBlocked);
+
+        // And through it with a `..`, which is the spelling lexical folding
+        // silently rewrites into something harmless-looking.
+        assert!(s.resolve("link/../../stolen.txt").is_err());
+    }
+
+    #[test]
+    fn a_symlinked_target_file_is_refused_even_when_its_parent_is_inside() {
+        // The last component can be the link. Checking only the parent would
+        // let a worker overwrite whatever it points at.
+        let t = temp();
+        let ws = ModelWorkspace::open(t.path(), &[]).unwrap();
+        let s = ws.scratch(RequestId::new()).unwrap();
+        let outside = t.path().join("secret.txt");
+        fs::write(&outside, "x").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, s.path().join("innocent.txt")).unwrap();
+        assert_eq!(
+            s.resolve("innocent.txt").unwrap_err().code(),
+            Code::FsPathEscapeBlocked
+        );
+    }
+
+    #[test]
+    fn an_ordinary_nested_path_that_does_not_exist_yet_still_resolves() {
+        // The check must not be so strict that it refuses the normal case:
+        // scratch is written to before its subdirectories exist.
+        let t = temp();
+        let ws = ModelWorkspace::open(t.path(), &[]).unwrap();
+        let s = ws.scratch(RequestId::new()).unwrap();
+        let p = s.resolve("out/deep/result.json").unwrap();
+        assert!(p.starts_with(s.path().canonicalize().unwrap()));
+        assert!(p.ends_with("out/deep/result.json"));
     }
 
     #[test]

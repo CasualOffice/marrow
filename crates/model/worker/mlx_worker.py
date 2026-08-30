@@ -50,11 +50,17 @@ class Worker:
         self.model = None
         self.tokenizer = None
         self.model_path = None
-        # Reused across requests that share a token prefix (LLM-040). Held
-        # alongside the exact tokens it was built from, because reuse is
-        # prefix-*exact*: a fuzzy match would continue from a state that never
-        # produced this prompt, which is a wrong-answer generator rather than
-        # an optimisation (LLM-041).
+        # Reused across requests that share a token prefix (LLM-040).
+        #
+        # `LRUPromptCache` rather than one cache and a trim, because **not every
+        # model's cache can be trimmed**: Qwen 3.5 4B mixes `ArraysCache` with
+        # `KVCache` and `can_trim_prompt_cache` returns False for it. A
+        # trim-only design silently reuses nothing on exactly the model this is
+        # for. The LRU keeps shorter prefixes as separate entries, so a
+        # conversation reuses its preamble whether or not trimming works.
+        #
+        # Reuse stays prefix-*exact* either way (LLM-041): the trie matches on
+        # the token sequence, so a fuzzy match cannot happen.
         self.cache = None
         self.cache_tokens = []
 
@@ -73,16 +79,29 @@ class Worker:
         log(f"loading {path}")
         self.model, self.tokenizer = load(path)
         self.model_path = path
-        self.cache = None
+        self.cache = self._new_cache()
         self.cache_tokens = []
-        emit({"id": req.get("id"), "event": "loaded", "model": path})
+
+        # Whether this model's cache can be trimmed decides whether a
+        # conversation reuses its preamble at all, so it is reported rather
+        # than discovered later as "why is this slow".
+        from mlx_lm.models.cache import can_trim_prompt_cache, make_prompt_cache
+
+        probe = make_prompt_cache(self.model)
+        emit({
+            "id": req.get("id"),
+            "event": "loaded",
+            "model": path,
+            "cacheTrimmable": bool(can_trim_prompt_cache(probe)),
+            "cacheKinds": sorted({type(c).__name__ for c in probe}),
+        })
 
     def op_unload(self, req):
         import mlx.core as mx
 
         self.model = None
         self.tokenizer = None
-        self.cache = None
+        self.cache = self._new_cache()
         self.cache_tokens = []
         # LLM-049: the cache goes with the weights. A model unloaded while its
         # cache stays resident has not been unloaded.
@@ -101,7 +120,7 @@ class Worker:
         thinking_on = thinking_budget > 0
 
         tokens = self._as_chat_turn(req["prompt"], thinking_on)
-        prompt, cached_prefix = self._prepare_cache(tokens)
+        cache, prompt, cached_prefix = self._prepare_cache(tokens)
 
         # Thorough is not a different code path — it is a larger budget and a
         # temperature that lets the model explore before it commits.
@@ -123,6 +142,7 @@ class Worker:
         pending = ""
         answer = []
         thoughts = []
+        generated = []
 
         for chunk in stream_generate(
             self.model,
@@ -130,8 +150,9 @@ class Worker:
             prompt,
             max_tokens=max_tokens + thinking_budget,
             sampler=sampler,
-            prompt_cache=self.cache,
+            prompt_cache=cache,
         ):
+            generated.append(chunk.token if hasattr(chunk, "token") else None)
             if getattr(chunk, "finish_reason", None):
                 stop_reason = chunk.finish_reason
 
@@ -192,62 +213,45 @@ class Worker:
             "stopReason": stop_reason,
             "thinking": "".join(thoughts) or None,
         })
-        # The cache now holds the prompt plus everything generated. Record
-        # exactly that, or the next request's prefix comparison is against a
-        # state the cache is not in.
-        self.cache_tokens = self.cache_tokens + list(prompt)
+        # Store what the cache actually holds: the whole prompt plus everything
+        # generated. Recording only the prompt would describe a state the cache
+        # is not in, and the next turn would continue from the wrong place.
+        full = list(tokens) + [t for t in generated if t is not None]
+        self.cache.insert_cache(self.model_path, full, cache)
+        self.cache_tokens = full
+
+    @staticmethod
+    def _new_cache():
+        from mlx_lm.models.cache import LRUPromptCache
+
+        # LLM-044: a byte cap, not an entry count alone. Four entries is a
+        # conversation's worth; 2 GB is a fraction of any model this machine
+        # can hold, and the cache must never be the reason one stops fitting.
+        return LRUPromptCache(max_size=4, max_bytes=2 << 30)
 
     def _prepare_cache(self, tokens):
-        """Reuse as much of the previous prompt's KV cache as is exactly shared.
+        """Reuse as much of a previous prompt's KV cache as is exactly shared.
 
         Marrow's prompts share a large prefix by construction: the same system
-        instructions, the same envelope framing, and often the same documents
-        across a follow-up question. Recomputing that every turn is the single
+        instructions, the same envelope framing, and the same documents carried
+        across the turns of one conversation. Recomputing that every turn is the
         largest avoidable cost in the feature.
 
         Takes the fully-templated token ids, and returns
-        `(tokens_to_process, cached_prefix_tokens)`.
+        `(cache, tokens_to_process, cached_prefix_tokens)`.
         """
-        from mlx_lm.models.cache import (
-            can_trim_prompt_cache,
-            make_prompt_cache,
-            trim_prompt_cache,
-        )
-
         if self.cache is None:
-            self.cache = make_prompt_cache(self.model)
-            self.cache_tokens = []
-            return tokens, 0
+            self.cache = self._new_cache()
+        cache, suffix = self.cache.fetch_nearest_cache(self.model_path, list(tokens))
+        if cache is None:
+            from mlx_lm.models.cache import make_prompt_cache
 
-        # Prefix-exact. One differing token and the rest of the cache describes
-        # a different conversation.
-        shared = 0
-        for a, b in zip(self.cache_tokens, tokens):
-            if a != b:
-                break
-            shared += 1
-
-        # Never reuse the whole prompt: the model needs at least one token to
-        # attend to, and a zero-length suffix has nothing to generate from.
-        shared = min(shared, len(tokens) - 1)
-
-        if shared <= 0 or not can_trim_prompt_cache(self.cache):
-            self.cache = make_prompt_cache(self.model)
-            self.cache_tokens = []
-            return tokens, 0
-
-        drop = len(self.cache_tokens) - shared
-        if drop > 0:
-            trimmed = trim_prompt_cache(self.cache, drop)
-            if trimmed != drop:
-                # The cache could not be trimmed to the shared prefix, so what
-                # is in it no longer matches what we think is in it. Start
-                # again rather than continue from a state we cannot describe.
-                self.cache = make_prompt_cache(self.model)
-                self.cache_tokens = []
-                return tokens, 0
-        self.cache_tokens = self.cache_tokens[:shared]
-        return tokens[shared:], shared
+            return make_prompt_cache(self.model), list(tokens), 0
+        # The model needs at least one token to attend to; a zero-length suffix
+        # has nothing to generate from.
+        if not suffix:
+            suffix = list(tokens[-1:])
+        return cache, suffix, len(tokens) - len(suffix)
 
     def _as_chat_turn(self, envelope, thinking_on):
         """Wrap the envelope in the model's own turn structure, as token ids.

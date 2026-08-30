@@ -1,0 +1,69 @@
+# Symlink escape, including the race.
+#
+# `to` in a symlink setup is relative to the sandbox, so `outside/...` points
+# out of the workspace and `workspace/...` stays inside it.
+#
+# A string prefix check passes every case in this file: `workspace/link/x.md`
+# starts with `workspace/`. Only canonicalisation catches them, and only
+# canonicalisation *at operation time* catches the last two.
+
+[[case]]
+id      = "symlink-directory-out-of-the-workspace"
+attacks = "symlink escape"
+why     = "A symlink in a cloned repo pointing at somewhere it has no business writing is not hypothetical (Part 7 §126 #2)."
+setup   = [
+    { kind = "symlink", path = "link", to = "outside" },
+]
+input   = { op = "create_file", path = "link/stolen.md", body = "x" }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED", message_contains = "resolves outside" }
+
+[[case]]
+id      = "symlink-directory-out-buried-in-a-repo"
+attacks = "symlink escape"
+why     = "The escaping link is rarely at the top level; it is three directories into a vendored dependency."
+setup   = [
+    { kind = "dir", path = "repo/src" },
+    { kind = "symlink", path = "repo/src/shared", to = "outside" },
+]
+input   = { op = "create_file", path = "repo/src/shared/notes.md", body = "x" }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED", message_contains = "resolves outside" }
+
+[[case]]
+id      = "symlink-file-out-of-the-workspace"
+attacks = "symlink escape"
+why     = "The classic: a link named like a document, pointing at a private key. Writing through it would truncate the key."
+setup   = [
+    { kind = "outside_file", path = "secrets/id_rsa", contents = "PRIVATE KEY" },
+    { kind = "symlink", path = "key-notes.md", to = "outside/secrets/id_rsa" },
+]
+input   = { op = "create_file", path = "key-notes.md", body = "x", precondition = "new" }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED", message_contains = "symbolic link" }
+
+[[case]]
+id      = "symlink-inside-the-workspace-is-also-refused"
+attacks = "symlink escape"
+why     = "rename(2) replaces the link rather than the file it names, so writing here destroys the user's link and leaves the real file stale."
+setup   = [
+    { kind = "file", path = "real.md", contents = "the real document" },
+    { kind = "symlink", path = "alias.md", to = "workspace/real.md" },
+]
+input   = { op = "create_file", path = "alias.md", body = "x" }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED", message_contains = "symbolic link" }
+
+[[case]]
+id      = "toctou-parent-becomes-a-symlink-after-validation"
+attacks = "toctou"
+why     = "Validation saw a real directory; by the time the bytes are written it is a symlink out of the workspace. Nothing checked before the write can catch this."
+setup   = [{ kind = "dir", path = "notes" }]
+race    = "parent_becomes_symlink_out"
+input   = { op = "create_file", path = "notes/summary.md", body = "the summary" }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED", message_contains = "resolves outside" }
+
+[[case]]
+id      = "toctou-target-becomes-a-symlink-after-validation"
+attacks = "toctou"
+why     = "The other half of the race: the file, not its directory, is swapped between the check and the rename."
+setup   = [{ kind = "file", path = "notes.md", contents = "as read by the caller" }]
+race    = "target_becomes_symlink_out"
+input   = { op = "create_file", path = "notes.md", body = "replacement", precondition = "current" }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED", message_contains = "became a symbolic link" }

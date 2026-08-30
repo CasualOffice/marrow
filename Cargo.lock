@@ -2352,13 +2352,15 @@ dependencies = [
 name = "marrow-tools"
 version = "0.1.0"
 dependencies = [
- "blake3",
  "marrow-core",
- "marrow-store",
+ "marrow-scan",
  "serde",
  "serde_json",
  "tempfile",
+ "toml 0.8.2",
  "tracing",
+ "ulid",
+ "unicode-normalization",
 ]
 
 [[package]]

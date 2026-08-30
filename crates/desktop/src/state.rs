@@ -14,6 +14,36 @@ pub struct Core {
     index: Fts5Index,
 }
 
+/// A chunk on its way into an evidence block.
+///
+/// Deliberately not a [`SearchHit`]: a result row wants two lines and a
+/// highlight, and an evidence block wants as much of the document as the
+/// budget allows. Sharing one type between them is how the first end-to-end
+/// run produced evidence blocks containing a path and no text.
+#[derive(Clone, Debug)]
+pub struct RetrievedChunk {
+    pub path: String,
+    pub relative_path: String,
+    pub location: String,
+    pub line: Option<u32>,
+    pub text: String,
+    pub provenance: marrow_core::ProvenanceClass,
+    /// Invariant #9: `SelfWritten` cannot support a claim.
+    pub origin: marrow_core::Origin,
+}
+
+/// Longest matching root wins, so a nested workspace does not display as a
+/// path relative to its parent.
+fn relative_to(path: &str, roots: &[String]) -> String {
+    roots
+        .iter()
+        .filter(|r| path.starts_with(r.as_str()))
+        .max_by_key(|r| r.len())
+        .and_then(|r| path.strip_prefix(r.as_str()))
+        .map(|s| s.trim_start_matches('/').to_string())
+        .unwrap_or_else(|| path.to_string())
+}
+
 impl Core {
     pub fn open(path: std::path::PathBuf) -> Result<Self> {
         // The composition root assembles the migration chain: `index` depends
@@ -23,7 +53,91 @@ impl Core {
         Ok(Self { store, index })
     }
 
+    /// Retrieve for a **question** rather than for a search box.
+    ///
+    /// A different mode, and the difference is not a nicety: the search field
+    /// is conjunctive and prefix-matched because that is what as-you-type
+    /// wants, and a question run through it matches nothing. "When does the
+    /// lease renew?" needs a document containing every one of those words;
+    /// the lease says "renews".
+    ///
+    /// This is the fallback ASK-004 promises when the router cannot run. The
+    /// router will do better — it rewrites the query — but this must work
+    /// without it, because a broken router has to degrade to the product that
+    /// already worked rather than to an error.
+    pub fn retrieve(&self, question: &str, limit: usize) -> Result<Vec<RetrievedChunk>> {
+        let trimmed = question.trim();
+        if trimmed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let q = TextQuery::new(trimmed)
+            .mode(marrow_index::MatchMode::Any)
+            .with_snippet(Self::evidence_snippet())
+            .limit(limit.clamp(1, 50));
+        let roots = self.roots()?;
+        Ok(self
+            .index
+            .search(&q)?
+            .iter()
+            .map(|h| {
+                let relative = relative_to(&h.path, &roots);
+                RetrievedChunk {
+                    location: match &h.span {
+                        marrow_core::SourceSpan::Lines { start, .. } => {
+                            format!("{relative}:{start}")
+                        }
+                        _ => relative.clone(),
+                    },
+                    line: match &h.span {
+                        marrow_core::SourceSpan::Lines { start, .. } => Some(*start),
+                        _ => None,
+                    },
+                    relative_path: relative,
+                    path: h.path.clone(),
+                    // The whole window, markers stripped. Those are for
+                    // highlighting in a result row; a model asked to reason
+                    // about control characters is being asked the wrong thing.
+                    text: h
+                        .snippet
+                        .text
+                        .chars()
+                        .filter(|c| *c != '\u{1}' && *c != '\u{2}')
+                        .collect(),
+                    provenance: h.provenance,
+                    origin: h.origin,
+                }
+            })
+            .collect())
+    }
+
+    /// The widest snippet FTS5 will produce.
+    ///
+    /// A result row wants two or three lines (UX §4); an **evidence block**
+    /// wants enough of the document to answer from. The first time this ran
+    /// end to end the model reported, correctly, that the evidence blocks
+    /// contained a path and no text — the row-sized snippet had nothing in it.
+    fn evidence_snippet() -> marrow_index::SnippetOptions {
+        marrow_index::SnippetOptions {
+            // FTS5 caps this at 64.
+            tokens: 64,
+            max_chars: 1_400,
+            // The body, not whichever column matched best. A question about a
+            // lease matches `lease.md` in the *path* column, and FTS5 would
+            // hand back the filename — evidence with no text in it.
+            column: Some(marrow_index::TextField::Body),
+        }
+    }
+
     pub fn search(&self, query: &str, limit: usize) -> Result<SearchResponse> {
+        self.search_with(query, limit, marrow_index::MatchMode::Prefix)
+    }
+
+    fn search_with(
+        &self,
+        query: &str,
+        limit: usize,
+        mode: marrow_index::MatchMode,
+    ) -> Result<SearchResponse> {
         let started = std::time::Instant::now();
         let trimmed = query.trim();
         if trimmed.is_empty() {
@@ -46,9 +160,10 @@ impl Core {
         // list, which reads as "search is broken" rather than "keep typing".
         // Prefix makes the last term match as a prefix; GUI §5.2 calls this the
         // as-you-type mode and it measures at ~415 µs.
-        let q = TextQuery::new(trimmed)
-            .mode(marrow_index::MatchMode::Prefix)
-            .limit(capped);
+        let mut q = TextQuery::new(trimmed).mode(mode).limit(capped);
+        if mode == marrow_index::MatchMode::Any {
+            q = q.with_snippet(Self::evidence_snippet());
+        }
         let raw = self.index.search(&q)?;
 
         // How many documents actually matched, so the footer does not report

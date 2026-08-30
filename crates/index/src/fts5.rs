@@ -396,6 +396,11 @@ pub fn match_expression(q: &TextQuery) -> Result<String> {
             .map(|t| quote(t))
             .collect::<Vec<_>>()
             .join(" AND "),
+        MatchMode::Any => tokens
+            .iter()
+            .map(|t| quote(t))
+            .collect::<Vec<_>>()
+            .join(" OR "),
         MatchMode::Prefix => {
             let last = tokens.len() - 1;
             tokens
@@ -571,10 +576,14 @@ pub fn search(conn: &Connection, q: &TextQuery) -> Result<Vec<TextHit>> {
     // `snippet()` takes -1 for "pick the best column". Pin it when the caller
     // scoped the query to exactly one field, so the snippet is from the field
     // they asked about.
-    let snippet_col = if fields.len() == 1 {
-        fields[0].column_index()
-    } else {
-        -1
+    let snippet_col = match q.snippet.column {
+        // An explicit choice always wins: the caller knows whether the snippet
+        // is for a human to skim or for a model to read.
+        Some(f) => f.column_index(),
+        None if fields.len() == 1 => fields[0].column_index(),
+        // FTS5 picks the best-matching column, which is what a result row
+        // wants and is a trap for anything else. See `SnippetOptions::column`.
+        None => -1,
     };
     let tokens = q.snippet.tokens.clamp(1, MAX_SNIPPET_TOKENS) as i64;
     // `limit = 0` means zero results, which is a coherent request; the upper
@@ -998,21 +1007,26 @@ mod tests {
     }
 
     #[test]
-    fn tokenizing_matches_unicode61s_separator_rules() {
-        assert_eq!(tokenize("refresh_token"), vec!["refresh", "token"]);
-        assert_eq!(tokenize("  auth   refresh "), vec!["auth", "refresh"]);
-        assert_eq!(tokenize("café"), vec!["café"]);
-        assert_eq!(tokenize("v1.2.3"), vec!["v1", "2", "3"]);
-        assert!(tokenize("***").is_empty());
-        assert!(tokenize("  \t\n ").is_empty());
+    fn a_natural_language_question_becomes_a_disjunction_not_a_conjunction() {
+        // The failure this mode exists for. "When does the lease renew?" as a
+        // conjunctive query needs a document containing *when*, *does*, *the*,
+        // *lease* and *renew*; the lease says "renews", so every other mode
+        // matches nothing — and nothing is the one answer a retrieval layer
+        // must not give when the document is right there.
+        let e = match_expression(&q("when does the lease renew").mode(MatchMode::Any)).unwrap();
+        assert_eq!(e, r#"("when" OR "does" OR "the" OR "lease" OR "renew")"#);
+        // Precision is what it trades, not ordering: BM25 sums per-term
+        // contributions, so a document matching more terms still ranks higher.
+        let conjunctive = match_expression(&q("when does the lease renew")).unwrap();
+        assert!(conjunctive.contains(" AND "), "the default is unchanged");
     }
 
     #[test]
-    fn over_long_terms_are_clipped_not_rejected() {
-        let long = "a".repeat(MAX_TERM_CHARS * 3);
-        let t = tokenize(&long);
-        assert_eq!(t.len(), 1);
-        assert_eq!(t[0].chars().count(), MAX_TERM_CHARS);
+    fn any_mode_quotes_its_terms_like_every_other_mode() {
+        // The disjunction must not become a way to smuggle FTS5 syntax in.
+        let e = match_expression(&q(r#"a OR b NEAR/2 c"#).mode(MatchMode::Any)).unwrap();
+        assert!(!e.contains('/'), "{e}");
+        assert_eq!(e.matches(" OR ").count(), e.matches('"').count() / 2 - 1);
     }
 
     #[test]

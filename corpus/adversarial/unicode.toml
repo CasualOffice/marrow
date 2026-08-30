@@ -1,0 +1,50 @@
+# Names that are one file on this disk and two in the index — Part 7 §126 #14.
+#
+# macOS stores filenames in NFD; every other source of a filename hands you NFC.
+# APFS is also case-insensitive by default, and the same volume can be created
+# case-sensitive. So a name that differs from an existing one only by
+# normalisation or capitalisation may address the same file or a different one,
+# depending on the volume, and the caller cannot have meant either. Refuse.
+#
+# The escapes are deliberate: `é` and `é` are indistinguishable in a
+# diff, and this file exists to be reviewed.
+
+[[case]]
+id      = "nfd-name-collides-with-an-existing-nfc-name"
+attacks = "unicode normalisation"
+why     = "On APFS these are one file, so the write would silently replace a document the caller did not name."
+setup   = [{ kind = "file", path = "caf\u00E9.md", contents = "the existing document" }]  # NFC on disk
+input   = { op = "create_file", path = "cafe\u0301.md", body = "x" }                       # NFD from the caller
+expect  = { outcome = "refused", code = "ACT_ALREADY_EXISTS", message_contains = "normalisation" }
+
+[[case]]
+id      = "nfc-name-collides-with-an-existing-nfd-name"
+attacks = "unicode normalisation"
+why     = "The same collision from the other direction — macOS writes NFD to disk, so this is the spelling a scan actually finds."
+setup   = [{ kind = "file", path = "cafe\u0301.md", contents = "the existing document" }]  # NFD on disk, as macOS stores it
+input   = { op = "create_file", path = "caf\u00E9.md", body = "x" }                        # NFC from the caller
+expect  = { outcome = "refused", code = "ACT_ALREADY_EXISTS", message_contains = "normalisation" }
+
+[[case]]
+id      = "uppercase-name-collides-with-an-existing-lowercase-name"
+attacks = "case collision"
+why     = "APFS is case-insensitive by default: this write replaces `notes.md` on one volume and creates a second file on another."
+setup   = [{ kind = "file", path = "notes.md", contents = "the existing document" }]
+input   = { op = "create_file", path = "NOTES.md", body = "x" }
+expect  = { outcome = "refused", code = "ACT_ALREADY_EXISTS", message_contains = "capitalisation" }
+
+[[case]]
+id      = "lowercase-name-collides-with-an-existing-mixed-case-name"
+attacks = "case collision"
+why     = "Same rule, and the more common accident: an agent lower-cases a filename it read in prose."
+setup   = [{ kind = "file", path = "Report.md", contents = "the existing document" }]
+input   = { op = "create_file", path = "report.md", body = "x" }
+expect  = { outcome = "refused", code = "ACT_ALREADY_EXISTS", message_contains = "capitalisation" }
+
+[[case]]
+id      = "an-unrelated-accented-name-is-not-a-collision"
+attacks = "unicode normalisation"
+why     = "Over-refusing is also a defect: `résumé.md` and `resume.md` are different names and both must be writable."
+setup   = [{ kind = "file", path = "resume.md", contents = "the existing document" }]
+input   = { op = "create_file", path = "r\u00E9sum\u00E9.md", body = "different document" }
+expect  = { outcome = "written", at = "r\u00E9sum\u00E9.md" }

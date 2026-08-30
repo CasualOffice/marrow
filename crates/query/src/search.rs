@@ -138,6 +138,7 @@ pub fn mode_label(mode: MatchMode) -> &'static str {
         MatchMode::Terms => "terms",
         MatchMode::Phrase => "phrase",
         MatchMode::Prefix => "prefix",
+        MatchMode::Any => "any",
     }
 }
 

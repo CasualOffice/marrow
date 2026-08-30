@@ -8,11 +8,19 @@ publish.workspace = true
 
 [dependencies]
 marrow-core.workspace = true
-marrow-store.workspace = true
+# The containment proof (`AuthorizedRoot`), the NFC path identity and the
+# placeholder guard already exist in `marrow-scan`. A second implementation of
+# any of them would be a second thing to get wrong.
+marrow-scan.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
-blake3.workspace = true
+ulid.workspace = true
+
+# Not in `[workspace.dependencies]`: only this crate reads the corpus, and only
+# this crate folds a path component to catch a Unicode dot wearing a costume.
+toml = "0.8"
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,0 +1,90 @@
+# Path traversal: names that try to address something outside the workspace.
+#
+# Every case here must be refused as FS_PATH_ESCAPE_BLOCKED. A traversal
+# refused for some other reason — too long, bad extension — has not tested
+# containment at all, which is why each case names its code.
+
+[[case]]
+id      = "traversal-parent-segment"
+attacks = "path traversal"
+why     = "`..` arrives as data, from a model that read it in a document it was asked to summarise."
+input   = { op = "create_file", path = "../escape.md", body = "x" }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED" }
+
+[[case]]
+id      = "traversal-parent-buried-mid-path"
+attacks = "path traversal"
+why     = "A `..` after a legitimate-looking prefix defeats any check that only inspects the start of the string."
+setup   = [{ kind = "dir", path = "notes" }]
+input   = { op = "create_file", path = "notes/../../escape.md", body = "x" }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED" }
+
+[[case]]
+id      = "traversal-current-dir-segment"
+attacks = "path traversal"
+why     = "`.` is harmless alone but makes a path have two spellings, and invariant #2 is about one file having one identity."
+input   = { op = "create_file", path = "./notes/x.md", body = "x" }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED" }
+
+[[case]]
+id      = "traversal-absolute-path"
+attacks = "path traversal"
+why     = "The API is workspace-relative; accepting absolute paths would leave containment as the only thing between a caller and /etc."
+input   = { op = "create_file", path = "/etc/marrow-was-here.md", body = "x" }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED", message_contains = "absolute path" }
+
+[[case]]
+id      = "traversal-absolute-path-that-looks-innocent"
+attacks = "path traversal"
+why     = "An absolute path inside a plausible home directory is still absolute; the rule must not depend on where it points."
+input   = { op = "create_file", path = "/Users/someone/Documents/notes.md", body = "x" }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED", message_contains = "absolute path" }
+
+[[case]]
+id      = "traversal-percent-encoded-slash"
+attacks = "path traversal"
+why     = "open(2) treats `..%2f` as a filename, but the next consumer of this string — a URL, an archive, a shell — decodes it."
+input   = { op = "create_file", path = "..%2fescape.md", body = "x" }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED", message_contains = "percent-escape" }
+
+[[case]]
+id      = "traversal-percent-encoded-uppercase"
+attacks = "path traversal"
+why     = "Hex escapes are case-insensitive; a decoder that only recognises `%2f` and not `%2F` recognises nothing."
+input   = { op = "create_file", path = "..%2Fescape.md", body = "x" }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED", message_contains = "percent-escape" }
+
+[[case]]
+id      = "traversal-percent-encoded-dots"
+attacks = "path traversal"
+why     = "Encoding the dots rather than the separator hides the traversal from any check that looks for a literal `..`."
+input   = { op = "create_file", path = "%2e%2e/escape.md", body = "x" }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED", message_contains = "percent-escape" }
+
+[[case]]
+id      = "traversal-unicode-two-dot-leader"
+attacks = "path traversal"
+why     = "U+2025 is a legal APFS filename and folds to `..` under NFKC, so anything downstream that normalises gets a traversal we approved."
+input   = { op = "create_file", path = "‥/escape.md", body = "x" }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED", message_contains = "folds to" }
+
+[[case]]
+id      = "traversal-unicode-fullwidth-dots"
+attacks = "path traversal"
+why     = "Two U+FF0E fullwidth stops fold to `..`; NFC — which is what path identity uses — leaves them untouched, so NFC-only checking misses this."
+input   = { op = "create_file", path = "．．/escape.md", body = "x" }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED", message_contains = "folds to" }
+
+[[case]]
+id      = "traversal-in-a-diagram-path"
+attacks = "path traversal"
+why     = "All three creation tools share one write path; a traversal must not become reachable by asking for a diagram instead of a file."
+input   = { op = "create_diagram", path = "../escape.md", mermaid = "flowchart TD\n  a-->b" }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED" }
+
+[[case]]
+id      = "traversal-in-a-page-path"
+attacks = "path traversal"
+why     = "Same rule as the diagram case, for the third tool. A gate is only a gate while it is the only door."
+input   = { op = "create_page", path = "../escape.html", title = "t", body = "<p>x</p>" }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED" }

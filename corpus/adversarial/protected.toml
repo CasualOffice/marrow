@@ -1,0 +1,68 @@
+# Directories a write must never land in.
+#
+# Two kinds, one refusal. `.git`, `node_modules` and the rest are excluded by
+# name at any depth: they hold another tool's state, and a file written there is
+# at best noise in the index and at worst a hook that runs on the next commit.
+# The model directory is protected by path, declared per case in `protect`.
+#
+# The model area normally lives outside every workspace root (SUP-011), where
+# containment already refuses it. These cases are the misconfigured root — the
+# case where containment does not help and something else has to.
+
+[[case]]
+id      = "write-into-a-git-hook"
+attacks = "protected directory"
+why     = "A file written into .git/hooks is executed by the user's next commit. This is the shortest path from a poisoned document to code execution."
+setup   = [{ kind = "dir", path = ".git/hooks" }]
+input   = { op = "create_file", path = ".git/hooks/post-commit", body = "#!/bin/sh\necho owned" }
+expect  = { outcome = "refused", code = "POL_DENIED", message_contains = "did not author" }
+
+[[case]]
+id      = "write-into-a-git-config"
+attacks = "protected directory"
+why     = "git config accepts `core.fsmonitor` and friends, which are commands git runs. Rewriting it is the same attack wearing a different name."
+setup   = [{ kind = "dir", path = ".git" }]
+input   = { op = "create_file", path = ".git/config", body = "[core]\n" }
+expect  = { outcome = "refused", code = "POL_DENIED", message_contains = "did not author" }
+
+[[case]]
+id      = "write-into-a-nested-repositorys-git-directory"
+attacks = "protected directory"
+why     = "The excluded name is refused at any depth: a workspace usually contains repositories rather than being one."
+setup   = [{ kind = "dir", path = "code/project/.git/hooks" }]
+input   = { op = "create_file", path = "code/project/.git/hooks/pre-push", body = "x" }
+expect  = { outcome = "refused", code = "POL_DENIED", message_contains = "did not author" }
+
+[[case]]
+id      = "write-into-node-modules"
+attacks = "protected directory"
+why     = "Dependency trees are someone else's state; a file written there is deleted by the next install and indexed as the user's own work until then."
+input   = { op = "create_file", path = "node_modules/pkg/README.md", body = "x" }
+expect  = { outcome = "refused", code = "POL_DENIED", message_contains = "did not author" }
+
+[[case]]
+id      = "write-into-the-model-directory"
+attacks = "protected directory"
+why     = "An agent that can edit the weights it is running on is a different product. Containment cannot help when the model area was misconfigured inside a root."
+protect = ["models"]
+setup   = [{ kind = "dir", path = "models/weights" }]
+input   = { op = "create_file", path = "models/weights/note.md", body = "x" }
+expect  = { outcome = "refused", code = "POL_DENIED", message_contains = "protected" }
+
+[[case]]
+id      = "write-into-the-model-directory-catalogue"
+attacks = "protected directory"
+why     = "The catalogue decides which digests are trusted; a write there turns SUP-014's integrity check into a check of the attacker's own number."
+protect = ["models"]
+setup   = [{ kind = "dir", path = "models" }]
+input   = { op = "create_file", path = "models/catalogue.json", body = "{}" }
+expect  = { outcome = "refused", code = "POL_DENIED", message_contains = "protected" }
+
+[[case]]
+id      = "a-protected-directorys-prefix-sibling-is-not-protected"
+attacks = "protected directory"
+why     = "Over-refusing is a defect too: `models-notes` is not inside `models`, and a string-prefix check would refuse it."
+protect = ["models"]
+setup   = [{ kind = "dir", path = "models" }]
+input   = { op = "create_file", path = "models-notes/plan.md", body = "notes about the models" }
+expect  = { outcome = "written", at = "models-notes/plan.md" }

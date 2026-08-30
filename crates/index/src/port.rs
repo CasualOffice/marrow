@@ -125,6 +125,18 @@ pub enum MatchMode {
     /// As [`MatchMode::Terms`], but the final term matches as a prefix — this
     /// is the as-you-type mode (GUI §5.2: results render at t=8 ms).
     Prefix,
+    /// **Any** term may match; BM25 ranks the rest.
+    ///
+    /// For a natural-language question rather than a search box. "When does
+    /// the lease renew?" as a conjunctive query requires a document
+    /// containing *when*, *does*, *the*, *lease* and *renew* — which the lease
+    /// itself does not, because it says "renews". Every other mode returns
+    /// nothing here, and nothing is the one answer a retrieval layer must not
+    /// give when the document is right there.
+    ///
+    /// Documents matching more terms still rank higher: BM25 sums per-term
+    /// contributions, so this loses precision rather than ordering.
+    Any,
 }
 
 /// Filters applied to the document metadata, not to the FTS expression.
@@ -163,6 +175,15 @@ pub struct SnippetOptions {
     /// Hard bound on the returned snippet, in characters, applied after FTS5
     /// has chosen the window.
     pub max_chars: usize,
+    /// Which column the snippet comes from. `None` lets FTS5 pick the
+    /// best-matching one, which is right for a result row.
+    ///
+    /// It is wrong for evidence. A query containing "lease" against a file
+    /// named `lease.md` matches the *path* column best, so FTS5 returns the
+    /// filename as the snippet — and a model handed a path and asked about
+    /// the contents will say, correctly, that it was given nothing to read.
+    /// Pin [`TextField::Body`] when the snippet is going to a model.
+    pub column: Option<TextField>,
 }
 
 impl Default for SnippetOptions {
@@ -170,6 +191,7 @@ impl Default for SnippetOptions {
         Self {
             tokens: 24,
             max_chars: 320,
+            column: None,
         }
     }
 }

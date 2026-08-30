@@ -1,0 +1,51 @@
+# The stale-write check — invariant #6, Part 7 §126 #4.
+#
+# "You will have the file open in your editor while the agent edits it." The
+# caller states what it believes it is replacing; the guard verifies that claim
+# against the disk immediately before the rename, and refuses if it is no
+# longer true.
+#
+# `precondition` is how a case says what the caller believes:
+#   "new"                    nothing is there
+#   "current"                the digest the file has as the case starts
+#   { digest_of = "text" }   the digest of this literal text
+
+[[case]]
+id      = "replace-a-file-that-changed-since-it-was-read"
+attacks = "stale write"
+why     = "The paragraph the user typed thirty seconds ago is not something a summary gets to discard."
+setup   = [{ kind = "file", path = "notes.md", contents = "what the file says now, after the user edited it" }]
+input   = { op = "create_file", path = "notes.md", body = "the agent's version", precondition = { digest_of = "what the caller read ten minutes ago" } }
+expect  = { outcome = "refused", code = "ACT_STALE_VERSION", message_contains = "changed since" }
+
+[[case]]
+id      = "create-a-file-that-already-exists"
+attacks = "stale write"
+why     = "`new` is a claim about the world, not a formality; treating it as 'create or overwrite' loses a file every time the claim is wrong."
+setup   = [{ kind = "file", path = "notes.md", contents = "the user's document" }]
+input   = { op = "create_file", path = "notes.md", body = "the agent's version", precondition = "new" }
+expect  = { outcome = "refused", code = "ACT_ALREADY_EXISTS", message_contains = "already exists" }
+
+[[case]]
+id      = "replace-a-file-that-is-no-longer-there"
+attacks = "stale write"
+why     = "A replacement of a file that has been deleted or moved is a create, and it must not become one silently — the user moved it for a reason."
+input   = { op = "create_file", path = "gone.md", body = "x", precondition = { digest_of = "whatever the caller thinks it read" } }
+expect  = { outcome = "refused", code = "FS_NOT_FOUND" }
+
+[[case]]
+id      = "toctou-file-edited-between-the-read-and-the-write"
+attacks = "toctou"
+why     = "The caller's digest was correct when it was read; the file changed while the content was being prepared. This is the case that proves the check runs at commit time and not at validation time."
+setup   = [{ kind = "file", path = "notes.md", contents = "as read by the caller" }]
+race    = "target_content_changes"
+input   = { op = "create_file", path = "notes.md", body = "the agent's version", precondition = "current" }
+expect  = { outcome = "refused", code = "ACT_STALE_VERSION", message_contains = "changed since" }
+
+[[case]]
+id      = "replace-a-file-with-the-digest-it-actually-has"
+attacks = "stale write"
+why     = "The check must permit the honest case, or callers learn to pass whatever makes it stop complaining."
+setup   = [{ kind = "file", path = "notes.md", contents = "as read by the caller" }]
+input   = { op = "create_file", path = "notes.md", body = "the agreed replacement", precondition = "current" }
+expect  = { outcome = "written", at = "notes.md", contains = "the agreed replacement" }

@@ -1,0 +1,27 @@
+# Cloud placeholders — invariant #3, Part 7 §126 #3.
+#
+# The stale check has to digest the file it is replacing, and digesting is a
+# read. On a dehydrated file a read is a download: iCloud, OneDrive and Dropbox
+# will all happily fetch hundreds of gigabytes to satisfy one `open`. Part 2
+# called this the highest-severity finding in the spec, and it is entirely
+# about the author's own bandwidth and disk.
+#
+# `SF_DATALESS` cannot be set without the superuser, so no test can create a
+# genuinely dataless file. The `.icloud` stub name is the other form the same
+# state takes, and the one a fixture can produce.
+
+[[case]]
+id      = "stale-check-does-not-hydrate-an-icloud-stub"
+attacks = "cloud placeholder"
+why     = "Comparing digests requires reading the file, and reading a stub downloads whatever it stands for. The refusal has to come before the open, not after."
+setup   = [{ kind = "file", path = ".Q2 report.pdf.icloud", contents = "stub" }]
+input   = { op = "create_file", path = ".Q2 report.pdf.icloud", body = "x", precondition = "current" }
+expect  = { outcome = "refused", code = "FS_PLACEHOLDER_SKIPPED" }
+
+[[case]]
+id      = "stale-check-does-not-hydrate-a-stub-in-a-subdirectory"
+attacks = "cloud placeholder"
+why     = "Sync folders are nested; a check that only looks at the top level of a workspace misses every file in one."
+setup   = [{ kind = "file", path = "iCloud/Documents/.notes.md.icloud", contents = "stub" }]
+input   = { op = "create_file", path = "iCloud/Documents/.notes.md.icloud", body = "x", precondition = "current" }
+expect  = { outcome = "refused", code = "FS_PLACEHOLDER_SKIPPED" }

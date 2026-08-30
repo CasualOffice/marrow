@@ -201,10 +201,10 @@ pub struct Hub {
     loaded: Mutex<Option<Loaded>>,
     /// Answers in flight, so Escape reaches the right one.
     asks: Mutex<BTreeMap<String, Cancel>>,
-    /// One envelope session per conversation. Held here rather than in the
-    /// window because it is what makes the prompt cache hit, and the window
-    /// has no business knowing that.
-    sessions: Mutex<BTreeMap<String, Session>>,
+    /// One conversation's accumulated state: the delimiter, and the evidence
+    /// already sent. Held here rather than in the window because both exist to
+    /// make the prompt cache hit, and the window has no business knowing that.
+    sessions: Mutex<BTreeMap<String, Conversation>>,
     commands: Sender<Command>,
     _supervisor: JoinHandle<()>,
     _events: JoinHandle<()>,
@@ -628,11 +628,11 @@ impl Hub {
             .unwrap_or(0)
     }
 
-    /// The delimiter session for a conversation, creating one on first use.
+    /// A conversation's state, creating it on first use.
     ///
     /// Taken out and handed back rather than borrowed, so a long generation
     /// never holds the map locked.
-    pub fn session_for(&self, conversation: &str) -> Session {
+    pub fn session_for(&self, conversation: &str) -> Conversation {
         self.sessions
             .lock()
             .ok()
@@ -640,7 +640,7 @@ impl Hub {
             .unwrap_or_default()
     }
 
-    pub fn keep_session(&self, conversation: &str, session: Session) {
+    pub fn keep_session(&self, conversation: &str, session: Conversation) {
         if let Ok(mut m) = self.sessions.lock() {
             // A conversation nobody returns to would otherwise keep a
             // delimiter forever. Sixteen is more threads than anyone has open.
@@ -816,6 +816,22 @@ const RUNTIME_READY: &str = "MLX is available on this machine. A model that is \
 const RUNTIME_MISSING: &str = "No inference runtime is installed, so nothing here \
      can answer a question yet. Models can still be downloaded, and search works \
      without one.";
+
+/// What a conversation accumulates.
+///
+/// Both fields exist for the same reason: a prompt whose prefix is identical
+/// across turns can be reused from the KV cache, and one whose prefix moves
+/// cannot. The delimiter is the obvious half. The evidence is the other:
+/// retrieval is question-dependent, so a follow-up that simply re-retrieves
+/// produces a different evidence set and reuses nothing — measured, zero of
+/// 552 tokens.
+#[derive(Debug, Default)]
+pub struct Conversation {
+    pub session: Session,
+    /// Chunks already sent, oldest first. New ones are appended; the order
+    /// never changes, because reordering is the same as replacing.
+    pub sent: Vec<crate::state::RetrievedChunk>,
+}
 
 /// A model held in a worker process.
 #[derive(Debug)]
