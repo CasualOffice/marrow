@@ -1668,10 +1668,23 @@ pub fn cells_for(conn: &Connection, table_id: &str) -> Result<Vec<CellRow>> {
         .map_err(|e| crate::map_sqlite(e, "reading table cells"))
 }
 
-/// How many active chunks exist, for `marrow status`.
+/// How many chunks **search can actually return**, for `marrow status`.
+///
+/// Not "chunks with status ACTIVE". `chunks.status` has a `SUPERSEDED` value
+/// that nothing has ever written, so a chunk stays ACTIVE after its version is
+/// superseded or its file is deleted, and counting on that column alone
+/// over-reported by 4.6× on the author's index — 274,519 counted against 59,197
+/// a search could reach.
+///
+/// The predicate is the one `fts5::search` uses, deliberately: a count of
+/// searchable chunks that does not agree with what searching returns is not a
+/// count of anything.
 pub fn chunk_count(conn: &Connection) -> Result<i64> {
     conn.query_row(
-        "SELECT count(*) FROM chunks WHERE status = 'ACTIVE'",
+        "SELECT count(*) FROM chunks c
+           JOIN file_versions v ON v.version_id = c.version_id
+           JOIN files f          ON f.file_id    = v.file_id
+          WHERE c.status = 'ACTIVE' AND v.status = 'CURRENT' AND f.status = 'ACTIVE'",
         [],
         |r| r.get(0),
     )

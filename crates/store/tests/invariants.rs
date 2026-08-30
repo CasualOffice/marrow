@@ -816,3 +816,104 @@ fn a_reconstruction_grade_outside_the_taxonomy_is_refused() {
         .unwrap_err();
     assert_eq!(err.code(), Code::IntInvariantViolated);
 }
+
+/// **A count of searchable chunks must agree with what searching returns.**
+///
+/// `chunks.status` has a `SUPERSEDED` value that nothing has ever written, so a
+/// chunk stays ACTIVE after its version is superseded or its file is deleted.
+/// Counting on that column alone over-reported by 4.6x on the author's real
+/// index — 274,519 counted against 59,197 a search could reach — and sent
+/// `marrow embed` to a two-hour job of which four fifths would have embedded
+/// text nothing can ever retrieve, while `marrow status` suggested running it.
+#[test]
+fn the_chunk_count_excludes_what_search_can_no_longer_return() {
+    let fx = fixture();
+    let file_id = fx.file_at("/Users/test/Desktop/notes.md", b"the renewal clause");
+
+    let version: String = fx
+        .store
+        .reader()
+        .expect("reader")
+        .query_row(
+            "SELECT version_id FROM file_versions WHERE file_id = ?1",
+            [file_id.to_string()],
+            |r| r.get(0),
+        )
+        .expect("a version");
+    let vid: marrow_core::VersionId = version.parse().expect("version id");
+
+    let chunk = marrow_store::read::NewChunk {
+        chunk_id: marrow_core::ChunkId::new(),
+        version_id: vid,
+        chunk_kind: "TEXT".into(),
+        text: "the renewal clause".into(),
+        context_prefix: None,
+        token_count: 3,
+        text_hash: ContentHash::of(b"the renewal clause"),
+        chunker_version: "test".into(),
+        provenance_class: "EXACT".into(),
+    };
+    fx.store
+        .writer()
+        .submit(move |c| marrow_store::read::replace_chunks(c, vid, std::slice::from_ref(&chunk)))
+        .expect("write chunk");
+    fx.store.flush().expect("flush");
+
+    let count =
+        || marrow_store::read::chunk_count(&fx.store.reader().expect("reader")).expect("count");
+    assert_eq!(count(), 1, "a live chunk is searchable");
+
+    // Supersede the version. Nothing touches `chunks.status` — that is exactly
+    // the point, and why counting on it alone was wrong.
+    let v = vid;
+    fx.store
+        .writer()
+        .submit(move |c| {
+            c.execute(
+                "UPDATE file_versions SET status='HISTORICAL' WHERE version_id = ?1",
+                [v.to_string()],
+            )
+            .map(|_| ())
+            .map_err(|e| marrow_store::map_sqlite(e, "superseding"))
+        })
+        .expect("supersede");
+    fx.store.flush().expect("flush");
+    assert_eq!(
+        count(),
+        0,
+        "a chunk of a superseded version was counted as searchable"
+    );
+
+    // The other half of the same predicate: a deleted file.
+    fx.store
+        .writer()
+        .submit(move |c| {
+            c.execute(
+                "UPDATE file_versions SET status='CURRENT' WHERE version_id = ?1",
+                [v.to_string()],
+            )
+            .map(|_| ())
+            .map_err(|e| marrow_store::map_sqlite(e, "restoring"))
+        })
+        .expect("restore");
+    fx.store.flush().expect("flush");
+    assert_eq!(count(), 1);
+
+    fx.store
+        .writer()
+        .submit(move |c| {
+            c.execute(
+                "UPDATE files SET status='DELETED' WHERE file_id = ?1",
+                [file_id.to_string()],
+            )
+            .map(|_| ())
+            .map_err(|e| marrow_store::map_sqlite(e, "deleting"))
+        })
+        .expect("delete");
+    fx.store.flush().expect("flush");
+    assert_eq!(
+        count(),
+        0,
+        "a chunk of a deleted file was counted as searchable"
+    );
+}

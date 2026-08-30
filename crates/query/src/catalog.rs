@@ -144,10 +144,15 @@ pub fn workspace_stats(conn: &ReadConn) -> Result<Vec<WorkspaceStats>> {
                     COALESCE(r.canonical_path,''),
                     (SELECT count(*) FROM files f
                       WHERE f.workspace_id=w.workspace_id AND f.status='ACTIVE'),
+                    -- The same predicate `fts5::search` uses. `chunks.status`
+                    -- alone is not it: nothing has ever written SUPERSEDED, so
+                    -- a chunk stays ACTIVE after its version is superseded, and
+                    -- counting on that column over-reported by 4.6x.
                     (SELECT count(*) FROM chunks c
                        JOIN file_versions v ON v.version_id=c.version_id
                        JOIN files f2 ON f2.file_id=v.file_id
-                      WHERE f2.workspace_id=w.workspace_id AND c.status='ACTIVE'),
+                      WHERE f2.workspace_id=w.workspace_id AND c.status='ACTIVE'
+                        AND v.status='CURRENT' AND f2.status='ACTIVE'),
                     -- `f3.status='ACTIVE'` matters: the file count beside this
                     -- number has it and this did not, so the two disagreed by
                     -- 4.02 GB (29%) on the author's index — a deleted file keeps

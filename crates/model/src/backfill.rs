@@ -65,8 +65,16 @@ struct Pending {
 pub fn remaining(store: &Store) -> Result<u64> {
     let conn = store.reader()?;
     conn.query_row(
+        // **Only chunks a search could return.** `chunks.status` alone counts
+        // every chunk of every superseded version and every deleted file --
+        // 274,519 against 59,197 reachable on the author's index. Reporting
+        // that as work remaining sends the user to a two-hour job of which four
+        // fifths embeds text nothing can ever retrieve, while `marrow status`
+        // helpfully suggests they run it.
         "SELECT count(*) FROM chunks c
-          WHERE c.status = 'ACTIVE'
+           JOIN file_versions v ON v.version_id = c.version_id
+           JOIN files f          ON f.file_id    = v.file_id
+          WHERE c.status = 'ACTIVE' AND v.status = 'CURRENT' AND f.status = 'ACTIVE'
             AND NOT EXISTS (SELECT 1 FROM chunk_embeddings e WHERE e.chunk_id = c.chunk_id)",
         [],
         |r| r.get::<_, i64>(0),
@@ -85,6 +93,7 @@ fn next_batch(store: &Store, limit: usize) -> Result<Vec<Pending>> {
                JOIN file_versions v ON v.version_id = c.version_id
                JOIN files f ON f.file_id = v.file_id
               WHERE c.status = 'ACTIVE'
+                AND v.status = 'CURRENT'
                 AND f.status = 'ACTIVE'
                 AND NOT EXISTS (SELECT 1 FROM chunk_embeddings e WHERE e.chunk_id = c.chunk_id)
               LIMIT ?1",
