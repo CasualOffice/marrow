@@ -17,7 +17,7 @@ Fixed items move to the TRACKER Log and come off this list.
 | ~~B5~~ | **fixed** `11fa855` + `42d773a` · **Answers truncate because retrieval eats the whole context window.** *Root cause found and quantified.* `default_context` is a flat **8,192** tokens. The screenshot's own header says **41 sources, 29 KB of context** — about 7,424 prompt tokens. `answer_budget` computes `8192 − 7424 = 768`, then `.clamp(1024, 4096)` raises it back to the floor, so the model is asked for 1,024 tokens on a window that is already nearly full: about **4,096 characters**, when the request was to generate an HTML page. It *must* stop mid-output. The floor hides the overrun instead of reporting it. The fix is to bound the evidence so the prompt cannot consume the window, and to record what was dropped in the existing `excluded` list (which already carries a reason per source) rather than dropping it silently. Raising `default_context` is not the fix on its own: KV is 160 KB/token, so 8k→16k costs another 1.3 GB on a 16 GB machine. Verified clean on the small corpus: `a_long_answer_is_not_silently_cut_off` finishes at 414 tokens with `stop = stop`; the small corpus never fills the window, which is why the test never caught it. | `desktop/src/ask.rs` (`assemble`), `models.rs` (`answer_budget`) | user report ×2; arithmetic above |
 | B6 | **UI wastes space and does not behave like a chat product.** ~230px permanent nav rail for five items; the Ask empty state is three lines centred in a large void with the composer pinned to the bottom; Fast/Thorough are two large cards instead of one compact control. Study Gemini, ChatGPT and Claude. | `App.tsx`, `Sidebar`, `AskView.tsx` | user report + screenshot |
 | B7 | **One session only.** No conversation list, no history, no way to return to an earlier thread. Every chat product has this and it is what the sidebar should hold. | `AskView.tsx` | user report |
-| B8 | **`marrow watch` and the desktop both index; neither shares a lock.** Two processes sweeping the same root do duplicate work. Not observed to corrupt anything — the writer is a single actor — but it is wasted and unmeasured. | `cli/src/watching.rs`, `desktop/src/watching.rs` | reasoning, not observed |
+| ~~B8~~ | **fixed** `ffe2c26` · **`marrow watch` and the desktop both index; neither shares a lock.** Two processes sweeping the same root do duplicate work. Not observed to corrupt anything — the writer is a single actor — but it is wasted and unmeasured. | `cli/src/watching.rs`, `desktop/src/watching.rs` | reasoning, not observed |
 
 ---
 
@@ -289,3 +289,17 @@ are doing a great deal of work with no per-root override.
 
 Needs: a `walk_policy` column on `workspace_roots`, a way to see what a root
 excludes, and a way to override it. Not urgent; not invisible either.
+
+
+---
+
+## Open, and why each is still open
+
+Everything reported has been fixed. What remains is three items I chose not to
+close, with the reason in each case.
+
+| # | What | Why it is still open |
+|---|---|---|
+| F4 (part) | The chunker's overlapping granularities put the same passage in a result twice — `kv.rs` as lines 418–434 *and* 356–435 | I built a collapse on span containment and reverted it: two existing tests failed because distinct chunks can legitimately share a byte range, and the rule was one-directional anyway. **Dropping real evidence to tidy a result list is a worse bug than a wasted row.** A safe version keys on the text being a substring, not the span |
+| C10 | `query/src/intelligence.rs` — 1,049 lines with no caller | It is a spec-shaped read model built ahead of its consumers. Deleting someone's tested work is not mine to decide, and wiring it wholesale is building ahead of the milestone. TRACKER now says so instead of ticking it |
+| — | Per-root walk policy (D47) | The exclusion list is a constant and D47's per-root policy was never built. A folder genuinely wanted that happens to be named `dist` or `build` is invisible *and* now actively marked deleted. Needs a `walk_policy` column, a way to see what a root excludes, and a way to override it |
