@@ -22,6 +22,7 @@ import {
   fileDetail,
   indexHealth,
   listFiles,
+  listProjects,
   listWorkspaces,
   modelsOverview,
   readRegion,
@@ -73,6 +74,17 @@ export function useSearch(query: string, limit = SEARCH_LIMIT): SearchQuery {
     ...(trimmed.length > 0 ? { placeholderData: keepPreviousData } : {}),
     staleTime: 15_000,
     gcTime: 5 * 60_000,
+    retry: false,
+  });
+}
+
+export function useProjects() {
+  return useQuery({
+    queryKey: ["projects"],
+    queryFn: listProjects,
+    // The set only changes when a folder is indexed, so this is cheap to hold
+    // and expensive to recompute — it walks every indexed path.
+    staleTime: 60_000,
     retry: false,
   });
 }

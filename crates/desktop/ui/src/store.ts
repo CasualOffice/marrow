@@ -216,6 +216,19 @@ export const useUi = create<UiState>((set, get) => ({
   setQuickFindQuery: (quickFindQuery) => set({ quickFindQuery }),
   setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
 
+  openArtifact: (artifact) =>
+    set((s) => ({
+      artifact,
+      // A different artifact arrives as itself, not as whatever view the last
+      // one was left in; the same one reopened keeps the view it was reading.
+      artifactMode: s.artifact?.key === artifact.key ? s.artifactMode : "preview",
+    })),
+  refreshArtifact: (artifact) =>
+    set((s) => (s.artifact?.key === artifact.key ? { artifact } : {})),
+  closeArtifact: () => set({ artifact: null }),
+  setArtifactMode: (artifactMode) => set({ artifactMode }),
+  setArtifactWidth: (artifactWidth) => set({ artifactWidth }),
+
   notify: (text) => {
     noticeId += 1;
     set({ notice: { text, id: noticeId }, announcement: text });

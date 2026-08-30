@@ -1,0 +1,324 @@
+/* The artifact panel: the generated thing, full height, beside the answer. */
+
+.panel {
+  position: relative;
+  flex: 0 0 auto;
+  width: var(--artifact-w);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--sheet);
+  /* The seam, and nothing more. The panel and the conversation are two columns
+     of one sheet; giving this edge an elevation would say a window is floating
+     over the answer, when what is true is that the answer got narrower. */
+  box-shadow: inset 1px 0 0 var(--line);
+  outline-offset: -3px;
+}
+
+/* Arriving from the right, once. The conversation's own width change is not
+   animated with it: a column that reflows its text over 180ms is harder to read
+   than one that is simply narrower, and the panel sliding in already says which
+   direction the space went. */
+@media (prefers-reduced-motion: no-preference) {
+  .panel {
+    animation: panelIn var(--motion-pane) var(--ease);
+  }
+}
+
+@keyframes panelIn {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+
+/* ── the drag handle ────────────────────────────────────────────────────── */
+
+/* Wider than it looks: the visible seam is 1px, the thing you can grab is 9,
+   because a 1px target is a target you miss. */
+.grip {
+  position: absolute;
+  left: -4px;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  z-index: var(--z-accent);
+  cursor: col-resize;
+  /* A drag on this must be a drag, not the start of a scroll gesture. */
+  touch-action: none;
+}
+
+.grip::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: transparent;
+}
+
+.grip:hover::after {
+  background: var(--line-strong);
+}
+
+.grip:focus-visible::after,
+.gripOn::after {
+  background: var(--accent);
+  width: 2px;
+}
+
+/* ── header ─────────────────────────────────────────────────────────────── */
+
+.head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  min-height: var(--bar-h);
+  padding: var(--sp-3) var(--sp-4) var(--sp-3) var(--sp-6);
+  box-shadow: inset 0 -1px 0 var(--line);
+}
+
+.titles {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.title {
+  margin: 0;
+  font-family: var(--tight);
+  font-size: var(--fs-body);
+  font-weight: 500;
+  letter-spacing: var(--ls-tight);
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sub {
+  margin: 0;
+  color: var(--fg3);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.modes {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r-ctrl);
+  background: var(--sunken);
+}
+
+.mode {
+  height: 20px;
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-chip);
+  color: var(--fg2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.mode:hover {
+  color: var(--fg);
+}
+
+.modeOn {
+  background: var(--sheet);
+  box-shadow: var(--el1);
+  color: var(--fg);
+}
+
+.ghost {
+  flex: 0 0 auto;
+  height: var(--ctl-h-sm);
+  padding: 0 var(--ctl-pad-sm);
+  border-radius: var(--r-ctrl);
+  color: var(--fg2);
+  font-size: var(--fs-ctl);
+  cursor: pointer;
+}
+
+.ghost:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.iconBtn {
+  flex: 0 0 auto;
+  width: var(--ctl-h-sm);
+  height: var(--ctl-h-sm);
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-ctrl);
+  color: var(--fg2);
+  cursor: pointer;
+}
+
+.iconBtn:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+/* ── the isolation notice ───────────────────────────────────────────────── */
+
+.seal {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: var(--sp-2) var(--sp-6);
+  background: var(--sunken);
+  box-shadow: inset 0 -1px 0 var(--line);
+  color: var(--fg3);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-body);
+}
+
+/* ── body ───────────────────────────────────────────────────────────────── */
+
+.body {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.frame {
+  flex: 1 1 0;
+  width: 100%;
+  border: 0;
+  /* A generated page assumes a page's background and rarely sets one. The
+     literal is the paper it was written for, not a theme colour: rendering it
+     on a dark surface would show it as it will never be seen. */
+  background: #fff;
+}
+
+.source {
+  flex: 1 1 0;
+  min-height: 0;
+  margin: 0;
+  padding: var(--sp-5) var(--sp-6);
+  background: var(--sunken);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-body);
+  overflow: auto;
+  /* The browser keeps a scroller's contents visually still as they grow, which
+     during a stream means silently scrolling away from the top. A document is
+     read from its first line; opting out is what keeps it there. */
+  overflow-anchor: none;
+}
+
+.diagramScroll {
+  flex: 1 1 0;
+  min-height: 0;
+  padding: var(--sp-8);
+  overflow: auto;
+}
+
+.diagram {
+  display: flex;
+  justify-content: center;
+}
+
+.diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* A diagram that will not draw shows its source rather than vanishing. */
+.diagramFailed {
+  margin: 0;
+  padding: var(--sp-5);
+  border-radius: var(--r-surf);
+  background: var(--tint-warn-soft);
+  font-size: var(--fs-xs);
+}
+
+.diagramFailed figcaption {
+  margin-bottom: var(--sp-3);
+  color: var(--warn-text);
+}
+
+.diagramFailed pre {
+  margin: 0;
+  font-family: var(--mono);
+  overflow-x: auto;
+}
+
+.diagramWhy {
+  margin: var(--sp-3) 0 0;
+  color: var(--fg3);
+  font-family: var(--mono);
+}
+
+/* Streaming: the page is not renderable yet, and a blank white frame reads as
+   a page that failed rather than one still being written. */
+.pending {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sunken);
+  color: var(--fg3);
+  font-size: var(--fs-xs);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pending {
+    animation: pendingPulse 1.4s var(--ease) infinite;
+  }
+}
+
+@keyframes pendingPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* ── footer ─────────────────────────────────────────────────────────────── */
+
+.foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-6);
+  box-shadow: inset 0 1px 0 var(--line);
+  color: var(--fg3);
+  font-size: var(--fs-micro);
+}
+
+/* ── the takeover ───────────────────────────────────────────────────────────
+ *
+ * 740px is `ARTIFACT_W_MIN + CONVERSATION_W_MIN` from `store.ts` — the width
+ * below which the two columns cannot both have their minimum. Squeezing anyway
+ * would give a 320px page a 200px column of six-word lines next to it, which is
+ * two unusable things instead of one usable one. So the panel takes the sheet
+ * over, the conversation waits behind it, and closing gives it straight back.
+ *
+ * Both constants are named in `store.ts`; keep this number equal to their sum.
+ */
+@container ask (max-width: 740px) {
+  .panel {
+    position: absolute;
+    inset: 0;
+    width: auto;
+    z-index: var(--z-sticky);
+    box-shadow: none;
+  }
+
+  /* Nothing to resize when there is only one column. */
+  .grip {
+    display: none;
+  }
+}

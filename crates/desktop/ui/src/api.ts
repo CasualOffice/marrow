@@ -201,6 +201,23 @@ export function addWorkspace(): Promise<readonly WorkspaceRow[] | null> {
   return call<readonly WorkspaceRow[] | null>("add_workspace", {});
 }
 
+/** One folder a question can be narrowed to. */
+export interface Project {
+  readonly path: string;
+  readonly files: number;
+}
+
+/**
+ * The projects a question can be scoped to.
+ *
+ * Derived from what is indexed rather than configured, and by the same rule the
+ * answer uses when it names which projects it drew from — the two have to agree,
+ * or narrowing to a project you were shown would not narrow to that project.
+ */
+export function listProjects(): Promise<readonly Project[]> {
+  return call<readonly Project[]>("list_projects", {});
+}
+
 export function indexHealth(): Promise<IndexHealth> {
   return call<IndexHealth>("index_health");
 }
@@ -588,7 +605,8 @@ export async function ask(
      * projects: "what is STT?" was answered from the STT service, an MFA
      * setting and a code of conduct at once.
      */
-    scope?: string;
+    /** Restrict retrieval to one project. `null` is every project. */
+    scope?: string | null;
   },
   onEvent: (e: AskEvent) => void,
 ): Promise<string> {

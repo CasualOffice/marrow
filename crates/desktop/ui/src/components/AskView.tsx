@@ -29,6 +29,7 @@ import {
   type ExcludedSource,
   type PriorTurn,
 } from "../api";
+import { useProjects } from "../queries";
 import { useUi } from "../store";
 
 interface Usage {
@@ -91,6 +92,9 @@ export function AskView() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [question, setQuestion] = useState("");
   const [thorough, setThorough] = useState(false);
+  // `null` is every project, which is the right default: narrowing is something
+  // you choose when you know you mean one, not a setting to get wrong first.
+  const [scope, setScope] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const askId = useRef<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
@@ -183,7 +187,7 @@ export function AskView() {
 
       try {
         askId.current = await ask(
-          { conversation, question: q, history, thorough: mode },
+          { conversation, question: q, history, thorough: mode, scope },
           onEvent,
         );
       } catch (e) {
@@ -201,7 +205,7 @@ export function AskView() {
         field.current?.focus();
       }
     },
-    [conversation, running, turns, update],
+    [conversation, running, scope, turns, update],
   );
 
   const stop = useCallback(() => {
@@ -268,6 +272,7 @@ export function AskView() {
         <div className={styles.controls}>
           {/* GEN-012: the switch is visible before the request is sent, next
               to what it costs, so the trade is legible while choosing. */}
+          <ScopePicker value={scope} onChange={setScope} disabled={running} />
           <div className={styles.modes} role="radiogroup" aria-label="Answer mode">
             {([false, true] as const).map((t) => (
               <button
@@ -315,6 +320,60 @@ export function AskView() {
  * that is not an edge case — it is the first thing anyone sees. The elapsed
  * counter is what makes a long load read as working rather than stuck.
  */
+/**
+ * Which project the question is about.
+ *
+ * **The gap this closes is the one that was reported.** One granted folder can
+ * hold many unrelated projects — this workspace is `~/Desktop/melp`, which
+ * contains a speech service, a vault, a task API and more — and retrieval had
+ * no notion that they were different things. Asking "what is STT?" answered
+ * from all of them at once, mixing in MFA settings and a Code of Conduct,
+ * because every one of those documents is genuinely in the workspace and
+ * genuinely contains the words.
+ *
+ * The projects come from the same derivation the answer uses when it names
+ * which ones it drew from, so narrowing to a project you were just shown
+ * narrows to that project.
+ *
+ * A native `select`, deliberately: it is one control, it is keyboard-navigable
+ * and screen-readable without any code of ours, and a custom menu here would be
+ * more chrome carrying no more meaning.
+ */
+function ScopePicker({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string | null;
+  onChange: (v: string | null) => void;
+  disabled: boolean;
+}) {
+  const projects = useProjects();
+  const rows = projects.data ?? [];
+  // Below two there is nothing to choose between, and a control offering a
+  // single option is furniture.
+  if (rows.length < 2) return null;
+
+  return (
+    <label className={styles.scope}>
+      <span className={styles.srOnly}>Limit the question to one project</span>
+      <select
+        className={styles.scopeSelect}
+        value={value ?? ""}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value === "" ? null : e.target.value)}
+      >
+        <option value="">All projects</option>
+        {rows.map((p) => (
+          <option key={p.path} value={p.path}>
+            {p.path} · {p.files.toLocaleString()}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function Waiting({ stage }: { stage: { stage: string; detail: string } }) {
   const [seconds, setSeconds] = useState(0);
   useEffect(() => {
