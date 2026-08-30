@@ -227,6 +227,57 @@ fn a_question_about_real_files_is_answered_from_them_with_a_citation() {
     );
 }
 
+/// **"What model are you using?" is not a question about the corpus.**
+///
+/// It was answered like one: retrieval found chunks containing the word
+/// "model" — Rust version pins, a pricing note about model downloads — and the
+/// answer reported that no model name appeared in the documents, offering
+/// "GPT-4" and "Llama-3" as examples of what it had not found. The footer of
+/// that same answer read `qwen3.5-4b-mlx-q4`. The system knew what it was; it
+/// simply never told itself.
+///
+/// The identity goes in as a FACT, carrying `trust=deterministic_runtime` —
+/// not as evidence, which is the user's files and describes their projects.
+#[test]
+fn the_runtime_tells_the_model_what_it_is_rather_than_leaving_it_to_the_corpus() {
+    let (_corpus, _db_dir, db) = indexed_corpus();
+    let core = Core::open(db).expect("core");
+    let mut convo = marrow_desktop::models::Conversation::default();
+
+    let (without, _, _) =
+        ask::assemble(&core, "what model are you?", &[], &mut convo, None, None).expect("assemble");
+    assert_eq!(
+        without.disclosure.fact_blocks, 0,
+        "no identity was supplied, so no FACT block should exist"
+    );
+
+    let mut convo = marrow_desktop::models::Conversation::default();
+    let (with, _, _) = ask::assemble(
+        &core,
+        "what model are you?",
+        &[],
+        &mut convo,
+        None,
+        Some("You are Marrow, running Qwen 3.5 4B (`qwen3.5-4b-mlx-q4`) locally.".into()),
+    )
+    .expect("assemble");
+
+    assert!(
+        with.text.contains("qwen3.5-4b-mlx-q4"),
+        "the model's own name never reached the prompt:\n{}",
+        with.text
+    );
+    assert!(
+        with.text.contains("DETERMINISTIC_RUNTIME"),
+        "identity must carry runtime trust, not evidence trust:\n{}",
+        with.text
+    );
+    assert_eq!(
+        with.disclosure.fact_blocks, 1,
+        "the disclosure must count the fact, so the UI can say what was sent"
+    );
+}
+
 /// Where do two turns' prompts stop matching? Diagnostic, and it needs no
 /// model — the envelope is assembled without one.
 #[test]
@@ -235,8 +286,15 @@ fn the_second_turns_prompt_shares_its_preamble_with_the_first() {
     let core = Core::open(db).expect("core");
     let mut convo = marrow_desktop::models::Conversation::default();
 
-    let (first, _, _) = ask::assemble(&core, "When does the lease renew?", &[], &mut convo, None)
-        .expect("assemble one");
+    let (first, _, _) = ask::assemble(
+        &core,
+        "When does the lease renew?",
+        &[],
+        &mut convo,
+        None,
+        None,
+    )
+    .expect("assemble one");
     let turns = ask::turns_from(&[
         ask::PriorTurn {
             role: "user".into(),
@@ -247,8 +305,15 @@ fn the_second_turns_prompt_shares_its_preamble_with_the_first() {
             text: "31 December 2031 [E1].".into(),
         },
     ]);
-    let (second, _, _) = ask::assemble(&core, "And what is the rent?", &turns, &mut convo, None)
-        .expect("assemble two");
+    let (second, _, _) = ask::assemble(
+        &core,
+        "And what is the rent?",
+        &turns,
+        &mut convo,
+        None,
+        None,
+    )
+    .expect("assemble two");
 
     let shared = first
         .text

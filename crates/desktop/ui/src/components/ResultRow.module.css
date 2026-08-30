@@ -181,3 +181,14 @@
   white-space: nowrap;
   min-height: 1em;
 }
+
+/* The matched line and the location are what gets pasted into an issue or a
+   terminal. The row itself stays unselectable — a drag across a virtualized
+   list is a scroll gesture, not a selection — but its content does not. */
+.excerpt,
+.excerptLine,
+.location {
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: auto;
+}

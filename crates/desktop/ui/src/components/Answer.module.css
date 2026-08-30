@@ -5,6 +5,13 @@
   flex-direction: column;
   gap: var(--sp-5);
   max-width: var(--prose-measure);
+  /* The window disables selection globally, because a stray drag across a
+     result list reads as a bug. An answer is not chrome — it is the thing the
+     user asked for, and a Copy button that takes all or nothing is not a
+     substitute for selecting the one paragraph you wanted. */
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: auto;
 }
 
 /* ── prose ──────────────────────────────────────────────────────────── */

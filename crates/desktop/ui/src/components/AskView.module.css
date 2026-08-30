@@ -515,3 +515,16 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
 }
+
+/* Content is selectable; chrome is not. The whole conversation — what you
+   asked, what came back, the excerpts it came from and the line that says
+   which model produced it — is text somebody will want to quote, and having to
+   screenshot it instead is a failure of the window, not of the reader. */
+.question,
+.sourceBody,
+.usage,
+.cutOff {
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: auto;
+}

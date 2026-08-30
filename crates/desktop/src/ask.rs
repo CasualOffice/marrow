@@ -21,7 +21,7 @@
 use std::sync::Arc;
 
 use marrow_core::{Code, ProvenanceClass, Result, SourceSpan};
-use marrow_model::envelope::{Builder, Envelope, Evidence, Role, Turn};
+use marrow_model::envelope::{Builder, Envelope, Evidence, Fact, Role, Turn};
 
 use crate::models::Conversation;
 use marrow_model::provider::Token;
@@ -46,8 +46,18 @@ rather than guessing. Use Markdown. When a diagram would be clearer than \
 prose, write a ```mermaid block.";
 
 /// What the window receives while an answer is being produced.
+///
+/// **`rename_all_fields`, not just `rename_all`.** On an enum, `rename_all`
+/// renames the *variants*; the fields inside them keep their Rust spelling.
+/// The window reads camelCase, so every multi-word field arrived as
+/// `undefined` and every answer's footer read `tokens in NaNm NaNs`. Nothing
+/// failed and nothing logged — the values simply were not there.
 #[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase", tag = "kind")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 pub enum AskEvent {
     /// What the pipeline is doing right now.
     ///
@@ -154,6 +164,11 @@ pub fn assemble(
     history: &[Turn],
     convo: &mut Conversation,
     embedding: Option<&marrow_index::Embedding>,
+    // `identity`: what this runtime is. Goes in as a FACT, not as evidence —
+    // it is deterministic knowledge the runtime has about itself, where the
+    // evidence blocks are the user's files, which describe their projects and
+    // not this program.
+    identity: Option<String>,
 ) -> Result<(Envelope, Vec<Citation>, Vec<Excluded>)> {
     // `retrieve` reduces the question for the lexical branch itself; the
     // embedding is of the question as asked, because the words that carry no
@@ -162,6 +177,14 @@ pub fn assemble(
     let chunks = carry_forward(&mut convo.sent, fresh);
 
     let mut builder = Builder::new(SYSTEM, question);
+    if let Some(text) = identity {
+        builder = builder.fact(Fact {
+            id: "F1".into(),
+            text,
+            source: "the running system".into(),
+            span: None,
+        });
+    }
     let mut citations = Vec::new();
     let mut excluded = Vec::new();
 
@@ -309,7 +332,31 @@ pub fn run(
     // when no embedding model is installed or the backfill has not run, and
     // that is the ordinary state rather than a failure.
     let embedding = hub.embed_query(question);
-    let assembled = assemble(core, question, history, &mut convo, embedding.as_ref());
+
+    // Resolved before assembly, because the envelope has to be able to say
+    // which model is answering. "What model are you using?" was previously
+    // answered from the corpus — the pipeline retrieved chunks containing the
+    // word "model" and reported that no model name appeared in the documents,
+    // while the footer of that same answer named the model.
+    let generator = match hub.generator() {
+        Some(g) => g,
+        None => {
+            emit(AskEvent::Failed {
+                code: Code::ModNotInstalled.as_str().into(),
+                message: no_generator_message(hub),
+            });
+            return;
+        }
+    };
+
+    let assembled = assemble(
+        core,
+        question,
+        history,
+        &mut convo,
+        embedding.as_ref(),
+        Some(hub.identity(&generator, thorough)),
+    );
     hub.keep_session(conversation, convo);
 
     let (envelope, citations, excluded) = match assembled {
@@ -318,17 +365,6 @@ pub fn run(
             emit(AskEvent::Failed {
                 code: e.code().as_str().into(),
                 message: e.message().into(),
-            });
-            return;
-        }
-    };
-
-    let generator = match hub.generator() {
-        Some(g) => g,
-        None => {
-            emit(AskEvent::Failed {
-                code: Code::ModNotInstalled.as_str().into(),
-                message: no_generator_message(hub),
             });
             return;
         }
@@ -560,5 +596,51 @@ mod tests {
     fn the_chunk_budget_is_in_the_documented_range() {
         // ASK-003: fewer starves the answer, more dilutes it.
         assert!((5..=15).contains(&MAX_CHUNKS));
+    }
+}
+
+#[cfg(test)]
+mod wire {
+    use super::*;
+
+    /// The window reads these field names. `rename_all` on an enum renames the
+    /// **variants**, not their fields — so every multi-word field went out as
+    /// snake_case while the UI read camelCase, and every answer's footer said
+    /// `tokens in NaNm NaNs`. Nothing failed; the values were simply not there.
+    #[test]
+    fn every_event_field_reaches_the_window_under_the_name_it_reads() {
+        let done = serde_json::to_value(AskEvent::Done {
+            prompt_tokens: 1,
+            output_tokens: 2,
+            thinking_tokens: 3,
+            cached_prefix_tokens: 4,
+            stop_reason: "stop".into(),
+            elapsed_ms: 5,
+        })
+        .expect("serialize");
+        for k in [
+            "promptTokens",
+            "outputTokens",
+            "thinkingTokens",
+            "cachedPrefixTokens",
+            "stopReason",
+            "elapsedMs",
+        ] {
+            assert!(done.get(k).is_some(), "Done is missing `{k}`: {done}");
+        }
+
+        let sources = serde_json::to_value(AskEvent::Sources {
+            hits: Vec::new(),
+            excluded: Vec::new(),
+            bytes: 10,
+            distinct_sources: 3,
+            boundary: "local".into(),
+            model: "m".into(),
+        })
+        .expect("serialize");
+        assert!(
+            sources.get("distinctSources").is_some(),
+            "Sources is missing `distinctSources`: {sources}"
+        );
     }
 }

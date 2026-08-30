@@ -513,6 +513,40 @@ impl Hub {
     /// the profile's budget a larger model is better at the one job this is
     /// for. Embedders are excluded — they do not answer — and so is anything
     /// the current conditions would refuse anyway.
+    /// What this runtime is, in words, for the envelope's FACT block.
+    ///
+    /// **"What model are you using?" is not a question about the corpus**, and
+    /// until this existed it was answered like one: the pipeline retrieved
+    /// chunks containing the word "model", found Rust version pins and a
+    /// pricing note about model downloads, and reported that no model name was
+    /// listed in the documents — while the footer of that very answer read
+    /// `qwen3.5-4b-mlx-q4`. The system knew; it just never told itself.
+    pub fn identity(&self, model_id: &str, thorough: bool) -> String {
+        let name = self
+            .registry
+            .lock()
+            .ok()
+            .and_then(|r| {
+                r.iter()
+                    .find(|e| e.id == model_id)
+                    .map(|e| e.display_name.clone())
+            })
+            .unwrap_or_else(|| model_id.to_string());
+        format!(
+            "You are Marrow. You are running {name} (`{model_id}`) locally on this \
+             machine, through MLX on Apple Silicon. No question, file or answer is \
+             sent to any external service. You are currently in {} mode. This block \
+             is what you know about yourself: answer questions about which model you \
+             are, or where you run, from it — never from the evidence blocks, which \
+             are the user's own files and describe their projects, not you.",
+            if thorough {
+                "Thorough (you reason before answering)"
+            } else {
+                "Fast (you answer directly)"
+            }
+        )
+    }
+
     pub fn generator(&self) -> Option<String> {
         self.sampler.tick();
         let available = self
