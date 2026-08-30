@@ -46,6 +46,22 @@ PRAGMA query_only   = ON;
 ";
 
 /// The M1 tables, in dependency order. Used by tests and diagnostics.
+/// Tables added after M1, in migration order. Kept apart from [`M1_TABLES`] so
+/// the M1 staging assertion still means what it says.
+///
+/// The text index's own tables are not here: they live in `marrow-index` and
+/// are applied through the same chain from there.
+pub const LATER_TABLES: &[&str] = &["self_written"];
+
+/// Every table this build expects to find.
+pub fn all_tables() -> Vec<&'static str> {
+    M1_TABLES
+        .iter()
+        .chain(LATER_TABLES.iter())
+        .copied()
+        .collect()
+}
+
 pub const M1_TABLES: &[&str] = &[
     "schema_meta",
     "devices",
@@ -328,6 +344,45 @@ pub fn apply_reader_pragmas(conn: &Connection) -> Result<()> {
     })
 }
 
+/// Migration 3: what this system wrote itself.
+///
+/// Three, not two: the chain is numbered across crates and the text index
+/// occupies 2. See `migrate::MIGRATIONS`.
+///
+/// **Invariant #9 lives or dies here.** `files.origin` defaults to `'USER'`,
+/// and a scan has no way to tell agent output from a document the user typed —
+/// so without this table the next reconciliation reclassifies everything the
+/// write tools produced as the user's own work, and it becomes citable
+/// evidence. The system then quotes itself back as independent corroboration,
+/// which is the exact failure the invariant exists to prevent.
+///
+/// Keyed on the **content hash**, not the path:
+///
+/// - A copy of an agent-written file is still agent-written. Same bytes, same
+///   authorship, wherever it now lives.
+/// - A file the user edits stops matching, and becomes theirs again. That is
+///   the right reading: they changed it, so they wrote it.
+/// - Two files with identical bytes share a row. Dedup is a feature here too.
+///
+/// The one false positive: if the tools write bytes byte-identical to a
+/// document the user already had, that document is treated as self-written and
+/// stops being citable. Rare, and it errs toward refusing to cite rather than
+/// toward citing — which is the safe direction, because the failure this
+/// invariant guards against is citing, not omitting.
+pub const SCHEMA_V3: &str = r#"
+CREATE TABLE self_written (
+    content_hash TEXT PRIMARY KEY,
+    -- The path at the time of writing. Diagnostic only: identity is the hash,
+    -- because a path is never identity (invariant #2).
+    written_path TEXT NOT NULL,
+    -- The action that produced it, so a forget path can undo one write.
+    txn_id       TEXT NOT NULL,
+    tool         TEXT NOT NULL,
+    written_at   INTEGER NOT NULL
+);
+CREATE INDEX idx_self_written_at ON self_written(written_at);
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,6 +409,29 @@ mod tests {
         let mut want: Vec<String> = M1_TABLES.iter().map(|s| s.to_string()).collect();
         want.sort();
         assert_eq!(found, want, "M1 table set drifted from ROADMAP staging");
+    }
+
+    #[test]
+    fn every_migration_after_the_first_declares_the_tables_it_adds() {
+        // `all_tables()` is what the invariant test counts against a live
+        // database. A migration that creates a table without listing it there
+        // turns that assertion into a slow-burning lie.
+        let conn = Connection::open_in_memory().unwrap();
+        for m in crate::migrate::MIGRATIONS {
+            conn.execute_batch(m.up).unwrap();
+        }
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+            .unwrap();
+        let mut found: Vec<String> = stmt
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        found.sort();
+        let mut want: Vec<String> = all_tables().iter().map(|s| s.to_string()).collect();
+        want.sort();
+        assert_eq!(found, want, "table set drifted from the migration chain");
     }
 
     #[test]

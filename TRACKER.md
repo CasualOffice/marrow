@@ -35,8 +35,8 @@ so this is a dependency rather than a detour.
 | S5 | Ask pipeline (§148), streaming, Markdown/Mermaid/HTML | `[x]` | A conversation, not a one-shot box |
 | S5b | Eval harness across the shortlist (§149) | `[ ]` | Two measurements taken; no harness yet |
 | S6 | Cloud providers behind the same trait | `[ ]` | — |
-| S7 | Creation tools (file, mermaid, html) | `[~]` | Corpus green, guard built; **MCP wiring left** |
-| S8 | Fetch and research | `[~]` | Policy written, client built; **MCP wiring left** |
+| S7 | Creation tools (file, mermaid, html) | `[x]` | Wired to MCP; `origin = SELF` persisted and survives a reindex |
+| S8 | Fetch and research | `[~]` | Wired to MCP; **confirmation prompt and multi-step research left** |
 
 ---
 
@@ -239,10 +239,13 @@ nobody is asking.
 - [x] One guarded write path: canonicalize at operation time, refuse excluded
   and protected subtrees, stale-check at commit, atomic rename, `origin = SELF`
 - [x] `create_file` / `create_diagram` / `create_page`
-- [ ] **MCP wiring, and the part it must not skip:** `Written::origin()` is
-  returned but nothing persists it. Until the write path records
-  `origin = 'SELF'`, the next scan reclassifies agent output as the user's own
-  and it becomes citable — invariant #9 is only half closed
+- [x] **MCP wiring, including the part it must not skip.** Migration 3 adds
+  `self_written`, keyed on content hash; the handler records a row before it
+  reports success; ingest reads the set once per run and sets `files.origin`
+  and the index doc's origin from it. Six tests cover it, including that the
+  record survives a reindex and that a file the user edits becomes theirs again
+- [x] `create_diagram` now refuses prose. It documented "starting with its
+  type" and accepted anything non-empty
 
 ### S8 — fetch and research `[~]`
 - [x] **The policy**, written first: [Part 9](docs/Part_9_Egress.md), 63 `NET-`
@@ -252,7 +255,11 @@ nobody is asking.
   on every redirect, caps bytes, time and hops, and returns what was disclosed
 - [x] 44 of 63 requirements have a named test; 14 are structural; 3 are
   deferred to the UI; 2 are implemented and honestly marked untested
-- [ ] MCP wiring, and the confirmation prompt half of NET-018/023/024/050/058
+- [x] MCP wiring. A fetch needing confirmation is **refused** over MCP rather
+  than silently granted — there is no one to ask on that surface, and treating
+  that as consent would make the rule decorative
+- [ ] The confirmation prompt itself (NET-018/023/024/050/058), which needs a
+  surface that can ask
 - [ ] Multi-step research on top of it
 
 ---

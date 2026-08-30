@@ -30,11 +30,23 @@ pub struct Migration {
 }
 
 /// The migration chain. Append only — never edit a shipped entry.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "m1_core_schema",
-    up: schema::SCHEMA_V1,
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "m1_core_schema",
+        up: schema::SCHEMA_V1,
+    },
+    // **Version 3, not 2.** The numbered chain is global across crates: the
+    // text index inserts itself at 2 (`marrow_index::fts5::MIGRATION`), and a
+    // database in the field already has it there. Taking 2 here would mean
+    // re-running a migration that has already been applied, on every existing
+    // index, with the table already present.
+    Migration {
+        version: 3,
+        name: "m3_self_written",
+        up: schema::SCHEMA_V3,
+    },
+];
 
 /// The schema version this build writes.
 pub fn target_version() -> i64 {
@@ -294,10 +306,23 @@ mod tests {
     }
 
     #[test]
-    fn migration_versions_are_dense_and_ascending() {
-        for (i, m) in MIGRATIONS.iter().enumerate() {
-            assert_eq!(m.version, i as i64 + 1, "migrations are numbered from 1");
+    fn migration_versions_ascend_and_never_repeat() {
+        // Ascending and unique, not *dense*. The chain is numbered across
+        // crates — `marrow_index::fts5::MIGRATION` holds 2 and is composed in
+        // at open time — so this crate's own list legitimately has holes in it.
+        // `marrow-index` asserts the composed chain is contiguous, which is
+        // the property that actually matters.
+        let mut last = 0;
+        for m in MIGRATIONS {
+            assert!(
+                m.version > last,
+                "migration {} ({}) does not come after {last}",
+                m.version,
+                m.name
+            );
+            last = m.version;
         }
+        assert_eq!(MIGRATIONS[0].version, 1, "the chain starts at 1");
     }
 
     #[test]
@@ -351,37 +376,40 @@ mod tests {
         let dir = tmp();
         let db = dir.path().join("marrow.sqlite");
         let loc = Location::File(db.clone());
-        {
-            let (conn, _) = open_migrated(&loc).unwrap();
+        let before = {
+            let (conn, v) = open_migrated(&loc).unwrap();
             conn.execute(
                 "INSERT INTO devices (device_id, platform, first_seen_at, last_seen_at)
                  VALUES ('dev-1', 'macos', 1, 1)",
                 [],
             )
             .unwrap();
-        }
+            v
+        };
 
-        // v2 commits a destructive change, v3 then fails. Only a real restore
-        // brings `devices` back.
-        let bad = [
-            MIGRATIONS[0],
-            Migration {
-                version: 2,
-                name: "drops_devices",
-                up: "DROP TABLE devices;",
-            },
-            Migration {
-                version: 3,
-                name: "explodes",
-                up: "CREATE TABLE oops (x INTEGER REFERENCES nowhere(y)); INSERT INTO oops VALUES (1);",
-            },
-        ];
+        // The shipped chain, then a destructive step that commits, then one
+        // that fails. Only a real restore brings `devices` back.
+        //
+        // Built on top of `MIGRATIONS` rather than replacing it, so appending
+        // a real migration cannot silently turn this into a different test.
+        let mut chain: Vec<Migration> = MIGRATIONS.to_vec();
+        chain.push(Migration {
+            version: before + 1,
+            name: "drops_devices",
+            up: "DROP TABLE devices;",
+        });
+        chain.push(Migration {
+            version: before + 2,
+            name: "explodes",
+            up: "CREATE TABLE oops (x INTEGER REFERENCES nowhere(y)); INSERT INTO oops VALUES (1);",
+        });
+        let bad = chain;
         let err = open_migrated_with(&loc, &bad).unwrap_err();
         assert_eq!(err.code(), Code::DbMigrationFailed);
 
         let (conn, v) = open_migrated(&loc).unwrap();
         assert_eq!(
-            v, 1,
+            v, before,
             "restored database is back at the pre-migration version"
         );
         let n: i64 = conn

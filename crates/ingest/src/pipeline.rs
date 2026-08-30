@@ -1,6 +1,6 @@
 //! The staged ingest pipeline.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread;
@@ -202,6 +202,11 @@ pub fn ingest_root_with_index(
     // milliseconds.
     let conn = store.reader()?;
 
+    // Loaded once for the run. The set is one row per file the write tools ever
+    // produced, so it is small; a query per file would put a round trip in the
+    // hot loop for a check that is almost always negative.
+    let self_written = marrow_store::read::self_written_hashes(&conn)?;
+
     // Writes are SENT, not submitted. `Store`'s convenience helpers call
     // `submit`, which is `send().wait()` — so every file would block until its
     // batch committed, up to `max_batch_interval` (100 ms). Across a real
@@ -225,7 +230,15 @@ pub fn ingest_root_with_index(
         if let Some(e) = &h.hash_error {
             outcome.note_failure(e, &h.path);
         }
-        match record(store, &conn, workspace_id, root_id, &h, &mut inflight) {
+        match record(
+            store,
+            &conn,
+            workspace_id,
+            root_id,
+            &h,
+            &self_written,
+            &mut inflight,
+        ) {
             Ok(Some(ids)) => {
                 progress.bump(Stage::Stored);
                 outcome.stored += 1;
@@ -238,6 +251,7 @@ pub fn ingest_root_with_index(
                         workspace_id,
                         &h,
                         &ids,
+                        &self_written,
                         &mut inflight,
                     ) {
                         Ok(n) if n > 0 => {
@@ -342,6 +356,11 @@ pub fn apply_hints(
 ) -> Result<IngestOutcome> {
     let mut outcome = IngestOutcome::default();
     let conn = store.reader()?;
+
+    // Same reason as the full run: one row per file the write tools produced,
+    // and a query per file would be a round trip for a check that is almost
+    // always negative.
+    let self_written = marrow_store::read::self_written_hashes(&conn)?;
     let mut inflight: Vec<Pending<()>> = Vec::new();
     let router = marrow_parse::ParserRouter::with_default_parsers();
 
@@ -403,7 +422,15 @@ pub fn apply_hints(
         if let Some(e) = &h.hash_error {
             outcome.note_failure(e, &h.path);
         }
-        match record(store, &conn, workspace_id, root_id, &h, &mut inflight) {
+        match record(
+            store,
+            &conn,
+            workspace_id,
+            root_id,
+            &h,
+            &self_written,
+            &mut inflight,
+        ) {
             Ok(Some(ids)) => {
                 outcome.stored += 1;
                 progress.bump(Stage::Stored);
@@ -416,6 +443,7 @@ pub fn apply_hints(
                         workspace_id,
                         &h,
                         &ids,
+                        &self_written,
                         &mut inflight,
                     ) {
                         outcome.chunks += n as u64;
@@ -561,17 +589,35 @@ fn hash_one(entry: &ScanEntry, max_bytes: u64, progress: &Progress) -> Option<Ha
     })
 }
 
+/// Whether this system wrote these bytes (invariant #9).
+///
+/// Keyed on content, not path: a copy of agent output is still agent output,
+/// and a file the user edits stops matching and becomes theirs again — which
+/// is the right reading, because they changed it.
+fn origin_of(h: &Hashed, self_written: &HashSet<ContentHash>) -> Origin {
+    match h.hash {
+        Some(hash) if self_written.contains(&hash) => Origin::SelfWritten,
+        // A file with no hash was not read, so nothing is known about its
+        // authorship. `User` is the default the schema already applies, and it
+        // is the only honest answer.
+        _ => Origin::User,
+    }
+}
+
 /// Record one observation. Returns `true` if anything was written.
 ///
 /// **Path is never identity** (invariant #2): a file is found by filesystem
 /// identity first, so a rename keeps its `FileId` and its derived data. Only
 /// when identity is unavailable or unknown do we fall back to path.
+#[allow(clippy::too_many_arguments)] // Each is a distinct input; a struct would
+                                     // move the list rather than shorten it.
 fn record(
     store: &Store,
     conn: &ReadConn,
     workspace_id: WorkspaceId,
     root_id: RootId,
     h: &Hashed,
+    self_written: &HashSet<ContentHash>,
     inflight: &mut Vec<Pending<()>>,
 ) -> Result<Option<RecordedIds>> {
     let now = Timestamp::now();
@@ -613,7 +659,12 @@ fn record(
             current_path: Some(h.path.clone()),
             fs_identity: Some(h.fs_identity.clone()),
             tier_state: h.tier,
-            origin: Origin::User,
+            // **Invariant #9.** `files.origin` defaults to `'USER'` and a scan
+            // cannot tell agent output from something the user typed, so
+            // without this lookup everything the write tools produced comes
+            // back as the user's own work and becomes citable — and the system
+            // quotes itself as independent corroboration.
+            origin: origin_of(h, self_written),
             origin_txn_id: None,
             external_source_url: None,
             status: FileStatus::Active,
@@ -655,6 +706,20 @@ fn record(
 
     let mut ids = None;
     if changed {
+        // Authorship follows the bytes (invariant #9). Decided once at
+        // discovery and never revisited, a file the user edited would stay
+        // marked as the system's own and be silently excluded from their own
+        // answers — and one the system rewrote would stay citable.
+        let origin = origin_of(h, self_written);
+        if origin != file.origin {
+            let id = file.file_id;
+            inflight.push(
+                store
+                    .writer()
+                    .send(move |c| marrow_store::read::set_file_origin(c, id, origin, now))?,
+            );
+        }
+
         let v = new_version(file.file_id, h, now);
         ids = Some(RecordedIds {
             file_id: file.file_id,
@@ -694,6 +759,7 @@ fn extract(
     workspace_id: WorkspaceId,
     h: &Hashed,
     ids: &RecordedIds,
+    self_written: &HashSet<ContentHash>,
     inflight: &mut Vec<Pending<()>>,
 ) -> Result<usize> {
     // **Invariant #5** guards the open itself, not a caller's discipline.
@@ -715,7 +781,9 @@ fn extract(
         size: h.size,
         tier: h.tier,
         modified: h.mtime,
-        origin: Origin::User,
+        // The chunk carries the same origin as the file, so a citation cannot
+        // be built from agent output even if the file row is read separately.
+        origin: origin_of(h, self_written),
     };
 
     let extracted = documents_for(router, &policy.chunking, &input, &bytes)?;

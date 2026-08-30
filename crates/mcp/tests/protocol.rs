@@ -249,3 +249,190 @@ fn index_status_never_hides_the_cloud_only_count() {
         "the count must always be present, even at zero"
     );
 }
+
+// ── write tools ───────────────────────────────────────────────────────────
+
+/// Invariant #9, at the seam where it is easiest to skip.
+///
+/// `marrow-tools` returns `origin = SELF` and the ingest pipeline reads it back
+/// from `self_written` — but only if something wrote that row. A handler that
+/// forgets is the whole failure: the write succeeds, the model is told it is
+/// uncitable, and the next scan disagrees.
+mod writes {
+    use super::*;
+    use serde_json::json;
+
+    /// Like `fixture`, but keeps the database path so a test can read back
+    /// what the handler recorded. The `Store` itself moves into the server —
+    /// there is one writer, and a second would be a second writer.
+    struct WriteFixture {
+        _dir: tempfile::TempDir,
+        root: std::path::PathBuf,
+        db: std::path::PathBuf,
+        server: Server,
+    }
+
+    impl WriteFixture {
+        /// A read-only connection, for asserting on what the handler wrote.
+        fn read(&self) -> rusqlite::Connection {
+            rusqlite::Connection::open(&self.db).unwrap()
+        }
+    }
+
+    fn fixture_with_root() -> WriteFixture {
+        let (dir, server) = fixture();
+        let root = dir.path().to_path_buf();
+        let db = root.join("marrow.sqlite");
+        WriteFixture {
+            _dir: dir,
+            root,
+            db,
+            server,
+        }
+    }
+
+    fn call(server: &Server, name: &str, args: serde_json::Value) -> serde_json::Value {
+        let out = exchange(
+            server,
+            &[json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": name, "arguments": args }
+            })],
+        );
+        out.into_iter().next().expect("a call gets a response")
+    }
+
+    fn is_error(v: &serde_json::Value) -> bool {
+        v.pointer("/result/isError").and_then(|b| b.as_bool()) == Some(true)
+    }
+
+    fn text(v: &serde_json::Value) -> String {
+        v.pointer("/result/content/0/text")
+            .and_then(|t| t.as_str())
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    #[test]
+    fn a_created_file_is_recorded_as_self_written_not_merely_reported_as_such() {
+        let f = fixture_with_root();
+        let out = call(
+            &f.server,
+            "create_file",
+            json!({ "path": "notes/summary.md", "body": "# Summary\n\nAs concluded.\n" }),
+        );
+        assert!(!is_error(&out), "{}", text(&out));
+        assert!(text(&out).contains("self_written"), "{}", text(&out));
+
+        // The row is the point. Without it the next scan calls this the user's
+        // own work and it becomes citable.
+        let conn = f.read();
+        let (n, tool): (i64, String) = conn
+            .query_row(
+                "SELECT count(*), COALESCE(max(tool), '') FROM self_written",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "the write was not recorded");
+        assert_eq!(tool, "create_file");
+    }
+
+    #[test]
+    fn creating_over_an_existing_file_is_refused_with_the_reason() {
+        let f = fixture_with_root();
+        std::fs::write(f.root.join("taken.md"), "the user's work").unwrap();
+        let out = call(
+            &f.server,
+            "create_file",
+            json!({ "path": "taken.md", "body": "mine now" }),
+        );
+        assert!(is_error(&out));
+        assert!(text(&out).contains("already exists"), "{}", text(&out));
+        assert_eq!(
+            std::fs::read_to_string(f.root.join("taken.md")).unwrap(),
+            "the user's work",
+            "the file was overwritten anyway"
+        );
+    }
+
+    #[test]
+    fn a_path_that_leaves_the_workspace_is_refused() {
+        let f = fixture_with_root();
+        let out = call(
+            &f.server,
+            "create_file",
+            json!({ "path": "../escaped.md", "body": "x" }),
+        );
+        assert!(is_error(&out));
+        assert!(!f.root.parent().unwrap().join("escaped.md").exists());
+    }
+
+    #[test]
+    fn a_diagram_must_actually_be_a_diagram() {
+        let f = fixture_with_root();
+        let out = call(
+            &f.server,
+            "create_diagram",
+            json!({ "path": "flow.md", "mermaid": "just some prose" }),
+        );
+        assert!(is_error(&out), "{}", text(&out));
+    }
+
+    #[test]
+    fn a_fetch_that_needs_confirmation_is_refused_rather_than_silently_granted() {
+        // There is no one to ask over MCP. Treating that as consent would make
+        // the confirmation rule decorative.
+        let f = fixture_with_root();
+        let out = call(
+            &f.server,
+            "fetch_url",
+            json!({ "url": "https://example.com/" }),
+        );
+        assert!(is_error(&out));
+        assert!(text(&out).contains("no way to ask"), "{}", text(&out));
+    }
+
+    #[test]
+    fn a_plain_http_url_is_refused_without_reaching_the_network() {
+        let f = fixture_with_root();
+        let out = call(
+            &f.server,
+            "fetch_url",
+            json!({ "url": "http://127.0.0.1:80/" }),
+        );
+        assert!(is_error(&out));
+    }
+
+    #[test]
+    fn every_write_tool_says_what_it_refuses_and_what_it_costs() {
+        // An MCP schema is the only documentation the model gets. A tool that
+        // writes to the user's disk or sends a request off the machine and does
+        // not say so in its description is a trap.
+        for t in marrow_mcp::tools::WRITE_TOOLS {
+            assert!(
+                t.description.contains("Refuses") || t.description.contains("refus"),
+                "{} does not say what it refuses",
+                t.name
+            );
+        }
+        let fetch = marrow_mcp::tools::WRITE_TOOLS
+            .iter()
+            .find(|t| t.name == "fetch_url")
+            .unwrap();
+        assert!(
+            fetch.description.contains("off the machine"),
+            "fetch_url must say that it is egress"
+        );
+        for t in marrow_mcp::tools::WRITE_TOOLS
+            .iter()
+            .filter(|t| t.name != "fetch_url")
+        {
+            assert!(
+                t.description.contains("evidence") || t.description.contains("cite"),
+                "{} must say its output cannot be cited",
+                t.name
+            );
+        }
+    }
+}

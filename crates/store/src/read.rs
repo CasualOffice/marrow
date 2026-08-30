@@ -1326,3 +1326,99 @@ pub fn chunk_count(conn: &Connection) -> Result<i64> {
     )
     .map_err(|e| crate::map_sqlite(e, "counting chunks"))
 }
+
+/// Re-classify a file's authorship.
+///
+/// Called when its content changed: authorship follows the bytes, so a file the
+/// user edits stops being the system's and a file the system rewrites becomes
+/// its own again. Without this, `origin` is decided once at discovery and never
+/// revisited, which makes an edited file permanently uncitable — the user's own
+/// work, silently excluded from their own answers.
+pub fn set_file_origin(
+    conn: &Connection,
+    file_id: FileId,
+    origin: Origin,
+    at: Timestamp,
+) -> Result<()> {
+    q(
+        conn.execute(
+            "UPDATE files SET origin = ?2, updated_at = ?3 WHERE file_id = ?1",
+            params![file_id.to_string(), origin_sql(origin), at.as_millis()],
+        ),
+        "Could not update who wrote that file.",
+    )?;
+    Ok(())
+}
+
+// ------------------------------------------------------------- self-written
+
+/// Record that this system wrote these bytes (invariant #9).
+///
+/// Idempotent on the hash: writing the same content twice is one fact, not
+/// two, and re-running a failed action must not double-count.
+pub fn record_self_written(
+    conn: &Connection,
+    content_hash: ContentHash,
+    written_path: &str,
+    txn_id: &str,
+    tool: &str,
+    at: Timestamp,
+) -> Result<()> {
+    q(
+        conn.execute(
+            "INSERT INTO self_written (content_hash, written_path, txn_id, tool, written_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(content_hash) DO UPDATE SET
+                 written_path = excluded.written_path,
+                 txn_id       = excluded.txn_id,
+                 tool         = excluded.tool,
+                 written_at   = excluded.written_at",
+            params![
+                content_hash.to_hex(),
+                written_path,
+                txn_id,
+                tool,
+                at.as_millis()
+            ],
+        ),
+        "Could not record that this system wrote that file. It would then be \
+         treated as your own work and cited back; the write was not recorded.",
+    )?;
+    Ok(())
+}
+
+/// Every hash this system wrote.
+///
+/// Loaded once per ingest run rather than queried per file: the set is small
+/// (one row per file the tools ever produced) and a query per file would put a
+/// round trip in the hot loop for a check that is almost always negative.
+pub fn self_written_hashes(conn: &Connection) -> Result<std::collections::HashSet<ContentHash>> {
+    let mut stmt = q(
+        conn.prepare("SELECT content_hash FROM self_written"),
+        "Could not read the record of what this system wrote.",
+    )?;
+    let rows = q(
+        stmt.query_map([], |r| r.get::<_, String>(0)),
+        "Could not read the record of what this system wrote.",
+    )?;
+    let mut out = std::collections::HashSet::new();
+    for row in rows {
+        let hex = q(row, "Could not read a self-written record.")?;
+        if let Some(h) = ContentHash::from_hex(&hex) {
+            out.insert(h);
+        }
+    }
+    Ok(out)
+}
+
+/// Forget one write. Used by the forget path; the file itself is not touched.
+pub fn forget_self_written(conn: &Connection, content_hash: ContentHash) -> Result<bool> {
+    let n = q(
+        conn.execute(
+            "DELETE FROM self_written WHERE content_hash = ?1",
+            [content_hash.to_hex()],
+        ),
+        "Could not forget that write.",
+    )?;
+    Ok(n > 0)
+}

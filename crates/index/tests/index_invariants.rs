@@ -979,10 +979,26 @@ fn the_migration_is_idempotent_and_records_its_version() {
         .expect("version recorded")
     });
     assert_eq!(version, fts5::TEXT_INDEX_VERSION.to_string());
+    // The chain is numbered across crates, and this crate holds one number in
+    // it. What has to be true is that the composed chain is contiguous and
+    // ascending — not that this migration is last, which stopped being true
+    // the moment the store added one after it.
+    let mut composed: Vec<i64> = marrow_store::migrate::MIGRATIONS
+        .iter()
+        .map(|m| m.version)
+        .chain(std::iter::once(fts5::MIGRATION.version))
+        .collect();
+    composed.sort_unstable();
     assert_eq!(
-        fts5::MIGRATION.version,
-        marrow_store::migrate::target_version() + 1,
-        "the text index migration must be the next number in the store's chain"
+        composed,
+        (1..=composed.len() as i64).collect::<Vec<_>>(),
+        "the composed migration chain must be contiguous from 1: {composed:?}"
+    );
+    assert!(
+        !marrow_store::migrate::MIGRATIONS
+            .iter()
+            .any(|m| m.version == fts5::MIGRATION.version),
+        "the store took the number this crate occupies; one of them would be skipped"
     );
 
     // Opening again, and calling the migration directly again, both no-op.

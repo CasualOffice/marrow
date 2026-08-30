@@ -364,7 +364,7 @@ fn backup_exists_before_a_migration_runs() {
         "the backup was taken before the migration, not after"
     );
 
-    // The live database, by contrast, has the M1 schema.
+    // The live database, by contrast, has the whole schema.
     let live: i64 = store
         .reader()
         .unwrap()
@@ -374,7 +374,7 @@ fn backup_exists_before_a_migration_runs() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(live as usize, marrow_store::schema::M1_TABLES.len());
+    assert_eq!(live as usize, marrow_store::schema::all_tables().len());
 }
 
 // --------------------------------------------------------------------- crash

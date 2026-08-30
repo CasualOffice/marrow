@@ -10,9 +10,12 @@ publish.workspace = true
 marrow-core.workspace = true
 marrow-store.workspace = true
 marrow-index.workspace = true
+marrow-tools.workspace = true
+marrow-net.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+rusqlite = { workspace = true }
 tempfile = "3"

@@ -59,6 +59,88 @@ pub fn create_file(ws: &Workspace, req: &CreateFile) -> Result<Written> {
     ws.write(&req.path, req.body.as_bytes(), &req.expect)
 }
 
+/// The diagram types this build recognises.
+///
+/// Checked because the common failure of a diagram tool is prose: a model that
+/// has something to say writes it here, the file is created, and nothing
+/// renders it. Mermaid's real grammar needs a parser; the first word does not,
+/// and it catches that case.
+///
+/// A type Mermaid has added since is refused, which is why the message names
+/// the list rather than saying "invalid" — the fix is then obvious and it is
+/// one line.
+const MERMAID_TYPES: &[&str] = &[
+    "architecture-beta",
+    "block-beta",
+    "block",
+    "C4Context",
+    "C4Container",
+    "C4Component",
+    "C4Dynamic",
+    "C4Deployment",
+    "classDiagram",
+    "classDiagram-v2",
+    "erDiagram",
+    "flowchart",
+    "flowchart-elk",
+    "gantt",
+    "gitGraph",
+    "graph",
+    "info",
+    "journey",
+    "kanban",
+    "mindmap",
+    "packet-beta",
+    "packet",
+    "pie",
+    "quadrantChart",
+    "radar-beta",
+    "requirementDiagram",
+    "sankey-beta",
+    "sequenceDiagram",
+    "stateDiagram",
+    "stateDiagram-v2",
+    "timeline",
+    "treemap-beta",
+    "xychart-beta",
+    "zenuml",
+];
+
+/// Refuse anything whose first word is not a diagram type.
+fn refuse_if_not_mermaid(source: &str, path: &str) -> Result<()> {
+    // Front matter, directives and comments legitimately come first and are
+    // not the diagram. Front matter is a *block*, so skipping its fences alone
+    // would leave `title: Flow` looking like the diagram type.
+    let mut lines = source.lines().map(str::trim).peekable();
+    if lines.peek().is_some_and(|l| *l == "---") {
+        lines.next();
+        for l in lines.by_ref() {
+            if l == "---" {
+                break;
+            }
+        }
+    }
+    let first = lines
+        .find(|l| !l.is_empty() && !l.starts_with("%%"))
+        .unwrap_or("");
+    let word = first
+        .split(|c: char| c.is_whitespace() || c == ':')
+        .next()
+        .unwrap_or("");
+    if MERMAID_TYPES.iter().any(|t| t.eq_ignore_ascii_case(word)) {
+        return Ok(());
+    }
+    Err(Error::new(
+        Code::PolDenied,
+        format!(
+            "A Mermaid diagram starts with its type, and `{word}` is not one this \
+             build knows. Use one of: {}.",
+            MERMAID_TYPES.join(", ")
+        ),
+    )
+    .with_context(path.to_string()))
+}
+
 /// Write a Mermaid diagram into the workspace.
 pub fn create_diagram(ws: &Workspace, req: &CreateDiagram) -> Result<Written> {
     let ext = require_extension(&req.path, &["md", "mmd"], "a Mermaid diagram")?;
@@ -70,6 +152,7 @@ pub fn create_diagram(ws: &Workspace, req: &CreateDiagram) -> Result<Written> {
         )
         .with_context(req.path.clone()));
     }
+    refuse_if_not_mermaid(&req.mermaid, &req.path)?;
 
     let body = if ext == "mmd" {
         // Bare source: the file *is* the diagram, so a fence would be a syntax
@@ -331,6 +414,69 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(e.code(), Code::PolDenied);
+    }
+
+    #[test]
+    fn prose_written_into_the_diagram_tool_is_refused() {
+        // The common failure of a diagram tool: a model with something to say
+        // writes it here, the file is created, and nothing ever renders it.
+        let (_t, ws) = sandbox();
+        let e = create_diagram(
+            &ws,
+            &CreateDiagram {
+                path: "flow.md".into(),
+                mermaid: "The vault holds keys and the store holds ciphertext.".into(),
+                title: None,
+                expect: Expect::New,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            e.message().contains("starts with its type"),
+            "{}",
+            e.message()
+        );
+        // The message names the list, so a type Mermaid added since is a
+        // one-line fix rather than a mystery.
+        assert!(e.message().contains("flowchart"), "{}", e.message());
+    }
+
+    #[test]
+    fn a_directive_or_front_matter_before_the_type_is_allowed() {
+        // `%%{init: ...}%%` and `---` front matter legitimately come first.
+        let (_t, ws) = sandbox();
+        for source in [
+            "%%{init: {'theme':'dark'}}%%\nflowchart LR\n  A --> B",
+            "---\ntitle: Flow\n---\nflowchart LR\n  A --> B",
+        ] {
+            assert!(
+                create_diagram(
+                    &ws,
+                    &CreateDiagram {
+                        path: format!("d{}.mmd", source.len()),
+                        mermaid: source.into(),
+                        title: None,
+                        expect: Expect::New,
+                    },
+                )
+                .is_ok(),
+                "refused: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_type_with_its_direction_or_a_colon_still_parses() {
+        for s in [
+            "flowchart TD",
+            "graph LR",
+            "gantt",
+            "pie title Share",
+            "sequenceDiagram",
+        ] {
+            assert!(refuse_if_not_mermaid(s, "x.md").is_ok(), "refused `{s}`");
+        }
+        assert!(refuse_if_not_mermaid("flowcharts TD", "x.md").is_err());
     }
 
     #[test]

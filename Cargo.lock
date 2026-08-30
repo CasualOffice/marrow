@@ -2239,6 +2239,7 @@ dependencies = [
 name = "marrow-ingest"
 version = "0.1.0"
 dependencies = [
+ "filetime",
  "marrow-core",
  "marrow-index",
  "marrow-parse",
@@ -2255,7 +2256,10 @@ version = "0.1.0"
 dependencies = [
  "marrow-core",
  "marrow-index",
+ "marrow-net",
  "marrow-store",
+ "marrow-tools",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

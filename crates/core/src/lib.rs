@@ -29,7 +29,7 @@ pub use model::{
 };
 
 /// Schema version this build writes. Bumped by every migration.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Chunk bodies larger than this go to the content-addressed cache rather than
 /// inline in SQLite (Part 2 §50).
