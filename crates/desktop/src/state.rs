@@ -79,6 +79,22 @@ pub struct RetrievedChunk {
     pub origin: marrow_core::Origin,
 }
 
+/// A scope as the window sends it, reduced to the fragment worth matching on.
+///
+/// The window sends a path relative to the workspace root — `services/STT` —
+/// and the index stores absolute paths, so the fragment is matched as a
+/// substring rather than as a prefix. Leading and trailing slashes are trimmed
+/// because a user who types `/services/STT/` means the same subtree, and an
+/// empty scope is no scope at all rather than a filter nothing can satisfy.
+pub(crate) fn scope_fragment(scope: Option<&str>) -> Option<String> {
+    let trimmed = scope?.trim().trim_matches('/').trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 /// Longest matching root wins, so a nested workspace does not display as a
 /// path relative to its parent.
 fn relative_to(path: &str, roots: &[String]) -> String {
@@ -161,11 +177,18 @@ impl Core {
         Ok(out)
     }
 
+    /// `scope` restricts the answer to one subtree — `services/STT` — because a
+    /// workspace is routinely one folder holding many unrelated projects, and
+    /// a question about one of them has no business being answered from the
+    /// others. Asking "what is STT?" over `~/Desktop/melp` returned MFA
+    /// settings and a code of conduct alongside the service that was asked
+    /// about, with nothing saying the sources came from different projects.
     pub fn retrieve(
         &self,
         question: &str,
         limit: usize,
         embedding: Option<&marrow_index::Embedding>,
+        scope: Option<&str>,
     ) -> Result<Vec<RetrievedChunk>> {
         // Reduced here, not by the caller: the lexical branch is disjunctive,
         // so an unreduced question matches every document containing "the".
@@ -174,10 +197,24 @@ impl Core {
         if trimmed.is_empty() {
             return Ok(Vec::new());
         }
-        let q = TextQuery::new(trimmed)
+        let want = limit.clamp(1, 50);
+        let scope = scope_fragment(scope);
+        let mut q = TextQuery::new(trimmed)
             .mode(marrow_index::MatchMode::Any)
             .with_snippet(Self::evidence_snippet())
-            .limit(limit.clamp(1, 50));
+            .limit(want);
+        if let Some(fragment) = &scope {
+            // The filter goes INTO the query, not onto its results. Applied
+            // afterwards the index would take its `limit` first and the filter
+            // would then discard most of what came back — so a scope could
+            // report nothing while matching documents sat just past the cut.
+            q = q.with_filters(marrow_index::Filters {
+                // GLOB, so the substring has to be wrapped rather than passed
+                // raw. It is a bound parameter, so nothing in it becomes SQL.
+                path_glob: Some(format!("*{fragment}*")),
+                ..Default::default()
+            });
+        }
         let roots = self.roots()?;
 
         // The semantic branch when there is one, lexical alone when there is
@@ -186,9 +223,20 @@ impl Core {
         let lexical = self.index.search(&q)?;
         let mut hits = lexical.clone();
         if let Some(e) = embedding {
+            // The vector index has no path filter, so a scoped question can
+            // only narrow this branch after the fact — which is the very thing
+            // the lexical filter goes into the query to avoid. Over-fetching is
+            // what buys the filtering something to keep: without it the
+            // unscoped nearest neighbours fill the limit and the scope is left
+            // with whichever of them happened to fall inside it.
+            let depth = if scope.is_some() {
+                want.saturating_mul(8).clamp(1, 200)
+            } else {
+                want
+            };
             match self
                 .vectors
-                .search(&marrow_index::VectorQuery::new(e.clone()).limit(limit.clamp(1, 50)))
+                .search(&marrow_index::VectorQuery::new(e.clone()).limit(depth))
             {
                 Ok(semantic) => {
                     // Fused by rank, so neither branch's scores need
@@ -217,6 +265,19 @@ impl Core {
                 }
             }
         }
+
+        // Whatever the semantic branch contributed is unscoped, so it has to be
+        // dropped here. Nothing the lexical branch found is lost to this: that
+        // one was filtered in the query and kept its full budget.
+        if let Some(fragment) = &scope {
+            hits.retain(|h| h.path.contains(fragment.as_str()));
+        }
+        // Fusing two branches of `want` candidates each yields up to twice as
+        // many, and every one of them reaches the model — which is how a
+        // twelve-chunk budget produced an answer citing twenty-four sources.
+        // The caller asked for `limit`; giving it more is not generosity, it is
+        // the budget §114 exists to protect being quietly doubled.
+        hits.truncate(want);
 
         Ok(hits
             .iter()
@@ -413,6 +474,9 @@ impl Core {
                 content_bytes: w.content_bytes,
                 cloud_only: w.cloud_only,
                 unindexed: w.unindexed,
+                no_parser: w.no_parser,
+                parse_failed: w.parse_failed,
+                not_processed: w.not_processed,
             })
             .collect())
     }
@@ -749,7 +813,20 @@ fn hydrate_chunk(
 
 #[cfg(test)]
 mod retrieval_tests {
-    use super::retrieval_terms;
+    use super::{retrieval_terms, scope_fragment};
+
+    #[test]
+    fn a_scope_is_a_subtree_however_the_caller_spelled_it() {
+        // `/services/STT/` and `services/STT` are the same subtree, and an
+        // empty scope is no scope rather than a filter nothing can satisfy.
+        assert_eq!(
+            scope_fragment(Some("/services/STT/")).as_deref(),
+            Some("services/STT")
+        );
+        assert_eq!(scope_fragment(Some("  ")), None);
+        assert_eq!(scope_fragment(Some("/")), None);
+        assert_eq!(scope_fragment(None), None);
+    }
 
     #[test]
     fn a_question_is_reduced_to_the_words_worth_retrieving_on() {

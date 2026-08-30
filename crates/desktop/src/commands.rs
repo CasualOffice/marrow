@@ -112,9 +112,19 @@ pub struct WorkspaceRow {
     /// Files whose contents were deliberately not read. Never omitted, even at
     /// zero — a silent zero reads as "no cloud files" (TIER-008).
     pub cloud_only: i64,
-    /// Files recorded from metadata alone because their contents could not be
-    /// indexed. This is what makes a partly-broken workspace visible.
+    /// Files with no searchable contents, whatever the reason. The total; the
+    /// three below say which reason, and sum to it.
+    ///
+    /// Alone it was being read as a fault count, and it is not one: it counted
+    /// a folder of photos exactly as it counted a folder of corrupt PDFs.
     pub unindexed: i64,
+    /// Expected: nothing to index. Findable by name and date (T5), which is
+    /// what these files are *for*. Shown, never warned about.
+    pub no_parser: i64,
+    /// Actionable: the text is on disk and Marrow does not have it.
+    pub parse_failed: i64,
+    /// Not reached yet by any ingest run. A sweep clears it.
+    pub not_processed: i64,
 }
 
 #[tauri::command]
@@ -186,6 +196,39 @@ pub struct IndexHealth {
 pub async fn index_health(core: State<'_, Arc<Core>>) -> Res<IndexHealth> {
     let core = Arc::clone(&core);
     blocking(move || core.health()).await
+}
+
+/// Reconcile every granted folder with the disk, now. Returns how many were
+/// asked, so the window can say what it started instead of claiming a result.
+///
+/// **"Run an index" was a button that explained why it did nothing.** Three
+/// places offered it — an empty workspace, a stale index, the freshness banner
+/// — and all three called an `unavailable()` notice, on a page whose entire job
+/// is to tell the user when the index has fallen behind the disk.
+///
+/// It asks the watcher threads rather than sweeping here, because each root
+/// already has a thread that sweeps it and two concurrent walks of one tree
+/// would duplicate every hash for nothing. Returning after the ask, not after
+/// the sweep, is deliberate: a full pass over 78,000 files takes minutes, and a
+/// command that returns then would look hung.
+#[tauri::command]
+pub async fn reindex(watchers: State<'_, Option<Arc<crate::watching::Watchers>>>) -> Res<usize> {
+    let watchers = watchers.inner().clone();
+    blocking(move || {
+        let Some(w) = watchers else {
+            return Err(marrow_core::Error::new(
+                marrow_core::Code::CfgInvalid,
+                "Nothing is watching your folders, so there is no sweep to ask for. \
+                 The watchers could not start with this window — reopening Marrow \
+                 starts them again.",
+            ));
+        };
+        // Which folders can actually be swept, and why not when none can, is
+        // the watcher's knowledge; a branch on it here would be a second copy
+        // of it in the wrong crate.
+        w.sweep_now()
+    })
+    .await
 }
 
 #[derive(Debug, Serialize)]
@@ -431,6 +474,7 @@ const COMMAND_NAMES: &[&str] = &[
     "list_workspaces",
     "add_workspace",
     "index_health",
+    "reindex",
     "file_detail",
     "read_region",
     "open_path",
@@ -570,9 +614,11 @@ mod tests {
 
     #[test]
     fn the_command_surface_is_small_and_read_only() {
-        // Every name here is a hole in the WebView sandbox. M1 exposes no
-        // mutation at all; when one arrives it needs a deliberate addition.
-        assert_eq!(COMMAND_NAMES.len(), 21);
+        // Every name here is a hole in the WebView sandbox. Nothing here writes
+        // to the user's disk; when one does it needs a deliberate addition.
+        // `reindex` is the closest — it re-reads granted folders and rewrites
+        // Marrow's own derived index, which is rebuildable by definition.
+        assert_eq!(COMMAND_NAMES.len(), 22);
         for n in COMMAND_NAMES {
             assert!(
                 !n.contains("write") && !n.contains("delete") && !n.contains("exec"),
@@ -697,6 +743,11 @@ pub async fn ask(
     question: String,
     history: Vec<crate::ask::PriorTurn>,
     thorough: bool,
+    // `scope`: a subtree — `services/STT` — the answer is confined to, relative
+    // to the workspace root. `None` asks the whole index, which is the right
+    // default and the wrong answer when one granted folder holds many unrelated
+    // projects: a question about one of them was answered from all of them.
+    scope: Option<String>,
     on_event: tauri::ipc::Channel<crate::ask::AskEvent>,
 ) -> Result<String, UiError> {
     let core = Arc::clone(&core);
@@ -713,6 +764,7 @@ pub async fn ask(
             &question,
             &turns,
             thorough,
+            scope.as_deref(),
             &cancel,
             &mut |e| {
                 // A closed channel means the window went away mid-answer. Stop

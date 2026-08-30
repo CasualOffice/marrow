@@ -142,14 +142,30 @@ export interface WorkspaceRow {
    *
    * GUI §11 requires every degraded state to be visible from the sidebar
    * without navigating, and one global number cannot say *which* workspace is
-   * the problem. `unindexed > 0` and `cloudOnly > 0` are degraded states.
+   * the problem. `parseFailed`, `notProcessed` and `cloudOnly` above zero are
+   * the degraded states; `noParser` is not one.
    */
   readonly chunks: number;
   readonly contentBytes: number;
   /** Contents deliberately not read. Never omitted, even at zero (TIER-008). */
   readonly cloudOnly: number;
-  /** Recorded from metadata alone because the contents could not be indexed. */
+  /**
+   * Files with no searchable contents, for any reason. The total.
+   *
+   * Not a fault count, which is what it was being rendered as: it counts a
+   * folder of photos exactly as it counts a folder of corrupt PDFs. The three
+   * below say which, and sum to this.
+   */
   readonly unindexed: number;
+  /**
+   * Expected. Nothing to index — a photo, a font, a binary — and still findable
+   * by name and date (T5). Shown, never warned about.
+   */
+  readonly noParser: number;
+  /** Wrong, and fixable: the text is on disk and Marrow does not have it. */
+  readonly parseFailed: number;
+  /** Not reached yet by any ingest run. A sweep clears it. */
+  readonly notProcessed: number;
 }
 
 export function listWorkspaces(): Promise<WorkspaceRow[]> {
@@ -187,6 +203,17 @@ export function addWorkspace(): Promise<readonly WorkspaceRow[] | null> {
 
 export function indexHealth(): Promise<IndexHealth> {
   return call<IndexHealth>("index_health");
+}
+
+/**
+ * Ask every watched folder to reconcile with the disk now.
+ *
+ * Resolves with the number of folders asked, as soon as they have been asked —
+ * a full pass takes minutes, and a promise that settled then would look hung.
+ * The counts on this page catch up as the sweep stores what it finds.
+ */
+export function reindex(): Promise<number> {
+  return call<number>("reindex");
 }
 
 /* ── file_detail ─────────────────────────────────────────────────────────── */
@@ -508,6 +535,17 @@ export type AskEvent =
       /** UX-013: what left the device, even when the answer is local. */
       readonly bytes: number;
       readonly distinctSources: number;
+      /**
+       * The distinct projects the evidence came from, relative to the
+       * workspace root — `services/STT`, `services/vault`. More than one means
+       * the answer was stitched across unrelated bodies of work and the reader
+       * has to be told; one granted folder is routinely a dozen projects.
+       *
+       * Optional only because the dev fixtures do not send it yet. The Rust
+       * event always does, so treat a missing value as "not known" rather than
+       * as "one project".
+       */
+      readonly projects?: readonly string[];
       /** UX-012: stated for every generation. */
       readonly boundary: string;
       readonly model: string;
@@ -543,6 +581,14 @@ export async function ask(
     question: string;
     history: readonly PriorTurn[];
     thorough: boolean;
+    /**
+     * A subtree the answer is confined to, relative to the workspace root —
+     * `services/STT`. Omitted asks the whole index, which is the right default
+     * and the wrong answer when one granted folder holds many unrelated
+     * projects: "what is STT?" was answered from the STT service, an MFA
+     * setting and a code of conduct at once.
+     */
+    scope?: string;
   },
   onEvent: (e: AskEvent) => void,
 ): Promise<string> {
@@ -558,6 +604,9 @@ export async function ask(
     question: args.question,
     history: args.history,
     thorough: args.thorough,
+    // Explicitly null rather than absent, so `Option<String>` has a value to
+    // read whatever the command deserializer would make of a missing field.
+    scope: args.scope ?? null,
     onEvent: channel,
   });
 }

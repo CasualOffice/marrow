@@ -80,6 +80,13 @@ pub enum AskEvent {
         /// UX-013: what left the device, even when the answer is local.
         bytes: usize,
         distinct_sources: usize,
+        /// The distinct projects the evidence came from, as folder names
+        /// relative to the workspace root. More than one means the answer is
+        /// stitched together across unrelated bodies of work, and the reader
+        /// has to be told: "what is STT?" was answered from the STT service,
+        /// an MFA setting and a code of conduct, and read as one coherent
+        /// account of a single thing.
+        projects: Vec<String>,
         /// UX-012: local, private or cloud, stated for every generation.
         boundary: String,
         model: String,
@@ -169,11 +176,24 @@ pub fn assemble(
     // evidence blocks are the user's files, which describe their projects and
     // not this program.
     identity: Option<String>,
+    // `scope`: a subtree, relative to the workspace root, the answer is
+    // confined to. A workspace is routinely one folder holding many unrelated
+    // projects, and there was no way to say which one a question was about.
+    scope: Option<&str>,
 ) -> Result<(Envelope, Vec<Citation>, Vec<Excluded>)> {
     // `retrieve` reduces the question for the lexical branch itself; the
     // embedding is of the question as asked, because the words that carry no
     // lexical weight still carry meaning.
-    let fresh = core.retrieve(question, MAX_CHUNKS, embedding)?;
+    let fresh = core.retrieve(question, MAX_CHUNKS, embedding, scope)?;
+    if let Some(fragment) = crate::state::scope_fragment(scope) {
+        // The scope governs the whole prompt, not only this turn's retrieval.
+        // Evidence carried over from an unscoped question would otherwise sit
+        // in front of the model exactly as if it had been retrieved, and a
+        // scoped follow-up would go on answering from the project the user had
+        // just said they did not mean. It costs a cache miss on the turn the
+        // scope changes, which is honest: the prompt genuinely is different.
+        convo.sent.retain(|c| c.path.contains(&fragment));
+    }
     let chunks = carry_forward(&mut convo.sent, fresh);
 
     let mut builder = Builder::new(SYSTEM, question);
@@ -220,6 +240,43 @@ pub fn assemble(
         citations,
         excluded,
     ))
+}
+
+/// The distinct projects a set of citations came from.
+///
+/// A workspace is one granted folder, and this one is `~/Desktop/melp` — many
+/// unrelated services under it. Answering across all of them is sometimes
+/// right and sometimes nonsense, and the reader is the only one who can tell
+/// which; they can only tell if they are told.
+///
+/// **How deep a project is cannot be fixed in advance.** Under `~/Desktop/melp`
+/// every path begins `services/`, so the first segment names the container and
+/// distinguishes nothing; under a folder of sibling projects the first segment
+/// is exactly right and a second would name a source directory. So the depth is
+/// chosen by what actually separates the paths: one segment when that already
+/// tells them apart, two when it does not. A file sitting directly in the
+/// workspace root is in no project and contributes nothing — its own filename
+/// is not a project name.
+fn projects_of(citations: &[Citation]) -> Vec<String> {
+    let folders: Vec<Vec<&str>> = citations
+        .iter()
+        .map(|c| c.relative_path.split('/').collect::<Vec<_>>())
+        .filter(|segments| segments.len() > 1)
+        .map(|segments| segments[..segments.len() - 1].to_vec())
+        .collect();
+
+    let depth = |n: usize| -> std::collections::BTreeSet<String> {
+        folders
+            .iter()
+            .map(|f| f.iter().take(n).copied().collect::<Vec<_>>().join("/"))
+            .collect()
+    };
+
+    let top = depth(1);
+    if top.len() > 1 {
+        return top.into_iter().collect();
+    }
+    depth(2).into_iter().collect()
 }
 
 fn evidence_from(id: &str, hit: &RetrievedChunk) -> Evidence {
@@ -314,6 +371,8 @@ pub fn run(
     question: &str,
     history: &[Turn],
     thorough: bool,
+    // A subtree the answer is confined to, relative to the workspace root.
+    scope: Option<&str>,
     cancel: &Cancel,
     emit: &mut dyn FnMut(AskEvent),
 ) {
@@ -356,6 +415,7 @@ pub fn run(
         &mut convo,
         embedding.as_ref(),
         Some(hub.identity(&generator, thorough)),
+        scope,
     );
     hub.keep_session(conversation, convo);
 
@@ -371,6 +431,7 @@ pub fn run(
     };
 
     emit(AskEvent::Sources {
+        projects: projects_of(&citations),
         hits: citations,
         excluded,
         bytes: envelope.disclosure.bytes,
@@ -592,6 +653,52 @@ mod tests {
         assert_eq!(out.len(), 1, "the set was rebuilt from this turn");
     }
 
+    fn cite(relative_path: &str) -> Citation {
+        Citation {
+            id: "E1".into(),
+            path: format!("/root/{relative_path}"),
+            relative_path: relative_path.into(),
+            location: relative_path.into(),
+            line: None,
+            excerpt: String::new(),
+            provenance: "exact".into(),
+        }
+    }
+
+    #[test]
+    fn the_projects_are_named_at_the_depth_that_actually_separates_them() {
+        // The reported case: one workspace, many services, and a first segment
+        // that names the container rather than the project.
+        let melp = projects_of(&[
+            cite("services/STT/README.md"),
+            cite("services/vault/src/mfa.rs"),
+            cite("services/STT/docs/stream.md"),
+        ]);
+        assert_eq!(melp, vec!["services/STT", "services/vault"]);
+
+        // And where the first segment does separate them, a second would name
+        // a source directory rather than a project.
+        let siblings = projects_of(&[cite("marrow/src/lib.rs"), cite("enclave/src/lib.rs")]);
+        assert_eq!(siblings, vec!["enclave", "marrow"]);
+    }
+
+    #[test]
+    fn one_project_is_not_reported_as_several_and_a_loose_file_is_in_none() {
+        // The signal only means something if it is absent when the evidence
+        // really does come from one place.
+        assert_eq!(
+            projects_of(&[cite("services/STT/a.md"), cite("services/STT/b.md")]).len(),
+            1
+        );
+        // A file in the workspace root belongs to no project; calling it one
+        // would name the file and claim the answer spanned two.
+        assert_eq!(projects_of(&[cite("README.md")]), Vec::<String>::new());
+        assert_eq!(
+            projects_of(&[cite("README.md"), cite("services/STT/a.md")]),
+            vec!["services/STT"]
+        );
+    }
+
     #[test]
     fn the_chunk_budget_is_in_the_documented_range() {
         // ASK-003: fewer starves the answer, more dilutes it.
@@ -634,6 +741,7 @@ mod wire {
             excluded: Vec::new(),
             bytes: 10,
             distinct_sources: 3,
+            projects: vec!["services/STT".into()],
             boundary: "local".into(),
             model: "m".into(),
         })
@@ -641,6 +749,10 @@ mod wire {
         assert!(
             sources.get("distinctSources").is_some(),
             "Sources is missing `distinctSources`: {sources}"
+        );
+        assert!(
+            sources.get("projects").is_some(),
+            "Sources is missing `projects`: {sources}"
         );
     }
 }

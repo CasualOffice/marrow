@@ -58,6 +58,26 @@ Deliveries are accepted between 07:00 and 11:00 on weekdays only. The loading
 bay is shared with Unit 7A and must be left clear.
 ";
 
+/// Two unrelated services under one workspace, saying similar things.
+///
+/// This is the reported shape: `~/Desktop/melp` is a single granted folder
+/// holding `services/stt`, `services/vault` and a dozen others. Both files
+/// answer "what is the retention policy?" and only one of them is about the
+/// service being asked about.
+const STT: &str = "\
+# STT
+
+The speech-to-text service transcribes captured audio into text. Under its
+retention policy a recording is discarded thirty days after transcription.
+";
+
+const VAULT: &str = "\
+# Vault
+
+The vault service stores secrets and multi-factor enrolments. Its retention
+policy keeps an audit record of every read for seven years.
+";
+
 fn data_dir() -> PathBuf {
     PathBuf::from(std::env::var_os("HOME").expect("HOME")).join(".local/share/marrow")
 }
@@ -186,6 +206,7 @@ fn a_question_about_real_files_is_answered_from_them_with_a_citation() {
         "When does the lease renew and what is the rent?",
         &[],
         false,
+        None,
         &Cancel::new(),
         &mut |e| match e {
             ask::AskEvent::Token { text } => answer.push_str(&text),
@@ -244,8 +265,16 @@ fn the_runtime_tells_the_model_what_it_is_rather_than_leaving_it_to_the_corpus()
     let core = Core::open(db).expect("core");
     let mut convo = marrow_desktop::models::Conversation::default();
 
-    let (without, _, _) =
-        ask::assemble(&core, "what model are you?", &[], &mut convo, None, None).expect("assemble");
+    let (without, _, _) = ask::assemble(
+        &core,
+        "what model are you?",
+        &[],
+        &mut convo,
+        None,
+        None,
+        None,
+    )
+    .expect("assemble");
     assert_eq!(
         without.disclosure.fact_blocks, 0,
         "no identity was supplied, so no FACT block should exist"
@@ -259,6 +288,7 @@ fn the_runtime_tells_the_model_what_it_is_rather_than_leaving_it_to_the_corpus()
         &mut convo,
         None,
         Some("You are Marrow, running Qwen 3.5 4B (`qwen3.5-4b-mlx-q4`) locally.".into()),
+        None,
     )
     .expect("assemble");
 
@@ -278,6 +308,74 @@ fn the_runtime_tells_the_model_what_it_is_rather_than_leaving_it_to_the_corpus()
     );
 }
 
+/// **A scoped question is answered from that project and no other.**
+///
+/// Reported from real use: "whats STT?" over a workspace that is all of
+/// `~/Desktop/melp` came back with MFA settings, task ranking and a code of
+/// conduct — twenty-four sources drawn from services that have nothing to do
+/// with each other, presented as one account of one thing.
+///
+/// Needs no model: `assemble` builds the envelope on its own, so this pins the
+/// whole path from the command's argument down to the evidence blocks.
+#[test]
+fn a_scoped_question_is_answered_only_from_that_subtree() {
+    let (corpus, _db_dir, db) = indexed_corpus();
+    std::fs::create_dir_all(corpus.path().join("services/stt")).expect("stt dir");
+    std::fs::create_dir_all(corpus.path().join("services/vault")).expect("vault dir");
+    std::fs::write(corpus.path().join("services/stt/README.md"), STT).expect("write stt");
+    std::fs::write(corpus.path().join("services/vault/README.md"), VAULT).expect("write vault");
+
+    let core = Core::open(db).expect("core");
+    reindex(&core, corpus.path());
+
+    let question = "what is the retention policy?";
+
+    // Unscoped, both services answer — which is the bug, and also what makes
+    // the scoped assertion below mean something.
+    let everything = core.retrieve(question, 12, None, None).expect("retrieve");
+    let paths: Vec<&str> = everything
+        .iter()
+        .map(|c| c.relative_path.as_str())
+        .collect();
+    assert!(
+        paths.iter().any(|p| p.contains("services/stt"))
+            && paths.iter().any(|p| p.contains("services/vault")),
+        "both services must be reachable unscoped, or the scope proves nothing: {paths:?}"
+    );
+
+    // Scoped, through the ask path the window actually calls.
+    let mut convo = marrow_desktop::models::Conversation::default();
+    let (envelope, citations, _) = ask::assemble(
+        &core,
+        question,
+        &[],
+        &mut convo,
+        None,
+        None,
+        Some("services/stt"),
+    )
+    .expect("assemble");
+
+    assert!(
+        !citations.is_empty(),
+        "the scope must narrow the answer, not empty it"
+    );
+    for c in &citations {
+        assert!(
+            c.relative_path.starts_with("services/stt/"),
+            "a scoped question was answered from outside its scope: {}",
+            c.relative_path
+        );
+    }
+    // And not merely uncited: nothing from the other service reached the model
+    // either, which is where an out-of-scope claim would come from.
+    assert!(
+        !envelope.text.contains("seven years"),
+        "the other service's text reached the prompt:\n{}",
+        envelope.text
+    );
+}
+
 /// Where do two turns' prompts stop matching? Diagnostic, and it needs no
 /// model — the envelope is assembled without one.
 #[test]
@@ -291,6 +389,7 @@ fn the_second_turns_prompt_shares_its_preamble_with_the_first() {
         "When does the lease renew?",
         &[],
         &mut convo,
+        None,
         None,
         None,
     )
@@ -310,6 +409,7 @@ fn the_second_turns_prompt_shares_its_preamble_with_the_first() {
         "And what is the rent?",
         &turns,
         &mut convo,
+        None,
         None,
         None,
     )
@@ -358,6 +458,7 @@ fn a_follow_up_reuses_the_prompt_and_keeps_the_thread() {
         "When does the lease renew?",
         &[],
         false,
+        None,
         &Cancel::new(),
         &mut |e| {
             if let ask::AskEvent::Token { text } = e {
@@ -387,6 +488,7 @@ fn a_follow_up_reuses_the_prompt_and_keeps_the_thread() {
         "And what is the rent?",
         &turns,
         false,
+        None,
         &Cancel::new(),
         &mut |e| match e {
             ask::AskEvent::Token { text } => second.push_str(&text),
@@ -462,7 +564,7 @@ fn semantic_retrieval_finds_a_document_that_shares_no_words_with_the_question() 
 
     // Lexical alone: the paraphrase shares no content word with the question,
     // so it cannot be found this way.
-    let lexical = core.retrieve(question, 10, None).expect("lexical");
+    let lexical = core.retrieve(question, 10, None, None).expect("lexical");
     eprintln!(
         "lexical: {:?}",
         lexical
@@ -480,7 +582,7 @@ fn semantic_retrieval_finds_a_document_that_shares_no_words_with_the_question() 
     // With the semantic branch, it is.
     let embedding = embedder.embed_one(question).expect("embed the question");
     let hybrid = core
-        .retrieve(question, 10, Some(&embedding))
+        .retrieve(question, 10, Some(&embedding), None)
         .expect("hybrid");
     eprintln!(
         "hybrid: {:?}",
@@ -550,6 +652,7 @@ fn a_long_answer_is_not_silently_cut_off() {
          each, and then explain what each one means for the tenant.",
         &[],
         false,
+        None,
         &Cancel::new(),
         &mut |e| match e {
             ask::AskEvent::Token { text } => answer.push_str(&text),

@@ -268,6 +268,19 @@
   font-weight: 400;
 }
 
+/* Sources drawn from more than one project. Not a warning — spanning projects
+   is often exactly what was asked for — but it has to survive being the last
+   thing on a crowded line, so it may shrink and truncate where the counts
+   above it may not. */
+.sourcesProjects {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg3);
+  font-size: var(--fs-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sourceList {
   padding: 0;
   list-style: none;

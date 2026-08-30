@@ -48,6 +48,13 @@ interface Turn {
   thinking: string;
   sources: readonly Citation[];
   excluded: readonly ExcludedSource[];
+  /**
+   * The projects the sources came from. More than one means this answer was
+   * assembled across unrelated bodies of work — the workspace is one folder
+   * and it holds a dozen services — and saying nothing about that presents
+   * three projects as one coherent account of a single thing.
+   */
+  projects: readonly string[];
   meta: { boundary: string; model: string; bytes: number } | null;
   usage: Usage | null;
   failure: { code: string; message: string } | null;
@@ -66,6 +73,7 @@ function newTurn(question: string, thorough: boolean): Turn {
     thinking: "",
     sources: [],
     excluded: [],
+    projects: [],
     meta: null,
     usage: null,
     failure: null,
@@ -146,6 +154,7 @@ export function AskView() {
               ...t,
               sources: e.hits,
               excluded: e.excluded,
+              projects: e.projects ?? [],
               meta: { boundary: e.boundary, model: e.model, bytes: e.bytes },
             }));
             break;
@@ -394,6 +403,15 @@ function TurnBlock({
             )}
             {turn.meta && (
               <span className={styles.sourcesBytes}>{bytes(turn.meta.bytes)} of context</span>
+            )}
+            {/* Said here rather than only inside the list, because it changes
+                how the answer above should be read: evidence drawn from three
+                unrelated projects is not one account of one thing, and the
+                reader is the only one who can tell whether that was wanted. */}
+            {turn.projects.length > 1 && (
+              <span className={styles.sourcesProjects}>
+                across {turn.projects.length} projects: {turn.projects.join(", ")}
+              </span>
             )}
           </summary>
           <ol className={styles.sourceList}>
