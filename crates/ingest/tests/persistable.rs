@@ -439,3 +439,105 @@ fn a_run_interrupted_between_the_version_row_and_its_chunks_recovers_on_the_next
         "{path} never got its chunks back, so it stays unsearchable forever"
     );
 }
+
+/// **A sweep that does not notice deletions is not a reconciliation.**
+///
+/// Nothing in the full run ever marked a file gone — only `apply_hints` did,
+/// and only for paths a watcher happened to send. So a file deleted while
+/// Marrow was closed stayed ACTIVE forever, and 43,686 files under `target/`,
+/// `.git/` and `node_modules/` indexed by an earlier build stayed ACTIVE
+/// permanently: the walker prunes those directories now, so it can never
+/// revisit them to notice. They inflated every count and poisoned ranking —
+/// `.git/config` outranked the real documentation for "admission control".
+#[test]
+fn a_file_deleted_while_marrow_was_closed_is_noticed_by_the_next_sweep() {
+    let f = setup();
+    let first = run(&f);
+    assert!(first.discovered > 1, "the fixture must have several files");
+    assert_eq!(first.removed, 0, "nothing was missing on the first run");
+
+    let conn = f.store.reader().unwrap();
+    let (path, file_id): (String, String) = conn
+        .query_row(
+            "SELECT current_path, file_id FROM files
+              WHERE status='ACTIVE' AND current_path IS NOT NULL LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("an active file");
+    drop(conn);
+
+    // Deleted with nothing watching, which is the ordinary case.
+    std::fs::remove_file(&path).expect("remove");
+
+    let second = run(&f);
+    assert_eq!(second.removed, 1, "the sweep did not notice the deletion");
+
+    let conn = f.store.reader().unwrap();
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM files WHERE file_id = ?1",
+            [&file_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        status, "DELETED",
+        "{path} is still ACTIVE after it was removed"
+    );
+}
+
+/// **The guard that makes the rest safe.**
+///
+/// A cancelled walk has seen an arbitrary prefix of the corpus. Concluding that
+/// everything it did not reach is deleted would empty the index — the single
+/// most destructive thing this code could do, and the reason the check happens
+/// before the set is even built.
+#[test]
+fn a_cancelled_sweep_never_concludes_that_the_files_it_missed_are_gone() {
+    let f = setup();
+    run(&f);
+
+    let before: i64 = f
+        .store
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM files WHERE status='ACTIVE'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(before > 0);
+
+    // Cancelled before it starts: it reaches nothing at all, which is the
+    // worst case for a rule that keys on what was not reached.
+    let cancel = Cancel::new();
+    cancel.cancel();
+    let index = marrow_index::Fts5Index::open(&f.store).unwrap();
+    let outcome = ingest_root_with_index(
+        &f.store,
+        f.ws,
+        f.root_id,
+        &f.root,
+        &IngestPolicy::default(),
+        &Arc::new(Progress::new()),
+        &cancel,
+        Some(&index),
+    )
+    .unwrap();
+    assert!(outcome.cancelled);
+    assert_eq!(outcome.removed, 0, "a cancelled sweep deleted something");
+
+    let after: i64 = f
+        .store
+        .reader()
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM files WHERE status='ACTIVE'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(after, before, "a cancelled sweep emptied the index");
+}

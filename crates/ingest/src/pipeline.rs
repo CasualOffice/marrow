@@ -63,6 +63,11 @@ pub struct IngestOutcome {
     pub failed: u64,
     pub parsed: u64,
     pub chunks: u64,
+    /// Files that were in the index and that this walk did not reach — deleted,
+    /// excluded by policy, or sitting under a directory the walker now prunes.
+    /// Only ever set by a walk that finished; a cancelled run has seen an
+    /// arbitrary prefix and must not conclude anything from what it missed.
+    pub removed: u64,
     pub cancelled: bool,
     /// Why things failed, and how often — grouped by error code.
     ///
@@ -215,6 +220,10 @@ pub fn ingest_root_with_index(
     // Handles are drained periodically so a write failure still surfaces
     // instead of being silently dropped.
     let mut outcome = IngestOutcome::default();
+    // Every file this walk laid eyes on. Reconciliation is defined by what it
+    // did *not* see, so this must include unchanged files as well as written
+    // ones — on any second run the unchanged are the overwhelming majority.
+    let mut seen: std::collections::HashSet<FileId> = std::collections::HashSet::new();
     let mut inflight: Vec<Pending<()>> = Vec::with_capacity(DRAIN_EVERY);
     let router = marrow_parse::ParserRouter::with_default_parsers();
 
@@ -239,7 +248,8 @@ pub fn ingest_root_with_index(
             &self_written,
             &mut inflight,
         ) {
-            Ok(Some(ids)) => {
+            Ok((file_id, Some(ids))) => {
+                seen.insert(file_id);
                 progress.bump(Stage::Stored);
                 outcome.stored += 1;
                 if policy.extract_content && h.hash_error.is_none() {
@@ -270,7 +280,8 @@ pub fn ingest_root_with_index(
                     }
                 }
             }
-            Ok(None) => {
+            Ok((file_id, None)) => {
+                seen.insert(file_id);
                 progress.bump(Stage::Unchanged);
                 outcome.unchanged += 1;
             }
@@ -310,7 +321,73 @@ pub fn ingest_root_with_index(
     // sums to 1 teaches people to distrust the whole report.
     outcome.failed = outcome.failures.values().map(|g| g.count).sum();
     outcome.cancelled |= cancel.is_cancelled();
+
+    // **A sweep that does not notice deletions is not a reconciliation.**
+    //
+    // Nothing in the full run ever marked a file gone: only `apply_hints` did,
+    // and only for paths a watcher happened to send it. So a file deleted while
+    // Marrow was closed stayed ACTIVE forever, and — worse — 43,686 files under
+    // `target/`, `.git/` and `node_modules/` indexed by an earlier build stayed
+    // ACTIVE permanently, because the walker now prunes those directories and
+    // therefore can never revisit them to notice. They inflated every count and
+    // poisoned ranking: `.git/config` outranked the actual documentation for
+    // "admission control", on the strength of matching branch names.
+    //
+    // The walk defines the scope. A file under this root that the walk did not
+    // reach is not in the index any more, whether it was deleted, excluded by
+    // policy, or sits in a directory that is now pruned. Soft delete, so the
+    // forget path stays the only thing that removes rows.
+    //
+    // **Only ever after a complete walk.** A cancelled or failed run has seen
+    // an arbitrary prefix of the corpus, and marking everything it missed as
+    // deleted would empty the index. This is the one guard that makes the rest
+    // safe, which is why it is checked before the set is even built.
+    if !outcome.cancelled && outcome.failures.is_empty() {
+        outcome.removed = mark_unseen_deleted(store, root_id, &seen)?;
+        store.flush()?;
+    } else if outcome.cancelled {
+        debug!("the sweep stopped early, so absent files were not reconciled");
+    }
     Ok(outcome)
+}
+
+/// Mark every ACTIVE file under `root_id` that this walk did not reach.
+///
+/// The ids go into a temporary table rather than an `IN (...)` list: on this
+/// corpus the set is 79,000 ULIDs, which is past SQLite's parameter limit and
+/// would be a megabyte of SQL text besides.
+fn mark_unseen_deleted(
+    store: &Store,
+    root_id: RootId,
+    seen: &std::collections::HashSet<FileId>,
+) -> Result<u64> {
+    let ids: Vec<String> = seen.iter().map(|f| f.to_string()).collect();
+    let now = Timestamp::now().as_millis();
+    store.writer().submit(move |c| {
+        c.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS seen_files (file_id TEXT PRIMARY KEY);
+             DELETE FROM seen_files;",
+        )
+        .map_err(|e| marrow_store::map_sqlite(e, "preparing the reconciliation set"))?;
+        {
+            let mut stmt = c
+                .prepare("INSERT OR IGNORE INTO seen_files(file_id) VALUES (?1)")
+                .map_err(|e| marrow_store::map_sqlite(e, "recording a seen file"))?;
+            for id in &ids {
+                stmt.execute([id])
+                    .map_err(|e| marrow_store::map_sqlite(e, "recording a seen file"))?;
+            }
+        }
+        let n = c
+            .execute(
+                "UPDATE files SET status='DELETED', current_path=NULL, updated_at=?2
+                  WHERE root_id=?1 AND status='ACTIVE'
+                    AND file_id NOT IN (SELECT file_id FROM seen_files)",
+                marrow_store::rusqlite::params![root_id.to_string(), now],
+            )
+            .map_err(|e| marrow_store::map_sqlite(e, "reconciling absent files"))?;
+        Ok(n as u64)
+    })
 }
 
 /// How many un-awaited writes to allow before checking their results.
@@ -431,7 +508,7 @@ pub fn apply_hints(
             &self_written,
             &mut inflight,
         ) {
-            Ok(Some(ids)) => {
+            Ok((_, Some(ids))) => {
                 outcome.stored += 1;
                 progress.bump(Stage::Stored);
                 if policy.extract_content {
@@ -453,7 +530,7 @@ pub fn apply_hints(
                     }
                 }
             }
-            Ok(None) => outcome.unchanged += 1,
+            Ok((_, None)) => outcome.unchanged += 1,
             Err(e) => {
                 warn!(path = %h.path, error = %e, "failed to record file");
                 outcome.note_failure(&e, &h.path);
@@ -619,7 +696,7 @@ fn record(
     h: &Hashed,
     self_written: &HashSet<ContentHash>,
     inflight: &mut Vec<Pending<()>>,
-) -> Result<Option<RecordedIds>> {
+) -> Result<(FileId, Option<RecordedIds>)> {
     let now = Timestamp::now();
 
     // Path first, identity second — and identity only counts as a RENAME when
@@ -680,7 +757,7 @@ fn record(
                 marrow_store::read::insert_file_with_version(c, &f, &v).map(|_| ())
             })?,
         );
-        return Ok(Some(ids));
+        return Ok((ids.file_id, Some(ids)));
     };
 
     // Known file. Two things can have changed: where it is, and what it says.
@@ -752,8 +829,12 @@ fn record(
 
     // A path change on its own is a write, but not a reason to re-parse: the
     // bytes did not move. Only a new version yields ids for the content stage.
+    //
+    // The file id comes back either way, because "this walk saw this file" is a
+    // different fact from "this walk changed it", and reconciliation needs the
+    // first one to know what it did *not* see.
     let _ = wrote;
-    Ok(ids)
+    Ok((file.file_id, ids))
 }
 
 /// What `record` produced, so the content stage knows what to attach chunks to.
