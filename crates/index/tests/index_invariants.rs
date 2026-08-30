@@ -761,6 +761,94 @@ fn literal_search_honours_cancellation() {
     assert!(!out.stopped.is_complete());
 }
 
+/// **R10-A.** A partial scan must never be reportable as a complete one, and
+/// the caller must not have to remember the denominator to notice.
+///
+/// The CLI built its scope from `SELECT ... FROM files` and so answered "0
+/// matches in 0 of 0 files, Completed" for a folder no index run had touched.
+/// The outcome now carries the scope it was given and how much of it the loop
+/// reached, so `files_in_scope == 0` and "the whole scope was reached" are
+/// distinguishable facts rather than one indistinguishable zero.
+#[test]
+fn a_literal_outcome_reports_the_scope_it_was_given_and_how_far_it_got() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut targets = Vec::new();
+    for i in 0..8 {
+        let p = dir.path().join(format!("f{i}.txt"));
+        std::fs::write(&p, "needle\n").expect("write");
+        targets.push(LiteralTarget::new(FileId::new(), p, TierState::Resident));
+    }
+
+    let whole = literal_search(
+        &targets,
+        &LiteralQuery::new("needle"),
+        &AtomicBool::new(false),
+    )
+    .expect("scan");
+    assert_eq!(whole.files_in_scope, 8);
+    assert_eq!(whole.files_considered, 8);
+    assert_eq!(whole.files_unreached(), 0);
+    assert!(whole.stopped.is_complete());
+
+    let cut = literal_search(
+        &targets,
+        &LiteralQuery::new("needle").max_total_matches(3),
+        &AtomicBool::new(false),
+    )
+    .expect("scan");
+    assert_eq!(cut.stopped, StopReason::MatchLimit);
+    assert_eq!(
+        cut.files_in_scope, 8,
+        "the scope is what was asked for, not what was reached"
+    );
+    assert!(cut.files_unreached() > 0, "and the shortfall is visible");
+
+    // The empty scope, which is the shape R10-A produced. `Completed` is true
+    // of the loop and says nothing about the disk; `files_in_scope` is what
+    // tells a caller it never established a scope at all.
+    let none =
+        literal_search(&[], &LiteralQuery::new("needle"), &AtomicBool::new(false)).expect("scan");
+    assert_eq!(none.files_in_scope, 0);
+    assert_eq!(none.files_considered, 0);
+}
+
+/// **Invariant #7, at operation time.** `fs::metadata` follows a symlink, so a
+/// target that was a regular file inside the authorised root when the list was
+/// built and is a link now would be read straight through to wherever it
+/// points. The reader stats with `symlink_metadata` and refuses instead.
+#[test]
+fn literal_search_refuses_a_symlink_rather_than_following_it_out_of_the_root() {
+    let inside = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("tempdir");
+
+    let secret = outside.path().join("secret.txt");
+    std::fs::write(&secret, "needle outside the authorised root\n").expect("write");
+    let link = inside.path().join("looks_local.txt");
+    std::os::unix::fs::symlink(&secret, &link).expect("symlink");
+
+    let honest = inside.path().join("honest.txt");
+    std::fs::write(&honest, "needle in a real file\n").expect("write");
+
+    let out = literal_search(
+        &[
+            LiteralTarget::new(FileId::new(), link, TierState::Resident),
+            LiteralTarget::new(FileId::new(), honest, TierState::Resident),
+        ],
+        &LiteralQuery::new("needle"),
+        &AtomicBool::new(false),
+    )
+    .expect("scan");
+
+    assert_eq!(out.hits.len(), 1, "only the real file may be read");
+    assert!(out.hits[0].path.ends_with("honest.txt"));
+    assert_eq!(out.files_scanned, 1);
+    assert_eq!(
+        out.files_failed, 1,
+        "the refusal is counted, not silently dropped"
+    );
+    assert!(out.has_gaps());
+}
+
 /// A query with nothing to search for is the user's mistake, and gets a message
 /// that says what to do — never an FTS5 syntax error and never a panic.
 #[test]
@@ -1491,4 +1579,3 @@ fn the_excerpt_is_the_files_text_even_when_the_filename_is_what_matched() {
         "the excerpt should be the body of the chunk, got: {excerpt}"
     );
 }
-

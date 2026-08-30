@@ -971,7 +971,14 @@ mod tests {
         for args in [
             vec!["marrow", "search", "--literal", "x", "--time-limit", "90"],
             vec!["marrow", "search", "--literal", "x", "--time-limit", "0"],
-            vec!["marrow", "search", "--literal", "x", "--path", "crates/model"],
+            vec![
+                "marrow",
+                "search",
+                "--literal",
+                "x",
+                "--path",
+                "crates/model",
+            ],
             vec!["marrow", "search", "--literal", "x", "--workspace", "melp"],
             vec!["marrow", "search", "--literal", "x", "-n", "5"],
         ] {

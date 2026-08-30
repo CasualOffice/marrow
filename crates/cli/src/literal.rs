@@ -35,11 +35,16 @@
 //!
 //! # And it says what it did not cover
 //!
-//! A scan with a time budget over 79,000 files gives up long before the end, so
-//! "no matches" is routinely a partial answer. Every count the human view has,
-//! `--json` has too, in a `coverage` block shaped like MCP's — a script that
-//! sees `"matches": 0` and cannot tell a searched corpus from an abandoned one
-//! is the most misleading thing this command can offer.
+//! A scan with a time budget over tens of thousands of files can give up long
+//! before the end, so "no matches" is routinely a partial answer. Every count
+//! the human view has, `--json` has too, in a `coverage` block shaped like
+//! MCP's — a script that sees `"matches": 0` and cannot tell a searched corpus
+//! from an abandoned one is the most misleading thing this command can offer.
+//!
+//! Two things make the partial case reproducible rather than a coin toss: the
+//! target list is sorted before it is scanned, so two identical invocations
+//! cover the same prefix of the same corpus, and the stop reason with the
+//! unreached count is on every surface.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -58,14 +63,15 @@ use crate::render::{self, Style};
 /// Seconds the scan may spend before it reports a partial result.
 ///
 /// The library default is 5 s, sized by Part 6 §116 against a 10k-file scope.
-/// The author's corpus is 79,186 files and 5 s reached about 8% of it — which
-/// is how F5 came to answer "no matches" for a string that occurs 14 times,
-/// differently on each run depending on what the OS page cache happened to
-/// hold. 30 s covers this corpus warm with room to spare.
+/// The author's is 35,366 walked files, and 5 s reached between 6,000 and
+/// 14,000 of them depending on what the OS page cache happened to hold — which
+/// is how F5 came to answer "no matches" cold and "5 matches" warm for the same
+/// string on the same disk. Measured here: 1.2 s warm, 10.0 s from a cache
+/// evicted by streaming 17 GB. 30 s is three times the cold figure.
 ///
 /// It is not the *fix* for F5 — no fixed number can be, and the fix is that a
-/// partial answer now says so and `--time-limit` can raise it. It is the
-/// default that makes the common case actually finish.
+/// partial answer now says so, in both renderers, and `--time-limit` can raise
+/// it. This is the default that makes the ordinary case actually finish.
 const DEFAULT_TIME_LIMIT: Duration = Duration::from_secs(30);
 
 /// One `--literal` invocation, as the command line parsed it.
@@ -168,6 +174,7 @@ impl Scope {
 /// bypass, and a scope taken from it is a scope that cannot see anything the
 /// last sweep missed.
 fn walk_scope(store: &Store, req: &Request<'_>) -> Result<Scope> {
+    let started = std::time::Instant::now();
     let granted = granted_roots(store, req.workspace)?;
     let filter = req.path_contains.map(|s| s.to_lowercase());
 
@@ -242,6 +249,12 @@ fn walk_scope(store: &Store, req: &Request<'_>) -> Result<Scope> {
     // and an unordered walk makes *which* tail differ per run — F5's "0 matches
     // cold, 5 matches warm" is that, plus the budget.
     scope.targets.sort_by(|a, b| a.path.cmp(&b.path));
+    tracing::debug!(
+        files = scope.targets.len(),
+        roots = scope.roots.len(),
+        elapsed_ms = started.elapsed().as_millis(),
+        "literal scope walked"
+    );
     Ok(scope)
 }
 
@@ -395,8 +408,13 @@ fn render_human(
         out,
         "  {}",
         style.dim(&format!(
-            "{} matches in {} of {} files, scanned in {}",
+            "{} {} in {} of {} files, scanned in {}",
             render::count(outcome.hits.len() as u64),
+            if outcome.hits.len() == 1 {
+                "match"
+            } else {
+                "matches"
+            },
             render::count(outcome.files_scanned as u64),
             render::count(outcome.files_in_scope as u64),
             render::duration(elapsed.as_millis())
@@ -407,13 +425,19 @@ fn render_human(
     // **The important line.** Without it, "0 matches in 8,427 files" reads as
     // "we looked everywhere" when the scan gave up after five seconds — which
     // is the most misleading thing this command can say.
-    if let Some((what, fix)) = incompleteness(outcome, budget) {
-        writeln!(
+    match incompleteness(outcome, budget) {
+        Some((what, fix)) => writeln!(
             out,
             "  {}",
             style.warn(&format!("Incomplete: {what}. {fix}"))
         )
-        .map_err(io)?;
+        .map_err(io)?,
+        // *Reached*, not "read": the skip counts below say how many of them
+        // were then left unopened, and claiming more than reaching them is the
+        // completeness this scan has not earned.
+        // The count is on the line above; repeating it here reads as
+        // "1 matches in 1 of 1 files / every one of the 1 files".
+        None => writeln!(out, "  {}", style.dim("Every file in scope was reached.")).map_err(io)?,
     }
 
     // A root that has gone away is a hole in the scope itself, not in the scan
@@ -482,10 +506,18 @@ fn render_json(
     elapsed: Duration,
     out: &mut dyn Write,
 ) -> Result<()> {
+    // Four branches, because `complete: false` next to "every file was read"
+    // is its own small lie. Reaching a file, reading it, and the scope being
+    // whole are three different claims.
     let advice = match incompleteness(outcome, budget) {
         Some((what, fix)) => format!("This scan did not cover everything in scope: {what}. {fix}"),
-        None if scope.is_partial() => "The scan read every file it could reach, but part of \
-             the scope could not be walked — see roots_unreachable and directories_unreadable."
+        None if scope.is_partial() => "Every file in scope was reached, but the scope itself \
+             has holes — see roots_unreachable and directories_unreadable. Reconnect the \
+             folder, or grant access to it, and scan again."
+            .to_string(),
+        None if outcome.has_gaps() => "Every file in scope was reached, but some were not \
+             read — see the files_skipped counts. No match here is not proof the pattern is \
+             absent from those."
             .to_string(),
         None => "Every file in scope was read.".to_string(),
     };
@@ -537,7 +569,6 @@ fn render_json(
 fn io(e: std::io::Error) -> marrow_core::Error {
     marrow_core::Error::from(e)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -681,7 +712,8 @@ mod tests {
             assert!(!tier.safe_to_read(), "{tier:?} must never be opened");
             // A placeholder reaching the scan is skipped unread and counted,
             // not hydrated.
-            let target = LiteralTarget::new(marrow_core::FileId::new(), s.path().join("plain.txt"), tier);
+            let target =
+                LiteralTarget::new(marrow_core::FileId::new(), s.path().join("plain.txt"), tier);
             let out = literal_search(
                 &[target],
                 &LiteralQuery::new("needle"),
@@ -743,7 +775,10 @@ mod tests {
         let s = Scratch::new("filter");
         s.write("keep/a.txt", "needle\n");
         s.write("drop.txt", "needle\n");
-        let kept = s.targets().into_iter().filter(|t| path_matches(&t.path, "keep"));
+        let kept = s
+            .targets()
+            .into_iter()
+            .filter(|t| path_matches(&t.path, "keep"));
         assert_eq!(kept.count(), 1);
     }
 
@@ -804,7 +839,10 @@ mod tests {
         assert_eq!(c["files_scanned"], 12_204);
         assert_eq!(c["files_never_reached"], 66_975);
         assert_eq!(c["scope_from"], "walk");
-        assert!(c["advice"].as_str().expect("advice").contains("--time-limit"));
+        assert!(c["advice"]
+            .as_str()
+            .expect("advice")
+            .contains("--time-limit"));
     }
 
     /// Completeness is claimed only when it was earned. A root that could not
@@ -856,6 +894,32 @@ mod tests {
         assert!(scope_caveat(&scope_of(Vec::new())).contains("node_modules"));
     }
 
+    /// `complete: false` beside "every file in scope was read" is its own
+    /// small lie. Reaching a file, reading it, and the scope being whole are
+    /// three separate claims and the advice has to match the flag.
+    #[test]
+    fn the_advice_never_contradicts_the_completeness_flag() {
+        let mut reached_but_unread = outcome(10, 10, StopReason::Completed);
+        reached_but_unread.files_skipped_binary = 4;
+        reached_but_unread.files_skipped_not_resident = 1;
+
+        let mut buf = Vec::new();
+        render_json(
+            &request("needle"),
+            &scope_of(Vec::new()),
+            &reached_but_unread,
+            DEFAULT_TIME_LIMIT,
+            Duration::from_millis(9),
+            &mut buf,
+        )
+        .expect("render");
+        let v: serde_json::Value = serde_json::from_slice(&buf).expect("json");
+        let advice = v["coverage"]["advice"].as_str().expect("advice");
+        assert_eq!(v["coverage"]["complete"], false);
+        assert!(advice.contains("not read"), "{advice}");
+        assert_eq!(v["coverage"]["files_skipped_cloud_only"], 1);
+    }
+
     /// The human view and `--json` are two renderers over one outcome, so the
     /// numbers that matter have to appear in both.
     #[test]
@@ -871,11 +935,17 @@ mod tests {
         )
         .expect("render");
         let text = String::from_utf8(buf).expect("utf8");
-        assert!(text.contains("0 matches in 12,204 of 79,179 files"), "{text}");
+        assert!(
+            text.contains("0 matches in 12,204 of 79,179 files"),
+            "{text}"
+        );
         assert!(text.contains("Incomplete:"), "{text}");
         assert!(text.contains("--time-limit"), "{text}");
         // Zero matches is exactly when "it is not on this disk" is the wrong
         // conclusion to let the reader reach unaided.
-        assert!(text.contains("walked now rather than read from the index"), "{text}");
+        assert!(
+            text.contains("walked now rather than read from the index"),
+            "{text}"
+        );
     }
 }
