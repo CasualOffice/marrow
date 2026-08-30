@@ -26,6 +26,7 @@ import {
   listProjects,
   listWorkspaces,
   modelsOverview,
+  providerSettings,
   readRegion,
   scratchStatus,
   search,
@@ -266,6 +267,27 @@ export function useModels() {
     queryFn: modelsOverview,
     refetchInterval: 4_000,
     staleTime: 2_000,
+    retry: false,
+  });
+}
+
+export const PROVIDER_KEY = ["provider"] as const;
+
+/**
+ * The answering endpoint, as Settings shows it.
+ *
+ * Separate from `useModels` rather than folded into it, because it answers a
+ * question neither half can answer alone: the hub knows the endpoint and the
+ * index knows the workspace classifications, and "this is configured and will
+ * still be refused" (LLM-032) needs both. **Not** on a four-second interval:
+ * it resolves a hostname and asks the keychain, and nothing on it changes
+ * unless this page changes it.
+ */
+export function useProviderSettings() {
+  return useQuery({
+    queryKey: PROVIDER_KEY,
+    queryFn: providerSettings,
+    staleTime: 30_000,
     retry: false,
   });
 }

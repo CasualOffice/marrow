@@ -25,11 +25,13 @@ use marrow_hw::{
 use marrow_model::detect::{self, Scan};
 use marrow_model::download::{self, Https, Progress, Stage};
 use marrow_model::envelope::{Envelope, Session};
-use marrow_model::provider::{Completion, GenerateRequest, GenerationProvider, Token};
+use marrow_model::openai::{OpenAiProvider, SystemDns};
+use marrow_model::provider::{Boundary, Completion, GenerateRequest, GenerationProvider, Token};
 use marrow_model::queue::Cancel;
 use marrow_model::registry::Registry;
 use marrow_model::request::Reasoning;
 use marrow_model::scratch::ModelWorkspace;
+use marrow_model::secrets::{Keyring, Secret, SecretStore};
 use marrow_model::supervisor::{self, Command, Event, ModelState, Supervisor};
 use marrow_model::worker::{MlxProvider, Runtime, Worker};
 use marrow_model::Embedder;
@@ -43,6 +45,12 @@ use crate::prefs;
 /// picture of the machine from before the user opened a browser, slow enough
 /// that the sampler is invisible in Activity Monitor.
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
+
+/// The keyring account the remote provider's key is filed under.
+///
+/// Fixed rather than taken from the window: an account name that arrives over
+/// IPC is a way to name any entry in the user's keychain.
+const REMOTE_KEY_ACCOUNT: &str = "cloud-provider";
 
 /// One row on the Models page.
 #[derive(Debug, Serialize)]
@@ -154,6 +162,71 @@ pub struct ModelsSnapshot {
     /// The commands that would create one. Named, because "MLX is not
     /// available" is a dead end and this is something the user can do.
     pub runtime_setup: Option<String>,
+    /// The remote endpoint, if one is configured. On this page because
+    /// `runtime_status` used to say "nothing leaves this device" as a
+    /// constant, and that sentence is only true while this is `None` or off.
+    pub remote: ProviderStatus,
+}
+
+/// Which generator answers, and where it runs.
+///
+/// **This is the only place local and remote are told apart** (LLM-029). The
+/// discriminant is a *private* field: the ask pipeline holds one of these,
+/// reports its boundary, and hands it back to
+/// [`Hub::generate_with_progress`] — and it cannot branch on which sort it
+/// got, because outside this module there is nothing to branch on. That is a
+/// stronger guarantee than a rule about where `if` statements may go.
+#[derive(Clone, Debug)]
+pub struct Selection {
+    kind: Kind,
+    /// What the model is called where it runs.
+    pub model_id: String,
+    /// What to call it on screen (LLM-039). Never "local" and never "cloud".
+    pub display: String,
+    /// Decided by the provider, stated for every generation (UX-012, LLM-034).
+    pub boundary: Boundary,
+    /// Where the request goes. `None` when it goes nowhere.
+    pub destination: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+enum Kind {
+    Local,
+    /// The provider itself, not a copy of its configuration. The boundary the
+    /// user is shown and the connection that is made are then the same object,
+    /// so they cannot come to disagree between the disclosure and the request.
+    Remote(Arc<OpenAiProvider>),
+}
+
+/// What the Settings page shows about the remote endpoint.
+///
+/// **There is no key field.** Whether one is *stored* is a fact the page needs;
+/// what it is, is not.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderStatus {
+    pub configured: bool,
+    pub enabled: bool,
+    pub label: String,
+    pub base_url: String,
+    pub model: String,
+    pub max_output_tokens: u32,
+    pub reasoning_effort: Option<String>,
+    /// `local` · `private` · `cloud`, and the same words the answer footer
+    /// uses. Resolved from the endpoint's address, so it is a fact rather than
+    /// a claim the user typed.
+    pub boundary: Option<String>,
+    pub boundary_label: Option<String>,
+    /// The addresses the connection would be pinned to. A boundary the user
+    /// cannot check is a claim rather than a fact.
+    pub addresses: Vec<String>,
+    /// Whether a key is in the keychain for it.
+    pub has_key: bool,
+    /// Why it cannot be used, if it cannot. Named rather than discovered on
+    /// the first question.
+    pub problem: Option<String>,
+    /// Which workspaces forbid it outright, and why (MOD-004, LLM-032).
+    pub blocked_by: Option<String>,
 }
 
 /// Whether semantic search is on, and how far along it is.
@@ -233,6 +306,21 @@ pub struct Hub {
     backfill: Arc<marrow_model::backfill::Progress>,
     /// Present while one is running.
     backfill_cancel: Arc<Mutex<Option<Cancel>>>,
+    /// The remote endpoint the user configured, if any. Held here rather than
+    /// re-read per question so the Settings page and the ask path cannot
+    /// disagree about what is configured.
+    remote: Mutex<Option<prefs::RemoteProvider>>,
+    /// Where a provider key is read from (LLM-030). A trait rather than the
+    /// keychain directly, so a test never prompts for a login password.
+    secrets: Arc<dyn SecretStore>,
+    /// The last answer [`Hub::provider_status`] gave, and when.
+    ///
+    /// The Models page refetches every four seconds, and that call resolves a
+    /// hostname and reads the keychain. Neither is free and neither changes
+    /// between paints: a DNS query every four seconds for the life of an open
+    /// window is a lot of traffic to produce a label, and a keychain read is
+    /// the thing macOS may put a dialog in front of.
+    provider_cache: Mutex<Option<(std::time::Instant, ProviderStatus)>>,
     /// One conversation's accumulated state: the delimiter, and the evidence
     /// already sent. Held here rather than in the window because both exist to
     /// make the prompt cache hit, and the window has no business knowing that.
@@ -329,10 +417,17 @@ impl Hub {
         // move between builds, and it should keep moving for someone who has
         // never expressed an opinion. An unreadable preferences file lands here
         // too, silently — a corrupt preference must not stop the window opening.
-        let profile = prefs::load(&data_dir)
+        let saved = prefs::load(&data_dir);
+        let profile = saved
             .ai_profile
             .unwrap_or_else(|| default_profile(&machine));
         Self {
+            remote: Mutex::new(saved.remote_provider),
+            // Constructing this touches nothing: `keyring` opens the keychain
+            // on the first read, and the first read happens only when a remote
+            // provider actually answers a question.
+            secrets: Arc::new(Keyring),
+            provider_cache: Mutex::new(None),
             runtime,
             data_dir,
             machine,
@@ -523,12 +618,6 @@ impl Hub {
         Some(p)
     }
 
-    /// Which installed model should write answers.
-    ///
-    /// The largest installed generative model that still fits, because within
-    /// the profile's budget a larger model is better at the one job this is
-    /// for. Embedders are excluded — they do not answer — and so is anything
-    /// the current conditions would refuse anyway.
     /// What this runtime is, in words, for the envelope's FACT block.
     ///
     /// **"What model are you using?" is not a question about the corpus**, and
@@ -537,24 +626,49 @@ impl Hub {
     /// pricing note about model downloads, and reported that no model name was
     /// listed in the documents — while the footer of that very answer read
     /// `qwen3.5-4b-mlx-q4`. The system knew; it just never told itself.
-    pub fn identity(&self, model_id: &str, thorough: bool) -> String {
-        let name = self
-            .registry
-            .lock()
-            .ok()
-            .and_then(|r| {
-                r.iter()
-                    .find(|e| e.id == model_id)
-                    .map(|e| e.display_name.clone())
-            })
-            .unwrap_or_else(|| model_id.to_string());
+    ///
+    /// **Every sentence here has to stay true when the answer is remote.** It
+    /// used to end "No question, file or answer is sent to any external
+    /// service", unconditionally — a statement that was true when it was
+    /// written, is false the moment a cloud endpoint is configured, and would
+    /// have been repeated to the user in the model's own voice.
+    pub fn identity(&self, selection: &Selection, thorough: bool) -> String {
+        let name = match selection.kind {
+            Kind::Local => self
+                .registry
+                .lock()
+                .ok()
+                .and_then(|r| {
+                    r.iter()
+                        .find(|e| e.id == selection.model_id)
+                        .map(|e| e.display_name.clone())
+                })
+                .unwrap_or_else(|| selection.model_id.clone()),
+            Kind::Remote(_) => selection.display.clone(),
+        };
+        let where_it_runs = match (selection.boundary, selection.destination.as_deref()) {
+            (Boundary::Local, _) => "locally on this machine, through MLX on Apple Silicon. \
+                 No question, file or answer is sent to any external service."
+                .to_string(),
+            (Boundary::Private, Some(host)) => format!(
+                "on {host}, which is a server the user runs. This question and every \
+                 evidence block below were sent there over the network to produce this \
+                 answer; they did not go to anybody else."
+            ),
+            (Boundary::Cloud, Some(host)) => format!(
+                "at {host}, which is a service run by somebody else. This question and \
+                 every evidence block below were sent there over the network to produce \
+                 this answer, under the user's own agreement with that provider."
+            ),
+            (_, None) => "on an endpoint whose address could not be determined".to_string(),
+        };
         format!(
-            "You are Marrow. You are running {name} (`{model_id}`) locally on this \
-             machine, through MLX on Apple Silicon. No question, file or answer is \
-             sent to any external service. You are currently in {} mode. This block \
-             is what you know about yourself: answer questions about which model you \
-             are, or where you run, from it — never from the evidence blocks, which \
-             are the user's own files and describe their projects, not you.",
+            "You are Marrow. You are running {name} (`{}`) {where_it_runs} You are \
+             currently in {} mode. This block is what you know about yourself: answer \
+             questions about which model you are, or where you run, from it — never from \
+             the evidence blocks, which are the user's own files and describe their \
+             projects, not you.",
+            selection.model_id,
             if thorough {
                 "Thorough (you reason before answering)"
             } else {
@@ -563,7 +677,78 @@ impl Hub {
         )
     }
 
-    pub fn generator(&self) -> Option<String> {
+    /// Which generator answers this question, and where it runs.
+    ///
+    /// The gateway. A configured, enabled remote endpoint wins — the user
+    /// turned it on and can turn it off — and otherwise the largest installed
+    /// local model that still fits, because within the profile's budget a
+    /// larger model is better at the one job this is for.
+    ///
+    /// Returns the reason rather than `None`: "there is nothing to answer
+    /// with" and "the endpoint you configured does not resolve" are different
+    /// problems with different remedies, and a caller handed an `Option` can
+    /// only report the first.
+    pub fn generator(&self) -> marrow_core::Result<Selection> {
+        let configured = self
+            .remote
+            .lock()
+            .ok()
+            .and_then(|r| r.clone())
+            .filter(|r| r.enabled);
+        if let Some(remote) = configured {
+            // Resolved **here**, before anything is retrieved: the boundary
+            // gates context assembly (LLM-032), so it has to be known before
+            // there is any context to assemble.
+            let provider = Arc::new(OpenAiProvider::connect(
+                remote.endpoint.clone(),
+                remote.label.clone(),
+                Arc::clone(&self.secrets),
+                Arc::new(marrow_model::openai::Https),
+                &SystemDns,
+            )?);
+            return Ok(Selection {
+                model_id: remote.endpoint.model.clone(),
+                display: format!("{} · {}", remote.label, remote.endpoint.model),
+                boundary: provider.boundary(),
+                destination: Some(provider.host().to_string()),
+                kind: Kind::Remote(provider),
+            });
+        }
+        match self.local_generator() {
+            Some(model_id) => Ok(Selection {
+                display: model_id.clone(),
+                model_id,
+                boundary: Boundary::Local,
+                destination: None,
+                kind: Kind::Local,
+            }),
+            None => Err(marrow_core::Error::new(
+                marrow_core::Code::ModNotInstalled,
+                self.no_generator_message(),
+            )),
+        }
+    }
+
+    /// Why there is nothing to answer with, and what to do about it.
+    fn no_generator_message(&self) -> String {
+        if self.runtime.is_none() {
+            "No inference runtime is installed, so questions cannot be answered yet. \
+             Search still works. The Models page has the two commands that install one, \
+             or you can point Marrow at an OpenAI-compatible endpoint in Settings."
+                .into()
+        } else {
+            "No model is installed. Download one from the Models page — the \
+             recommended one is about 3 GB — or point Marrow at an OpenAI-compatible \
+             endpoint in Settings."
+                .into()
+        }
+    }
+
+    /// The largest installed generative model that still fits.
+    ///
+    /// Embedders are excluded — they do not answer — and so is anything the
+    /// current conditions would refuse anyway.
+    fn local_generator(&self) -> Option<String> {
         self.sampler.tick();
         let available = self
             .sampler
@@ -593,14 +778,14 @@ impl Hub {
     /// says so through the `Loading` state while it happens.
     pub fn generate(
         &self,
-        model_id: &str,
+        selection: &Selection,
         envelope: &Envelope,
         thorough: bool,
         cancel: &Cancel,
         on_token: &mut dyn FnMut(Token),
     ) -> marrow_core::Result<Completion> {
         self.generate_with_progress(
-            model_id,
+            selection,
             envelope,
             thorough,
             cancel,
@@ -614,12 +799,69 @@ impl Hub {
     /// The first question of a session loads several gigabytes of weights, and
     /// until this existed the window showed nothing between Enter and the first
     /// token. A system with no progress looks slow whether or not it is.
+    ///
+    /// **The one branch on where the work happens lives here** (LLM-029).
+    /// Below it there is a `dyn GenerationProvider` and nothing else, and
+    /// above it the pipeline holds a [`Selection`] it cannot inspect.
+    pub fn generate_with_progress(
+        &self,
+        selection: &Selection,
+        envelope: &Envelope,
+        thorough: bool,
+        cancel: &Cancel,
+        on_stage: &mut dyn FnMut(&str, &str),
+        on_token: &mut dyn FnMut(Token),
+    ) -> marrow_core::Result<Completion> {
+        let reasoning = if thorough {
+            Reasoning::THOROUGH
+        } else {
+            Reasoning::Off
+        };
+        match &selection.kind {
+            Kind::Remote(provider) => {
+                // Nothing to load and nothing to warm: the stage line says
+                // what is actually happening, which is that the excerpts are
+                // going somewhere (LLM-033).
+                on_stage(
+                    "thinking",
+                    &format!(
+                        "Sending the question and {} excerpt(s) to {}",
+                        envelope.disclosure.evidence_blocks,
+                        provider.host()
+                    ),
+                );
+                provider.generate(
+                    GenerateRequest {
+                        model_id: &selection.model_id,
+                        envelope,
+                        reasoning,
+                        // The local budget is a memory question; a remote one
+                        // is a cost question, and the user set it.
+                        max_output_tokens: provider.endpoint().max_output_tokens,
+                        cancel,
+                    },
+                    on_token,
+                )
+            }
+            Kind::Local => self.generate_locally(
+                &selection.model_id,
+                envelope,
+                reasoning,
+                thorough,
+                cancel,
+                on_stage,
+                on_token,
+            ),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)] // Each is a distinct input; a struct
                                          // would move the list rather than shorten it.
-    pub fn generate_with_progress(
+    fn generate_locally(
         &self,
         model_id: &str,
         envelope: &Envelope,
+        reasoning: Reasoning,
         thorough: bool,
         cancel: &Cancel,
         on_stage: &mut dyn FnMut(&str, &str),
@@ -725,11 +967,7 @@ impl Hub {
             GenerateRequest {
                 model_id,
                 envelope,
-                reasoning: if thorough {
-                    Reasoning::THOROUGH
-                } else {
-                    Reasoning::Off
-                },
+                reasoning,
                 max_output_tokens: answer_budget(
                     &self.machine,
                     &entry,
@@ -743,6 +981,133 @@ impl Hub {
             },
             on_token,
         )
+    }
+
+    /// What the Settings page shows about the remote endpoint, and what the
+    /// ask path would refuse.
+    ///
+    /// Resolves the address, because the boundary is a fact about where the
+    /// packets go rather than about what the user typed — and a page that
+    /// says "on your own server" for `api.openai.com` would be the exact
+    /// failure UX-012 exists to prevent.
+    pub fn provider_status(&self) -> ProviderStatus {
+        /// Long enough that a page refetching every four seconds resolves once
+        /// a minute; short enough that a laptop moving between networks is
+        /// re-labelled before anyone reads the old one.
+        const CACHE_FOR: Duration = Duration::from_secs(60);
+
+        if let Ok(cache) = self.provider_cache.lock() {
+            if let Some((at, status)) = cache.as_ref() {
+                if at.elapsed() < CACHE_FOR {
+                    return status.clone();
+                }
+            }
+        }
+        let status = self.resolve_provider_status();
+        if let Ok(mut cache) = self.provider_cache.lock() {
+            *cache = Some((std::time::Instant::now(), status.clone()));
+        }
+        status
+    }
+
+    fn resolve_provider_status(&self) -> ProviderStatus {
+        let Some(remote) = self.remote.lock().ok().and_then(|r| r.clone()) else {
+            return ProviderStatus::default();
+        };
+        let mut status = ProviderStatus {
+            configured: true,
+            enabled: remote.enabled,
+            label: remote.label.clone(),
+            base_url: remote.endpoint.base_url.clone(),
+            model: remote.endpoint.model.clone(),
+            max_output_tokens: remote.endpoint.max_output_tokens,
+            reasoning_effort: remote.endpoint.reasoning_effort.clone(),
+            has_key: matches!(
+                self.secrets.get(&remote.endpoint.key_account),
+                Ok(Some(ref k)) if !k.is_empty()
+            ),
+            ..ProviderStatus::default()
+        };
+        match OpenAiProvider::connect(
+            remote.endpoint.clone(),
+            remote.label.clone(),
+            Arc::clone(&self.secrets),
+            Arc::new(marrow_model::openai::Https),
+            &SystemDns,
+        ) {
+            Ok(p) => {
+                status.boundary = Some(p.boundary().as_wire().to_string());
+                status.boundary_label = Some(p.boundary().label().to_string());
+                status.addresses = p.addresses();
+            }
+            Err(e) => status.problem = Some(e.message().to_string()),
+        }
+        status
+    }
+
+    /// Save the endpoint, and the key if one was given.
+    ///
+    /// The key goes to the OS keyring and **is not returned, logged or written
+    /// to the preferences file** (LLM-030). `None` leaves whatever is already
+    /// stored alone, so editing the model name does not require re-typing it.
+    pub fn set_remote_provider(
+        &self,
+        mut provider: prefs::RemoteProvider,
+        key: Option<String>,
+    ) -> marrow_core::Result<ProviderStatus> {
+        // The account is Marrow's to choose. Taking it from the window would
+        // let a caller name any entry in the user's keychain.
+        provider.endpoint.key_account = REMOTE_KEY_ACCOUNT.to_string();
+        if provider.label.trim().is_empty() {
+            provider.label = "Remote provider".into();
+        }
+        provider.endpoint.max_output_tokens = provider.endpoint.max_output_tokens.clamp(256, 8192);
+        // Refuses an address that cannot be used before it is saved, so the
+        // failure lands on the field the user is looking at rather than on
+        // their next question.
+        OpenAiProvider::connect(
+            provider.endpoint.clone(),
+            provider.label.clone(),
+            Arc::clone(&self.secrets),
+            Arc::new(marrow_model::openai::Https),
+            &SystemDns,
+        )?;
+        if let Some(key) = key {
+            let secret = Secret::new(key);
+            if secret.is_empty() {
+                self.secrets.delete(REMOTE_KEY_ACCOUNT)?;
+            } else {
+                self.secrets.put(REMOTE_KEY_ACCOUNT, &secret)?;
+            }
+        }
+        *self.remote.lock().map_err(|_| poisoned())? = Some(provider.clone());
+        self.forget_provider_status();
+        if let Err(e) = prefs::set_remote_provider(&self.data_dir, Some(provider)) {
+            tracing::warn!(error = %e, "could not save the provider; it applies until Marrow is closed");
+        }
+        Ok(self.provider_status())
+    }
+
+    /// Drop the cached status, so a change is visible on the next paint
+    /// rather than up to a minute later.
+    fn forget_provider_status(&self) {
+        if let Ok(mut cache) = self.provider_cache.lock() {
+            *cache = None;
+        }
+    }
+
+    /// Forget the endpoint **and the key**.
+    ///
+    /// Both, together: leaving a key in the keychain for a provider the user
+    /// has removed is exactly the kind of thing nobody goes back and cleans up.
+    pub fn clear_remote_provider(&self) -> marrow_core::Result<ProviderStatus> {
+        *self.remote.lock().map_err(|_| poisoned())? = None;
+        self.forget_provider_status();
+        if let Err(e) = prefs::set_remote_provider(&self.data_dir, None) {
+            tracing::warn!(error = %e, "could not clear the saved provider");
+        }
+        self.secrets.delete(REMOTE_KEY_ACCOUNT)?;
+        Ok(self.provider_status())
     }
 
     /// Whether semantic search is on, and how far along it is.
@@ -1034,6 +1399,7 @@ impl Hub {
     }
 
     pub fn snapshot(&self) -> ModelsSnapshot {
+        let remote = self.provider_status();
         self.sampler.tick();
         let conditions = self.sampler.conditions(SAMPLE_INTERVAL * 4);
         let available = conditions.min_available_bytes;
@@ -1111,14 +1477,28 @@ impl Hub {
             embedder: role_row(profile, Workload::Embedding),
             models,
             runtime_ready: self.runtime.is_some(),
-            runtime_status: match &self.runtime {
-                Some(_) => RUNTIME_READY.to_string(),
-                None => RUNTIME_MISSING.to_string(),
+            runtime_status: match (&self.runtime, remote.enabled) {
+                // "Nothing leaves this device" was a constant, and it stops
+                // being true the moment the user turns on an endpoint. The
+                // sentence is now assembled from what is actually configured.
+                (_, true) => format!(
+                    "Answers are being generated by {} at {}, so the question and the \
+                     excerpts it uses leave this device. Turn it off in Settings to go \
+                     back to answering locally.",
+                    remote.label,
+                    remote
+                        .boundary_label
+                        .clone()
+                        .unwrap_or_else(|| remote.base_url.clone())
+                ),
+                (Some(_), false) => RUNTIME_READY.to_string(),
+                (None, false) => RUNTIME_MISSING.to_string(),
             },
             runtime_setup: self
                 .runtime
                 .is_none()
                 .then(|| Runtime::setup_hint(&self.data_dir)),
+            remote,
         }
     }
 
@@ -1153,6 +1533,8 @@ impl Hub {
 }
 
 /// The sentence at the top of the page when a runtime is present.
+/// Only reached when **no** remote endpoint is enabled — `snapshot` chooses,
+/// and the last clause of this sentence is why that choice exists.
 const RUNTIME_READY: &str = "MLX is available on this machine. A model that is \
      installed and fits can answer questions locally — nothing leaves this device.";
 

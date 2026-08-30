@@ -222,3 +222,92 @@
   padding: 2px var(--sp-3);
   white-space: nowrap;
 }
+
+/* ── the answering endpoint (Part 8 §140) ─────────────────────────────────── */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-5) var(--sp-6);
+  border-radius: var(--r-surf);
+  box-shadow: var(--hairline);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fieldRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--sp-4) var(--sp-6);
+}
+
+.fieldLabel {
+  font-size: var(--fs-xs);
+  color: var(--fg3);
+}
+
+.input {
+  height: var(--ctl-h);
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-radius: var(--r-ctrl);
+  background: var(--sunken);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--fs-row);
+  min-width: 0;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+
+/* The boundary, stated as a fact with the addresses that decided it. Not a
+   badge: a badge is decoration, and this is the sentence UX-012 asks for. */
+.boundary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--fg2);
+}
+
+.boundaryAddrs {
+  font-family: var(--mono);
+  color: var(--fg3);
+}
+
+/* A refusal or a warning about this endpoint. Loud enough to read before
+   pressing Save, quiet enough not to be an error state on a page at rest. */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5);
+  border-radius: var(--r-surf);
+  background: var(--sunken);
+  font-size: var(--fs-xs);
+  color: var(--fg2);
+  max-width: var(--prose-measure);
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-body);
+  color: var(--fg);
+}
+
+.grow {
+  flex-grow: 1;
+}

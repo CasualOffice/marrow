@@ -11,6 +11,10 @@ marrow-core.workspace = true
 marrow-store.workspace = true
 marrow-hw.workspace = true
 marrow-index.workspace = true
+# For `addr::classify` only. Three notations for 127.0.0.1 must not be three
+# chances to get the boundary label wrong (NET-009), and that unwrapping is
+# already written and tested next door.
+marrow-net.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
@@ -21,6 +25,10 @@ blake3.workspace = true
 # is no system TLS library to go missing.
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 sha2 = "0.10"
+# The OS keyring, for a provider key (LLM-030, SEC-005). `apple-native` is the
+# macOS keychain; no other backend is compiled in, because there is no other
+# platform to be wrong about.
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # For reading a child process's resident size. See `worker::Watchdog` for why
@@ -29,3 +37,6 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+# To assert that a provider key never reaches a log line. Capturing `tracing`
+# output needs a subscriber, and a rule with no test is a comment.
+tracing-subscriber.workspace = true

@@ -392,6 +392,31 @@ function ModelStep({
     );
   }
 
+  // An endpoint answers instead, so none of the five states below apply — and
+  // three of them ("answers are not available here", "nothing here can answer
+  // a question yet") would be false. The first-run flow must not send someone
+  // to download three gigabytes they have already decided not to use.
+  if (snapshot.remote.enabled) {
+    return (
+      <>
+        <p className={styles.ready}>
+          <Icon name="chip" size={13} />
+          {snapshot.remote.label} answers questions
+          {snapshot.remote.boundaryLabel
+            ? ` — ${snapshot.remote.boundaryLabel}`
+            : ""}
+          . Settings has the switch, and a local model can be downloaded here
+          as well.
+        </p>
+        <div className={styles.actions}>
+          <button type="button" className={styles.secondary} onClick={onModels}>
+            See the Models page
+          </button>
+        </div>
+      </>
+    );
+  }
+
   if (model.installed) {
     return (
       <>

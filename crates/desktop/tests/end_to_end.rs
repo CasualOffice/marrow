@@ -218,7 +218,7 @@ fn asking_for_a_page_built_from_the_evidence_produces_one_rather_than_a_refusal(
     let (_corpus, _db_dir, db) = indexed_corpus();
     let core = Arc::new(Core::open(db).expect("core"));
     let hub = Arc::new(Hub::start(data_dir().join("models"), &[]));
-    if !hub.snapshot().runtime_ready || hub.generator().is_none() {
+    if !hub.snapshot().runtime_ready || hub.generator().is_err() {
         panic!("needs a runtime and a model");
     }
 
@@ -265,10 +265,14 @@ fn a_question_about_real_files_is_answered_from_them_with_a_citation() {
     if !snapshot.runtime_ready {
         panic!("no MLX runtime; see the Models page for the two commands");
     }
-    let Some(model) = hub.generator() else {
+    let Ok(model) = hub.generator() else {
         panic!("no model installed. Download one first, or run:\n  cargo test -p marrow-model -- --ignored the_smallest_pinned_model");
     };
-    eprintln!("answering with {model}\n");
+    eprintln!(
+        "answering with {} ({})\n",
+        model.display,
+        model.boundary.label()
+    );
 
     let mut answer = String::new();
     let mut sources = Vec::new();
@@ -301,7 +305,7 @@ fn a_question_about_real_files_is_answered_from_them_with_a_citation() {
     }
     eprintln!(
         "--- {} in {:.1}s ---\nsources: {sources:?}\n{}\n",
-        model,
+        model.display,
         started.elapsed().as_secs_f32(),
         answer.trim()
     );
@@ -557,6 +561,171 @@ fn the_second_turns_prompt_shares_its_preamble_with_the_first() {
     );
 }
 
+/// A hub whose only generator is a remote endpoint on this machine.
+///
+/// Port 9 is the discard port and nothing is listening on it. That is the
+/// point: every assertion below is about what happens *before* a byte is sent,
+/// so a test that could reach the endpoint would be testing something else.
+fn hub_with_a_remote_endpoint() -> (tempfile::TempDir, Arc<Hub>) {
+    let dir = tempfile::tempdir().expect("data dir");
+    // Written as raw JSON rather than through `prefs`, so this also pins the
+    // on-disk shape — and shows what is *not* in it (LLM-030).
+    std::fs::write(
+        dir.path().join("preferences.json"),
+        r#"{"remoteProvider":{"enabled":true,"label":"A server here",
+            "endpoint":{"baseUrl":"http://127.0.0.1:9/v1","model":"local-model",
+            "keyAccount":"cloud-provider","maxOutputTokens":512,"reasoningEffort":null}}}"#,
+    )
+    .expect("write preferences");
+    let hub = Arc::new(Hub::start(dir.path().join("models"), &[]));
+    (dir, hub)
+}
+
+#[test]
+fn a_configured_endpoint_answers_instead_of_a_local_model_and_says_where_it_is() {
+    // LLM-029/LLM-034 from the pipeline's side: the ask path gets a selection,
+    // reports its boundary, and never asks what kind it is.
+    let (_dir, hub) = hub_with_a_remote_endpoint();
+    let selection = hub.generator().expect("the endpoint is the generator");
+    assert_eq!(selection.model_id, "local-model");
+    assert_eq!(
+        selection.boundary,
+        marrow_model::Boundary::Private,
+        "127.0.0.1 is this machine, whatever the configuration calls it"
+    );
+    assert_eq!(selection.destination.as_deref(), Some("127.0.0.1"));
+
+    // And the FACT block the model is given about itself is true for it. The
+    // local wording — "no question, file or answer is sent to any external
+    // service" — would be a false statement in the model's own voice.
+    let identity = hub.identity(&selection, false);
+    assert!(
+        identity.contains("127.0.0.1"),
+        "the identity block must name where it runs: {identity}"
+    );
+    assert!(
+        !identity.contains("not sent") && !identity.contains("any external service"),
+        "the local promise must not survive into a remote answer: {identity}"
+    );
+}
+
+#[test]
+fn a_workspace_that_forbids_the_boundary_is_refused_before_a_single_file_is_read() {
+    // LLM-032, and the reason it says *before*: assembling the envelope first
+    // and refusing afterwards has already read the forbidden files off the
+    // disk into a buffer built for sending them. The observable version of
+    // "before" is that retrieval never announced itself and no sources event
+    // was ever produced.
+    let (_corpus, _db_dir, db) = indexed_corpus();
+    let core = Arc::new(Core::open(db).expect("core"));
+    core.set_workspace_classification("lease", marrow_model::Classification::LocalOnly)
+        .expect("classify");
+    let (_dir, hub) = hub_with_a_remote_endpoint();
+
+    let mut events = Vec::new();
+    ask::run(
+        &core,
+        &hub,
+        "conversation-classified",
+        "When does the lease renew?",
+        &[],
+        false,
+        None,
+        &Cancel::new(),
+        &mut |e| events.push(e),
+    );
+
+    assert_eq!(events.len(), 1, "nothing else happened: {events:?}");
+    let ask::AskEvent::Failed { code, message } = &events[0] else {
+        panic!("expected a refusal, got {:?}", events[0]);
+    };
+    assert_eq!(code, "POL_CLASSIFICATION_BLOCKED");
+    assert!(message.contains("lease"), "{message}");
+    assert!(message.contains("LOCAL_ONLY"), "{message}");
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, ask::AskEvent::Sources { .. })),
+        "the envelope was assembled before the check"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, ask::AskEvent::Stage { .. })),
+        "retrieval started before the check"
+    );
+}
+
+#[test]
+fn a_workspace_that_permits_the_boundary_gets_as_far_as_the_endpoint() {
+    // The other half, and the one that stops the check above from passing for
+    // the wrong reason: with a classification that permits it, the same
+    // pipeline retrieves, assembles and fails at the *connection* instead.
+    let (_corpus, _db_dir, db) = indexed_corpus();
+    let core = Arc::new(Core::open(db).expect("core"));
+    core.set_workspace_classification("lease", marrow_model::Classification::Confidential)
+        .expect("classify");
+    let (_dir, hub) = hub_with_a_remote_endpoint();
+
+    let mut events = Vec::new();
+    ask::run(
+        &core,
+        &hub,
+        "conversation-permitted",
+        "When does the lease renew?",
+        &[],
+        false,
+        None,
+        &Cancel::new(),
+        &mut |e| events.push(e),
+    );
+
+    let sources = events
+        .iter()
+        .find_map(|e| match e {
+            ask::AskEvent::Sources {
+                boundary,
+                boundary_label,
+                destination,
+                bytes,
+                distinct_sources,
+                hits,
+                ..
+            } => Some((
+                boundary.clone(),
+                boundary_label.clone(),
+                destination.clone(),
+                *bytes,
+                *distinct_sources,
+                hits.len(),
+            )),
+            _ => None,
+        })
+        .expect("the disclosure must arrive before the first token");
+    // LLM-033: excerpt count, bytes, file count — every one of them, before
+    // anything was sent.
+    assert_eq!(sources.0, "private");
+    assert_eq!(sources.1, "on your own server");
+    assert_eq!(sources.2.as_deref(), Some("127.0.0.1"));
+    assert!(sources.3 > 0, "bytes");
+    assert!(sources.4 > 0, "files");
+    assert!(sources.5 > 0, "excerpts");
+
+    let failed = events
+        .iter()
+        .find_map(|e| match e {
+            ask::AskEvent::Failed { code, message } => Some((code.clone(), message.clone())),
+            _ => None,
+        })
+        .expect("nothing is listening on port 9");
+    assert_eq!(failed.0, "NET_UNREACHABLE", "{}", failed.1);
+    assert!(
+        failed.1.contains("127.0.0.1"),
+        "the refusal names the endpoint: {}",
+        failed.1
+    );
+}
+
 #[test]
 #[ignore = "needs a downloaded model"]
 fn a_follow_up_reuses_the_prompt_and_keeps_the_thread() {
@@ -565,7 +734,7 @@ fn a_follow_up_reuses_the_prompt_and_keeps_the_thread() {
     let (_corpus, _db_dir, db) = indexed_corpus();
     let core = Arc::new(Core::open(db).expect("core"));
     let hub = Arc::new(Hub::start(data_dir().join("models"), &[]));
-    if hub.generator().is_none() {
+    if hub.generator().is_err() {
         panic!("no model installed");
     }
 
@@ -757,7 +926,7 @@ fn a_long_answer_is_not_silently_cut_off() {
     let (_corpus, _db_dir, db) = indexed_corpus();
     let core = Arc::new(Core::open(db).expect("core"));
     let hub = Arc::new(Hub::start(data_dir().join("models"), &[]));
-    if hub.generator().is_none() {
+    if hub.generator().is_err() {
         panic!("no model installed");
     }
 
@@ -1025,6 +1194,8 @@ mod conversations {
                         cached_prefix_tokens: 400,
                         stop_reason: "stop".into(),
                         elapsed_ms: 1_200,
+                        boundary: Some("cloud".into()),
+                        boundary_label: Some("sent to a cloud provider".into()),
                     }),
                 },
             )
@@ -1046,6 +1217,13 @@ mod conversations {
         let usage = turn.usage.as_ref().expect("usage");
         assert_eq!(usage.output_tokens, 41);
         assert_eq!(usage.stop_reason, "stop");
+        // UX-012 survives the round trip: a reopened thread must not have to
+        // guess where an answer was generated, and must not guess "local".
+        assert_eq!(usage.boundary.as_deref(), Some("cloud"));
+        assert_eq!(
+            usage.boundary_label.as_deref(),
+            Some("sent to a cloud provider")
+        );
     }
 
     #[test]

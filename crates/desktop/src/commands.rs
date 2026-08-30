@@ -907,6 +907,99 @@ pub async fn dismiss_model_download(
     .await
 }
 
+// ── the remote provider (Part 8 §140) ─────────────────────────────────────
+
+/// What the user typed into the provider form.
+///
+/// The key is `Option<String>` and it is **write-only**: it goes to the OS
+/// keyring and is never returned by any command (LLM-030). `None` means "leave
+/// whatever is stored alone", so changing the model name does not require
+/// re-typing it.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderForm {
+    pub enabled: bool,
+    pub label: String,
+    pub base_url: String,
+    pub model: String,
+    pub max_output_tokens: u32,
+    pub reasoning_effort: Option<String>,
+    pub key: Option<String>,
+}
+
+/// The endpoint's settings, and what would stop it being used.
+#[tauri::command]
+pub async fn provider_settings(
+    core: State<'_, Arc<Core>>,
+    hub: State<'_, Arc<crate::models::Hub>>,
+) -> Result<crate::models::ProviderStatus, UiError> {
+    let core = Arc::clone(&core);
+    let hub = Arc::clone(&hub);
+    blocking(move || Ok(provider_status(&core, &hub))).await
+}
+
+/// Save the endpoint, and the key if one was typed.
+#[tauri::command]
+pub async fn set_cloud_provider(
+    core: State<'_, Arc<Core>>,
+    hub: State<'_, Arc<crate::models::Hub>>,
+    form: ProviderForm,
+) -> Result<crate::models::ProviderStatus, UiError> {
+    let core = Arc::clone(&core);
+    let hub = Arc::clone(&hub);
+    blocking(move || {
+        let mut endpoint = marrow_model::openai::Endpoint::new(form.base_url, form.model);
+        endpoint.max_output_tokens = form.max_output_tokens;
+        endpoint.reasoning_effort = form.reasoning_effort.filter(|e| !e.trim().is_empty());
+        hub.set_remote_provider(
+            crate::prefs::RemoteProvider {
+                enabled: form.enabled,
+                label: form.label,
+                endpoint,
+            },
+            form.key,
+        )?;
+        Ok(provider_status(&core, &hub))
+    })
+    .await
+}
+
+/// Forget the endpoint and its key.
+#[tauri::command]
+pub async fn clear_cloud_provider(
+    core: State<'_, Arc<Core>>,
+    hub: State<'_, Arc<crate::models::Hub>>,
+) -> Result<crate::models::ProviderStatus, UiError> {
+    let core = Arc::clone(&core);
+    let hub = Arc::clone(&hub);
+    blocking(move || {
+        hub.clear_remote_provider()?;
+        Ok(provider_status(&core, &hub))
+    })
+    .await
+}
+
+/// The hub knows the endpoint; the index knows the classification. Joined
+/// here, because this is the one place that holds both — and the page has to
+/// be able to say "this is configured and it will still be refused" before the
+/// user asks a question and finds out.
+fn provider_status(core: &Core, hub: &crate::models::Hub) -> crate::models::ProviderStatus {
+    let mut status = hub.provider_status();
+    if let (Some(wire), Some((class, name))) =
+        (status.boundary.as_deref(), core.strictest_classification())
+    {
+        let boundary = match wire {
+            "local" => marrow_model::Boundary::Local,
+            "private" => marrow_model::Boundary::Private,
+            _ => marrow_model::Boundary::Cloud,
+        };
+        status.blocked_by = class
+            .refusal(boundary, &format!("`{name}`"))
+            .map(|e| e.message().to_string());
+    }
+    status
+}
+
 // ── ask (Part 8 §148) ─────────────────────────────────────────────────────
 
 /// Ask a question and stream the answer.
@@ -1040,6 +1133,9 @@ pub struct StoredTurn {
 
 /// What a finished generation cost. Mirrors [`crate::ask::AskEvent::Done`],
 /// which is where the window gets it from.
+///
+/// It rides in the `usage` JSON column, which the store treats as opaque — so
+/// this is the window's own wire format and adding a field costs no migration.
 #[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnUsage {
@@ -1049,6 +1145,20 @@ pub struct TurnUsage {
     pub cached_prefix_tokens: u32,
     pub stop_reason: String,
     pub elapsed_ms: u64,
+    /// Where the answer was generated, and the words the reader was shown at
+    /// the time (UX-012).
+    ///
+    /// **Optional, and absent means unknown rather than local.** Turns written
+    /// before this field existed have no boundary recorded, and a reopened
+    /// thread that stamped "on this device" on them would be inventing a fact
+    /// about a generation nobody observed. Stored as the label as well as the
+    /// code for the same reason the citations are stored rather than
+    /// re-derived: what is shown for an old turn should be what was shown when
+    /// it was answered.
+    #[serde(default)]
+    pub boundary: Option<String>,
+    #[serde(default)]
+    pub boundary_label: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

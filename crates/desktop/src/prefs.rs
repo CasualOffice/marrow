@@ -29,6 +29,7 @@
 use std::path::{Path, PathBuf};
 
 use marrow_hw::Profile;
+use marrow_model::openai::Endpoint;
 
 /// Sits beside `marrow.db` and `net-allow.txt` in the per-user data directory.
 const FILE_NAME: &str = "preferences.json";
@@ -47,6 +48,27 @@ pub struct Preferences {
     /// value that `default_profile` happens to return today: the hardware
     /// default may move, and it should keep moving until someone decides.
     pub ai_profile: Option<Profile>,
+    /// The one remote endpoint, when the user has configured one.
+    ///
+    /// **The key is not here and cannot be** (LLM-030): [`RemoteProvider`]
+    /// holds an [`Endpoint`], which names a keyring account rather than a
+    /// secret. This file is a plain file the user is invited to read and edit,
+    /// and it ends up in backups.
+    pub remote_provider: Option<RemoteProvider>,
+}
+
+/// A configured OpenAI-compatible endpoint, as the Settings page holds it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteProvider {
+    /// Whether it answers questions. Configured and off is a real state: the
+    /// user sets it up, then decides per week whether to use it, and clearing
+    /// the endpoint to turn it off would mean re-typing the key.
+    pub enabled: bool,
+    /// What to call it on screen. The user's word, because "the endpoint at
+    /// api.openai.com" is not what they think of it as.
+    pub label: String,
+    pub endpoint: Endpoint,
 }
 
 /// Read what the user chose. Never fails; an absent or unreadable file is
@@ -87,6 +109,21 @@ pub fn set_ai_profile(data_dir: &Path, profile: Profile) {
         // better than a silent no-op.
         tracing::warn!(error = %e, "could not save the AI preference; it applies until Marrow is closed");
     }
+}
+
+/// Record — or clear — the remote provider.
+///
+/// Same read-modify-write as the profile, and the same rule about what is not
+/// in it: the key never passes through here. It goes to the OS keyring from
+/// the command that received it, and this file learns only which account holds
+/// it.
+pub fn set_remote_provider(
+    data_dir: &Path,
+    provider: Option<RemoteProvider>,
+) -> std::io::Result<()> {
+    let mut prefs = load(data_dir);
+    prefs.remote_provider = provider;
+    write(data_dir, &prefs)
 }
 
 fn write(data_dir: &Path, prefs: &Preferences) -> std::io::Result<()> {
@@ -134,6 +171,57 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         std::fs::write(dir.path().join(FILE_NAME), "{ this is not json").expect("write");
         assert_eq!(load(dir.path()).ai_profile, None);
+    }
+
+    #[test]
+    fn a_remote_provider_survives_a_relaunch_and_its_key_never_lands_in_the_file() {
+        // LLM-030, as a property of the bytes on disk rather than of anyone's
+        // intentions. This file is plain text the user is invited to edit, and
+        // it is copied into every backup of the data directory.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let provider = RemoteProvider {
+            enabled: true,
+            label: "OpenAI".into(),
+            endpoint: Endpoint::new("https://api.openai.com/v1", "gpt-4o-mini"),
+        };
+        set_remote_provider(dir.path(), Some(provider.clone())).expect("write");
+
+        let text = std::fs::read_to_string(dir.path().join(FILE_NAME)).expect("read");
+        assert!(
+            text.contains("api.openai.com"),
+            "the endpoint is not a secret"
+        );
+        assert!(
+            text.contains("keyAccount"),
+            "the file names where the key is, not what it is"
+        );
+        for shape in ["sk-", "apiKey", "\"key\"", "secret", "token"] {
+            assert!(!text.contains(shape), "{shape} appeared in {text}");
+        }
+        assert_eq!(load(dir.path()).remote_provider, Some(provider));
+
+        set_remote_provider(dir.path(), None).expect("clear");
+        assert_eq!(load(dir.path()).remote_provider, None);
+    }
+
+    #[test]
+    fn configuring_a_provider_does_not_disturb_the_ai_preference() {
+        // Read-modify-write, tested rather than assumed: the two settings are
+        // written by different pages and one must not erase the other.
+        let dir = tempfile::tempdir().expect("temp dir");
+        set_ai_profile(dir.path(), Profile::Efficient);
+        set_remote_provider(
+            dir.path(),
+            Some(RemoteProvider {
+                enabled: false,
+                label: "LM Studio".into(),
+                endpoint: Endpoint::new("http://localhost:1234/v1", "qwen"),
+            }),
+        )
+        .expect("write");
+        let p = load(dir.path());
+        assert_eq!(p.ai_profile, Some(Profile::Efficient));
+        assert!(p.remote_provider.is_some());
     }
 
     #[test]

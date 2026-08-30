@@ -636,6 +636,62 @@ export interface ModelsSnapshot {
   /** The commands that would create a runtime. Named, because "MLX is not
    *  available" is a dead end and this is something the user can do. */
   readonly runtimeSetup: string | null;
+  /** The remote endpoint, if one is configured. `runtimeStatus` is written
+   *  from it: "nothing leaves this device" is only true while it is off. */
+  readonly remote: ProviderStatus;
+}
+
+/**
+ * Mirrors `models::ProviderStatus` — the configured endpoint, and what would
+ * stop it being used.
+ *
+ * **There is no key field, on purpose.** Whether one is stored is something
+ * this window needs to know; what it is, is not, and no command returns it
+ * (LLM-030).
+ */
+export interface ProviderStatus {
+  readonly configured: boolean;
+  readonly enabled: boolean;
+  readonly label: string;
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly maxOutputTokens: number;
+  readonly reasoningEffort: string | null;
+  /** `local` · `private` · `cloud`, decided by the address the endpoint
+   *  resolves to rather than by what was typed. */
+  readonly boundary: string | null;
+  readonly boundaryLabel: string | null;
+  /** The addresses the connection would be pinned to. A boundary the user
+   *  cannot check is a claim rather than a fact. */
+  readonly addresses: readonly string[];
+  readonly hasKey: boolean;
+  readonly problem: string | null;
+  /** A workspace classification that forbids it outright (MOD-004). */
+  readonly blockedBy: string | null;
+}
+
+/** What the provider form sends. `key` is write-only and never comes back. */
+export interface ProviderForm {
+  readonly enabled: boolean;
+  readonly label: string;
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly maxOutputTokens: number;
+  readonly reasoningEffort: string | null;
+  /** `null` leaves whatever is in the keychain alone. */
+  readonly key: string | null;
+}
+
+export function providerSettings(): Promise<ProviderStatus> {
+  return call<ProviderStatus>("provider_settings", {});
+}
+
+export function setCloudProvider(form: ProviderForm): Promise<ProviderStatus> {
+  return call<ProviderStatus>("set_cloud_provider", { form });
+}
+
+export function clearCloudProvider(): Promise<ProviderStatus> {
+  return call<ProviderStatus>("clear_cloud_provider", {});
 }
 
 /**
@@ -724,8 +780,13 @@ export type AskEvent =
        * as "one project".
        */
       readonly projects?: readonly string[];
-      /** UX-012: stated for every generation. */
+      /** UX-012: stated for every generation. `local` · `private` · `cloud`. */
       readonly boundary: string;
+      /** The same fact in the words to show. Sent rather than mapped here, so
+       *  there is one set of words and Rust owns it. */
+      readonly boundaryLabel: string;
+      /** The host the excerpts go to, or `null` when they go nowhere. */
+      readonly destination: string | null;
       readonly model: string;
     }
   | { readonly kind: "token"; readonly text: string }
@@ -819,6 +880,15 @@ export interface TurnUsage {
   readonly cachedPrefixTokens: number;
   readonly stopReason: string;
   readonly elapsedMs: number;
+  /**
+   * Where the answer was generated, and the words shown at the time (UX-012).
+   *
+   * **`null` means unknown, not local.** Turns written before this was
+   * recorded have no boundary, and stamping "on this device" on them would be
+   * inventing a fact about a generation nobody observed.
+   */
+  readonly boundary?: string | null;
+  readonly boundaryLabel?: string | null;
 }
 
 /** Mirrors `commands::StoredTurn`. */

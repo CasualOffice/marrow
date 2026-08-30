@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 
-use marrow_core::{Code, ProvenanceClass, Result, SourceSpan};
+use marrow_core::{ProvenanceClass, Result, SourceSpan};
 use marrow_model::envelope::{Builder, Envelope, Evidence, Fact, Role, Turn};
 
 use crate::models::Conversation;
@@ -139,8 +139,15 @@ pub enum AskEvent {
         /// an MFA setting and a code of conduct, and read as one coherent
         /// account of a single thing.
         projects: Vec<String>,
-        /// UX-012: local, private or cloud, stated for every generation.
+        /// UX-012: local, private or cloud, stated for every generation
+        /// (LLM-034). `local` · `private` · `cloud`.
         boundary: String,
+        /// The same fact in the words the user reads, so the window never has
+        /// to keep its own copy of them.
+        boundary_label: String,
+        /// The host the excerpts are being sent to, or `null` when they are
+        /// not being sent anywhere (LLM-033).
+        destination: Option<String>,
         model: String,
     },
     /// Part of the answer.
@@ -447,6 +454,42 @@ pub fn run(
     emit: &mut dyn FnMut(AskEvent),
 ) {
     let started = std::time::Instant::now();
+
+    // ── before anything is read off the disk ──────────────────────────────
+    //
+    // Two questions in this order, and both before retrieval:
+    //
+    //   1. **Who is answering, and where do they run?** The envelope has to be
+    //      able to say which model is answering — "what model are you using?"
+    //      was previously answered from the corpus, which retrieved chunks
+    //      containing the word "model" and reported that none named one, while
+    //      the footer of that same answer named it.
+    //   2. **Is that allowed?** LLM-032 requires the classification check to
+    //      happen *before* context assembly. Assembling first and refusing
+    //      afterwards would already have read the forbidden files into a
+    //      buffer built for sending them.
+    //
+    // Neither branches on what kind of generator it got: the first asks the
+    // gateway, the second asks the policy, and the boundary is a value that
+    // travels between them.
+    let generator = match hub.generator() {
+        Ok(g) => g,
+        Err(e) => {
+            emit(AskEvent::Failed {
+                code: e.code().as_str().into(),
+                message: e.message().into(),
+            });
+            return;
+        }
+    };
+    if let Err(e) = core.permit_generation(generator.boundary) {
+        emit(AskEvent::Failed {
+            code: e.code().as_str().into(),
+            message: e.message().into(),
+        });
+        return;
+    }
+
     emit(AskEvent::Stage {
         stage: "retrieving".into(),
         detail: "Searching your files".into(),
@@ -461,22 +504,6 @@ pub fn run(
     // when no embedding model is installed or the backfill has not run, and
     // that is the ordinary state rather than a failure.
     let embedding = hub.embed_query(question);
-
-    // Resolved before assembly, because the envelope has to be able to say
-    // which model is answering. "What model are you using?" was previously
-    // answered from the corpus — the pipeline retrieved chunks containing the
-    // word "model" and reported that no model name appeared in the documents,
-    // while the footer of that same answer named the model.
-    let generator = match hub.generator() {
-        Some(g) => g,
-        None => {
-            emit(AskEvent::Failed {
-                code: Code::ModNotInstalled.as_str().into(),
-                message: no_generator_message(hub),
-            });
-            return;
-        }
-    };
 
     let assembled = assemble(
         core,
@@ -504,10 +531,15 @@ pub fn run(
         projects: projects_of(&citations),
         hits: citations,
         excluded,
+        // LLM-033: what left the device — excerpts, files, bytes — taken from
+        // the envelope's own disclosure rather than recounted here. Two counts
+        // of the same thing drift, and this is the one that must not.
         bytes: envelope.disclosure.bytes,
         distinct_sources: envelope.disclosure.distinct_sources,
-        boundary: "local".into(),
-        model: generator.clone(),
+        boundary: generator.boundary.as_wire().into(),
+        boundary_label: generator.boundary.label().into(),
+        destination: generator.destination.clone(),
+        model: generator.display.clone(),
     });
 
     // Two callbacks, one sink. `RefCell` rather than threading a channel
@@ -547,19 +579,9 @@ pub fn run(
     }
 }
 
-/// Why there is nothing to answer with, and what to do about it.
-fn no_generator_message(hub: &Hub) -> String {
-    let s = hub.snapshot();
-    if !s.runtime_ready {
-        "No inference runtime is installed, so questions cannot be answered yet. \
-         Search still works. The Models page has the two commands that install one."
-            .into()
-    } else {
-        "No model is installed. Download one from the Models page — the \
-         recommended one is about 3 GB."
-            .into()
-    }
-}
+// `no_generator_message` moved into the hub: it is the gateway that knows
+// there is nothing to answer with, and it now has a remedy to offer that this
+// module has no business knowing about ("or point Marrow at an endpoint").
 
 #[cfg(test)]
 mod tests {
@@ -825,17 +847,23 @@ mod wire {
             bytes: 10,
             distinct_sources: 3,
             projects: vec!["services/STT".into()],
-            boundary: "local".into(),
+            boundary: "cloud".into(),
+            boundary_label: "sent to a cloud provider".into(),
+            destination: Some("api.example.com".into()),
             model: "m".into(),
         })
         .expect("serialize");
-        assert!(
-            sources.get("distinctSources").is_some(),
-            "Sources is missing `distinctSources`: {sources}"
-        );
-        assert!(
-            sources.get("projects").is_some(),
-            "Sources is missing `projects`: {sources}"
-        );
+        for k in [
+            "distinctSources",
+            "projects",
+            "boundary",
+            "boundaryLabel",
+            "destination",
+        ] {
+            assert!(
+                sources.get(k).is_some(),
+                "Sources is missing `{k}`: {sources}"
+            );
+        }
     }
 }

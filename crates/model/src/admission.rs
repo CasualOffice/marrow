@@ -16,6 +16,7 @@ use marrow_hw::{Conditions, Machine, ModelShape, Requirement};
 use serde::Serialize;
 
 use crate::breaker::BreakerState;
+use crate::provider::Boundary;
 use crate::registry::Entry;
 use crate::request::{Priority, Request};
 
@@ -80,6 +81,98 @@ pub struct Overrides {
 pub struct Policy {
     /// The workspace's classification forbids this provider (MOD-004).
     pub provider_forbidden: bool,
+}
+
+impl Policy {
+    /// What the classification says about running a generation *there*.
+    pub fn for_boundary(classification: Classification, boundary: Boundary) -> Self {
+        Self {
+            provider_forbidden: !classification.permits(boundary),
+        }
+    }
+}
+
+/// A workspace's data classification, as `workspaces.data_classification`
+/// spells it (§106.3).
+///
+/// It exists in the schema with a `CHECK` and a default of `INTERNAL`, and
+/// until now nothing read it. This is the reading (MOD-004): **where the
+/// content of a workspace is allowed to be generated over.**
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Classification {
+    Public,
+    #[default]
+    Internal,
+    Confidential,
+    /// The content may not leave the user's own machines.
+    Restricted,
+    /// The content may not leave *this* machine.
+    LocalOnly,
+}
+
+impl Classification {
+    /// Parse the `TEXT` the column holds.
+    ///
+    /// An unrecognised value reads as [`Classification::LocalOnly`], not as
+    /// the default. A classification nobody can parse is not permission to
+    /// send the files somewhere — it is exactly the case where the answer must
+    /// be the strict one, because the row was written by something that knew
+    /// more than this build does.
+    pub fn from_wire(s: &str) -> Self {
+        match s {
+            "PUBLIC" => Classification::Public,
+            "INTERNAL" => Classification::Internal,
+            "CONFIDENTIAL" => Classification::Confidential,
+            "RESTRICTED" => Classification::Restricted,
+            _ => Classification::LocalOnly,
+        }
+    }
+
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Classification::Public => "PUBLIC",
+            Classification::Internal => "INTERNAL",
+            Classification::Confidential => "CONFIDENTIAL",
+            Classification::Restricted => "RESTRICTED",
+            Classification::LocalOnly => "LOCAL_ONLY",
+        }
+    }
+
+    /// May a generation over this content run at that boundary? (MOD-004)
+    ///
+    /// The two strict levels are strict about different distances:
+    /// `RESTRICTED` content may reach a server the *user* runs but never
+    /// somebody else's; `LOCAL_ONLY` means what it says, and a server on the
+    /// user's own LAN is still a network. Everything else permits all three —
+    /// the classification is a ceiling on egress, not a recommendation.
+    pub fn permits(self, boundary: Boundary) -> bool {
+        match self {
+            Classification::Restricted => boundary != Boundary::Cloud,
+            Classification::LocalOnly => boundary == Boundary::Local,
+            _ => true,
+        }
+    }
+
+    /// The refusal, in the user's terms. `None` when it is permitted.
+    ///
+    /// **Not overridable, and the message does not offer an override** — this
+    /// is policy, not resources, and conflating the two teaches people to
+    /// ignore both (§142.3).
+    pub fn refusal(self, boundary: Boundary, where_: &str) -> Option<marrow_core::Error> {
+        if self.permits(boundary) {
+            return None;
+        }
+        Some(marrow_core::Error::new(
+            Code::PolClassificationBlocked,
+            format!(
+                "{where_} is classified {}, so its content cannot be answered by a model {}. \
+                 Use a local model, or change the classification of that workspace.",
+                self.as_wire(),
+                boundary.running_where(),
+            ),
+        ))
+    }
 }
 
 /// Everything admission reads. Grouped so the signature does not grow a
@@ -336,6 +429,74 @@ mod tests {
         let mut context = cx(&m, &c);
         context.overrides.ignore_memory = true;
         assert!(admit(&e, &req(), &e.shape(8192, KvPrecision::F16), context).admitted());
+    }
+
+    #[test]
+    fn a_classification_decides_how_far_the_content_may_go() {
+        // MOD-004. `RESTRICTED` and `LOCAL_ONLY` are strict about different
+        // distances, and collapsing them would either forbid the user's own
+        // server or permit somebody else's.
+        for (c, local, private, cloud) in [
+            (Classification::Public, true, true, true),
+            (Classification::Internal, true, true, true),
+            (Classification::Confidential, true, true, true),
+            (Classification::Restricted, true, true, false),
+            (Classification::LocalOnly, true, false, false),
+        ] {
+            assert_eq!(c.permits(Boundary::Local), local, "{c:?}");
+            assert_eq!(c.permits(Boundary::Private), private, "{c:?}");
+            assert_eq!(c.permits(Boundary::Cloud), cloud, "{c:?}");
+        }
+    }
+
+    #[test]
+    fn a_classification_nobody_can_parse_is_the_strict_answer_not_the_default() {
+        // A row written by a build that knew more than this one is not
+        // permission to send the files somewhere.
+        assert_eq!(
+            Classification::from_wire("INTERNAL"),
+            Classification::Internal
+        );
+        assert_eq!(
+            Classification::from_wire("SOMETHING_NEWER"),
+            Classification::LocalOnly
+        );
+        for c in [
+            Classification::Public,
+            Classification::Internal,
+            Classification::Confidential,
+            Classification::Restricted,
+            Classification::LocalOnly,
+        ] {
+            assert_eq!(Classification::from_wire(c.as_wire()), c, "{c:?}");
+        }
+    }
+
+    #[test]
+    fn a_classification_refusal_names_the_workspace_and_offers_no_override() {
+        // §142.3: policy refusals are not overridable, and a message that
+        // offers a way past one teaches people to ignore both kinds.
+        assert!(Classification::Internal
+            .refusal(Boundary::Cloud, "Desktop")
+            .is_none());
+        let e = Classification::Restricted
+            .refusal(Boundary::Cloud, "Desktop")
+            .expect("must refuse");
+        assert_eq!(e.code(), Code::PolClassificationBlocked);
+        assert!(!e.code().retryable());
+        assert!(e.message().contains("Desktop"), "{}", e.message());
+        assert!(e.message().contains("RESTRICTED"), "{}", e.message());
+        assert!(
+            !e.message().to_lowercase().contains("anyway"),
+            "no override is offered: {}",
+            e.message()
+        );
+        assert!(
+            Policy::for_boundary(Classification::Restricted, Boundary::Cloud).provider_forbidden
+        );
+        assert!(
+            !Policy::for_boundary(Classification::Restricted, Boundary::Local).provider_forbidden
+        );
     }
 
     #[test]

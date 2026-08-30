@@ -15,6 +15,7 @@
  */
 
 import { useCallback, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import styles from "./SettingsView.module.css";
 import { cx } from "../lib/cx";
@@ -22,7 +23,15 @@ import { bytes, count, DASH } from "../lib/format";
 import { ErrorNotice } from "./ErrorNotice";
 import { Icon } from "./Icon";
 import { emptyScratch } from "../actions";
-import { useIndexHealth, useScratch, useWorkspaces } from "../queries";
+import { asUiError, clearCloudProvider, setCloudProvider } from "../api";
+import {
+  PROVIDER_KEY,
+  useIndexHealth,
+  useModels,
+  useProviderSettings,
+  useScratch,
+  useWorkspaces,
+} from "../queries";
 import { useUi } from "../store";
 import { resolveTheme, type ThemeChoice } from "../theme";
 
@@ -94,6 +103,9 @@ export function SettingsView() {
   const h = health.data;
   const rows = workspaces.data ?? [];
   const resolved = resolveTheme(theme);
+  // Read rather than assumed: every claim below about where answers go is
+  // conditional on this.
+  const remote = useModels().data?.remote;
 
   return (
     <div className={styles.view}>
@@ -155,16 +167,36 @@ export function SettingsView() {
           {/* ── dropped files ─────────────────────────────────────────────── */}
           <DroppedFiles />
 
+          {/* ── where answers are generated ───────────────────────────────── */}
+          <AnsweringEndpoint />
+
           {/* ── where it lives ────────────────────────────────────────────── */}
           <section className={styles.section}>
             <h2 className={styles.heading}>Where it lives</h2>
             <p className={styles.lede}>
-              Everything Marrow knows is on this machine, and the window itself
-              is granted no filesystem, shell or network permission at all
-              (SEC-012): the named commands it can call are the entire surface
-              between it and the disk. Some of them do change things — granting a
-              folder, downloading a model, starting an index run — and each one
-              says so where it is offered.
+              {/* This paragraph opened "Everything Marrow knows is on this
+                  machine", flat. That was true of every build until an
+                  answering endpoint could be configured, and it is the first
+                  thing a reader consults about the privacy posture — which
+                  makes it the worst sentence in the app to leave standing
+                  after it stops being true. The index half is still
+                  unconditional; the answering half is now read off what is
+                  actually set. */}
+              Everything Marrow has indexed is on this machine, and the window
+              itself is granted no filesystem, shell or network permission at
+              all (SEC-012): the named commands it can call are the entire
+              surface between it and the disk. Some of them do change things —
+              granting a folder, downloading a model, starting an index run —
+              and each one says so where it is offered.{" "}
+              {remote?.enabled ? (
+                <>
+                  <strong>Answers do not stay here.</strong> {remote.label} at{" "}
+                  <span className="mono">{remote.baseUrl}</span> generates them,
+                  so the question and the excerpts it cites are sent there.
+                </>
+              ) : (
+                "Answers are generated on this machine, by a local model."
+              )}
             </p>
             <ul className={styles.roots}>
               {rows.map((w) => (
@@ -205,6 +237,359 @@ export function SettingsView() {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The answering endpoint (Part 8 §140).
+ *
+ * One endpoint, OpenAI-compatible, brought by the user. Four things this card
+ * has to get right, and each of them is a requirement rather than a
+ * preference:
+ *
+ * - **The key never comes back.** It is written to the OS keychain by the
+ *   command that receives it, and no command returns it (LLM-030). The field
+ *   below is write-only and empty on every render; "a key is saved" is the
+ *   most this window is ever told.
+ * - **The agreement is stated where the key is entered** (LLM-031). Not in a
+ *   footnote and not on first use — at the field, because that is the moment
+ *   the decision is made.
+ * - **The boundary is resolved, not typed** (UX-012). `http://localhost:1234`
+ *   and `api.openai.com` are not the same decision, and the difference is
+ *   decided by the address the endpoint resolves to, with the addresses shown
+ *   so the claim is checkable.
+ * - **A classification that forbids it says so here**, rather than at the
+ *   bottom of a failed answer (LLM-032).
+ */
+/** Both surfaces that show the endpoint: this card, and every claim the
+ *  Models page and the Ask view make about where answers go. */
+async function refresh(client: ReturnType<typeof useQueryClient>) {
+  await Promise.all([
+    client.invalidateQueries({ queryKey: PROVIDER_KEY }),
+    client.invalidateQueries({ queryKey: ["models"] }),
+  ]);
+}
+
+function AnsweringEndpoint() {
+  const client = useQueryClient();
+  const status = useProviderSettings().data;
+  const [draft, setDraft] = useState<{
+    label: string;
+    baseUrl: string;
+    model: string;
+    key: string;
+    maxOutputTokens: string;
+    reasoningEffort: string;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // The form opens on what is configured. `draft === null` is "not editing",
+  // which is a different state from "editing an empty form" — the second is
+  // what a user gets after pressing Add.
+  const editing = draft !== null;
+  const open = (from?: typeof status) =>
+    setDraft({
+      label: from?.label ?? "",
+      baseUrl: from?.baseUrl ?? "",
+      model: from?.model ?? "",
+      key: "",
+      maxOutputTokens: String(from?.maxOutputTokens || 2048),
+      reasoningEffort: from?.reasoningEffort ?? "",
+    });
+
+  const save = async (enabled: boolean) => {
+    if (!draft) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await setCloudProvider({
+        enabled,
+        label: draft.label,
+        baseUrl: draft.baseUrl,
+        model: draft.model,
+        maxOutputTokens: Number(draft.maxOutputTokens) || 2048,
+        reasoningEffort: draft.reasoningEffort || null,
+        // `null` leaves whatever is in the keychain alone, so editing the
+        // model name does not mean re-typing a key nobody can read back.
+        key: draft.key === "" ? null : draft.key,
+      });
+      setDraft(null);
+      await refresh(client);
+    } catch (e) {
+      setError(asUiError(e).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggle = async (enabled: boolean) => {
+    if (!status?.configured) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await setCloudProvider({
+        enabled,
+        label: status.label,
+        baseUrl: status.baseUrl,
+        model: status.model,
+        maxOutputTokens: status.maxOutputTokens,
+        reasoningEffort: status.reasoningEffort,
+        key: null,
+      });
+      await refresh(client);
+    } catch (e) {
+      setError(asUiError(e).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await clearCloudProvider();
+      setDraft(null);
+      await refresh(client);
+    } catch (e) {
+      setError(asUiError(e).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className={styles.section}>
+      <h2 className={styles.heading}>Answering</h2>
+      <p className={styles.lede}>
+        Answers are written by a local model unless you point Marrow at an
+        OpenAI-compatible endpoint — your own server, or a provider you have an
+        account with. Search never uses one: it works with no model and no
+        network, and always will.
+      </p>
+
+      {status?.configured && !editing && (
+        <div className={styles.form}>
+          <dl className={styles.facts}>
+            <Fact k="provider" v={status.label} />
+            <Fact k="model" v={status.model} />
+            <Fact k="endpoint" v={status.baseUrl} />
+            <Fact k="key" v={status.hasKey ? "in the keychain" : "none saved"} />
+          </dl>
+          {status.boundaryLabel && (
+            <p className={styles.boundary}>
+              {/* Only where there is something to notice: a warning triangle
+                  beside "on your own server" would make the safe answer look
+                  like the alarming one. */}
+              {status.boundary === "cloud" && <Icon name="warning" size={12} />}
+              {status.boundaryLabel}
+              {status.addresses.length > 0 && (
+                <span className={styles.boundaryAddrs}>
+                  {status.addresses.join(", ")}
+                </span>
+              )}
+            </p>
+          )}
+          {status.problem && (
+            <p className={styles.notice}>
+              <Icon name="warning" size={12} />
+              {status.problem}
+            </p>
+          )}
+          {status.blockedBy && (
+            /* LLM-032, said before a question is asked rather than after one
+               is refused. Not overridable, so nothing here offers a way past
+               it. */
+            <p className={styles.notice}>
+              <Icon name="warning" size={12} />
+              {status.blockedBy}
+            </p>
+          )}
+          <div className={styles.actions}>
+            <label className={styles.check}>
+              <input
+                type="checkbox"
+                checked={status.enabled}
+                disabled={busy}
+                onChange={(e) => void toggle(e.currentTarget.checked)}
+              />
+              Use it for answers
+            </label>
+            <span className={styles.grow} />
+            <div className={styles.segmented}>
+              <button
+                type="button"
+                className={styles.segment}
+                disabled={busy}
+                onClick={() => open(status)}
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                className={styles.segment}
+                disabled={busy}
+                onClick={() => void remove()}
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!status?.configured && !editing && (
+        <div className={styles.actions}>
+          <div className={styles.segmented}>
+            <button
+              type="button"
+              className={styles.segment}
+              onClick={() => open()}
+            >
+              Add an endpoint
+            </button>
+          </div>
+        </div>
+      )}
+
+      {editing && draft && (
+        <div className={styles.form}>
+          <div className={styles.fieldRow}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>name</span>
+              <input
+                className={styles.input}
+                value={draft.label}
+                placeholder="OpenAI"
+                onChange={(e) =>
+                  setDraft({ ...draft, label: e.currentTarget.value })
+                }
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>model</span>
+              <input
+                className={cx("mono", styles.input)}
+                value={draft.model}
+                placeholder="gpt-4o-mini"
+                onChange={(e) =>
+                  setDraft({ ...draft, model: e.currentTarget.value })
+                }
+              />
+            </label>
+          </div>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>endpoint</span>
+            <input
+              className={cx("mono", styles.input)}
+              value={draft.baseUrl}
+              placeholder="https://api.openai.com/v1"
+              onChange={(e) =>
+                setDraft({ ...draft, baseUrl: e.currentTarget.value })
+              }
+            />
+            <span className={styles.hint}>
+              The base, up to but not including <span className="mono">
+              /chat/completions</span> — usually ending in <span className="mono">
+              /v1</span>. Plain <span className="mono">http</span> is accepted
+              only for a server on this machine or your own network.
+            </span>
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>key</span>
+            <input
+              className={styles.input}
+              type="password"
+              value={draft.key}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder={
+                status?.hasKey ? "a key is saved — type to replace it" : ""
+              }
+              onChange={(e) =>
+                setDraft({ ...draft, key: e.currentTarget.value })
+              }
+            />
+            {/* LLM-031 · DPA-001. At the field, in plain words, because this
+                is the moment the decision is made. */}
+            <span className={styles.hint}>
+              The key goes into your macOS keychain and nowhere else — not into
+              a settings file, not into the index, not into a log. Marrow never
+              proxies anything: requests go from this machine straight to the
+              endpoint. <strong>Whatever you sent is governed by your own
+              agreement with that provider</strong>, including what they keep
+              and for how long. A server you run yourself needs no key.
+            </span>
+          </label>
+          <div className={styles.fieldRow}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>longest answer (tokens)</span>
+              <input
+                className={styles.input}
+                inputMode="numeric"
+                value={draft.maxOutputTokens}
+                onChange={(e) =>
+                  setDraft({ ...draft, maxOutputTokens: e.currentTarget.value })
+                }
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>reasoning effort</span>
+              <select
+                className={styles.input}
+                value={draft.reasoningEffort}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    reasoningEffort: e.currentTarget.value,
+                  })
+                }
+              >
+                <option value="">not supported</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+              </select>
+              <span className={styles.hint}>
+                There is no portable way to ask an OpenAI-compatible endpoint to
+                think first. Left at "not supported", Thorough is refused for
+                this endpoint rather than quietly answered as Fast.
+              </span>
+            </label>
+          </div>
+          {error && (
+            <p className={styles.notice}>
+              <Icon name="warning" size={12} />
+              {error}
+            </p>
+          )}
+          <div className={styles.actions}>
+            <div className={styles.segmented}>
+              <button
+                type="button"
+                className={cx(styles.segment, styles.segmentOn)}
+                disabled={busy}
+                onClick={() => void save(status?.enabled ?? true)}
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                className={styles.segment}
+                disabled={busy}
+                onClick={() => {
+                  setDraft(null);
+                  setError(null);
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 

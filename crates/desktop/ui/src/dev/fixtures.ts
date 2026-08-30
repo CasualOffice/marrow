@@ -349,6 +349,22 @@ function devModels(): ModelsSnapshot {
     runtimeSetup: null,
     runtimeStatus:
       "MLX is available on this machine. A model that is installed and fits can answer questions locally — nothing leaves this device.",
+    // Nothing configured, which is what makes the sentence above true.
+    remote: {
+      configured: false,
+      enabled: false,
+      label: "",
+      baseUrl: "",
+      model: "",
+      maxOutputTokens: 0,
+      reasoningEffort: null,
+      boundary: null,
+      boundaryLabel: null,
+      addresses: [],
+      hasKey: false,
+      problem: null,
+      blockedBy: null,
+    },
   };
 }
 
@@ -963,6 +979,8 @@ export async function mockAsk(
     bytes: 4820,
     distinctSources: 2,
     boundary: "local",
+    boundaryLabel: "on this device",
+    destination: null,
     model: "Qwen 3.5 4B",
   });
 

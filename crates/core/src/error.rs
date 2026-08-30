@@ -142,6 +142,12 @@ codes! {
     /// The server answered, and not with success. Not retryable: the same
     /// request gets the same answer.
     NetBadStatus            => "NET_BAD_STATUS",      Network, false;
+    /// A provider is throttling this key. Distinct from `NET_BAD_STATUS`
+    /// precisely because it **is** retryable — the identical request succeeds
+    /// in a minute — and folding it into the code that means "asking again
+    /// changes nothing" would make the one recoverable remote failure look
+    /// permanent.
+    NetRateLimited          => "NET_RATE_LIMITED",    Network, true;
 
     // ACT_ — a write the user asked for, refused. Never retryable as-is: the
     // caller has to look at what changed and decide again.

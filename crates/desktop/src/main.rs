@@ -68,7 +68,7 @@ fn main() {
     // an answer was depended on when the author last remembered. Not fatal if
     // it cannot start: the app still searches what it has, and `index_health`
     // reports that nothing is watching rather than implying everything is fine.
-    let watchers = match marrow_desktop::Watchers::start(Arc::clone(&core)) {
+    let watchers = match marrow_desktop::Watchers::start(Arc::clone(&core), dir.clone()) {
         Ok(w) => Some(Arc::new(w)),
         Err(e) => {
             tracing::warn!(error = %e, "could not start the folder watchers");
@@ -112,6 +112,9 @@ fn main() {
             commands::download_model,
             commands::cancel_model_download,
             commands::dismiss_model_download,
+            commands::provider_settings,
+            commands::set_cloud_provider,
+            commands::clear_cloud_provider,
             commands::ask,
             commands::cancel_ask,
             commands::release_model,

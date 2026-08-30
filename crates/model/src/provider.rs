@@ -31,6 +31,32 @@ impl Boundary {
             Boundary::Cloud => "sent to a cloud provider",
         }
     }
+
+    /// The same fact as a phrase that follows "a model" — for the sentences
+    /// where [`Boundary::label`] would have to be bent into the grammar.
+    pub fn running_where(self) -> &'static str {
+        match self {
+            Boundary::Local => "running on this device",
+            Boundary::Private => "running on a server you run",
+            Boundary::Cloud => "running at a cloud provider",
+        }
+    }
+
+    /// Whether the content has to cross the network to get there. The one
+    /// question every disclosure surface actually asks.
+    pub fn leaves_the_device(self) -> bool {
+        !matches!(self, Boundary::Local)
+    }
+
+    /// The wire spelling, matching the `Serialize` impl so the UI and the
+    /// stored conversation agree on one set of strings.
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Boundary::Local => "local",
+            Boundary::Private => "private",
+            Boundary::Cloud => "cloud",
+        }
+    }
 }
 
 /// Why generation stopped. `Length` matters: an answer cut off mid-sentence

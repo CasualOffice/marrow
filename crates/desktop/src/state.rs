@@ -564,6 +564,85 @@ impl Core {
             .collect())
     }
 
+    /// May a generation over this index run *there*? (MOD-004, LLM-032)
+    ///
+    /// **Called before context assembly, never after.** Assembling first and
+    /// refusing afterwards is not a smaller version of the same thing: it has
+    /// already read the forbidden files off the disk into a buffer built for
+    /// sending, and the only thing standing between that buffer and the wire
+    /// is the next line of code.
+    ///
+    /// The whole index answers a question, so the whole index decides: the
+    /// strictest classification among the active workspaces governs. The
+    /// alternative — checking only the workspace a question was scoped to —
+    /// would be defeated by asking the same question unscoped, which is the
+    /// default.
+    ///
+    /// A database that cannot be read is `LOCAL_ONLY`. "I could not find out
+    /// whether this is allowed" is not permission.
+    pub fn permit_generation(&self, boundary: marrow_model::Boundary) -> Result<()> {
+        match self.strictest_classification() {
+            Some((class, name)) => match class.refusal(boundary, &format!("`{name}`")) {
+                Some(e) => Err(e),
+                None => Ok(()),
+            },
+            None => Ok(()),
+        }
+    }
+
+    /// Set a workspace's classification.
+    ///
+    /// **There is no UI for this yet**, deliberately: the column has been in
+    /// the schema since M1 with a default of `INTERNAL`, and a control that
+    /// tightens it is a separate decision from the check that honours it. This
+    /// is the honouring. Without this method the check would be reachable only
+    /// by editing the database by hand, which is not a thing a test can do
+    /// through the one writer actor.
+    pub fn set_workspace_classification(
+        &self,
+        name: &str,
+        classification: marrow_model::Classification,
+    ) -> Result<()> {
+        let name = name.to_string();
+        let wire = classification.as_wire();
+        self.store.writer().submit(move |conn| {
+            conn.execute(
+                "UPDATE workspaces SET data_classification = ?2, updated_at = ?3 WHERE name = ?1",
+                marrow_store::rusqlite::params![
+                    name,
+                    wire,
+                    marrow_core::Timestamp::now().as_millis()
+                ],
+            )
+            .map(|_| ())
+            .map_err(|e| marrow_store::map_sqlite(e, "setting a workspace classification"))
+        })
+    }
+
+    /// The strictest classification among the active workspaces, and which one
+    /// it is. `None` when nothing is indexed.
+    pub fn strictest_classification(&self) -> Option<(marrow_model::Classification, String)> {
+        let conn = match self.store.reader() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "could not read workspace classifications");
+                return Some((
+                    marrow_model::Classification::LocalOnly,
+                    "this index".to_string(),
+                ));
+            }
+        };
+        let mut stmt = conn
+            .prepare("SELECT name, data_classification FROM workspaces WHERE status = 'ACTIVE'")
+            .ok()?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .ok()?;
+        rows.flatten()
+            .map(|(name, class)| (marrow_model::Classification::from_wire(&class), name))
+            .max_by_key(|(class, _)| *class)
+    }
+
     pub fn workspaces(&self) -> Result<Vec<WorkspaceRow>> {
         // One statement, in `marrow-query`. This and MCP's listing were two
         // separately-maintained queries answering the same question about the
