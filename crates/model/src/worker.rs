@@ -517,6 +517,9 @@ pub struct MlxProvider {
     worker: std::sync::Mutex<Worker>,
     model_id: String,
     display_name: String,
+    /// `None` means no budget was set, which differs from an infinite one only
+    /// in being honest about it.
+    budget_bytes: Option<u64>,
 }
 
 impl MlxProvider {
@@ -529,7 +532,18 @@ impl MlxProvider {
             worker: std::sync::Mutex::new(worker),
             model_id: model_id.into(),
             display_name: display_name.into(),
+            budget_bytes: None,
         }
+    }
+
+    /// Cap the worker's memory (LLM-021).
+    ///
+    /// Pass the model's own requirement plus a margin. A budget set to the
+    /// exact estimate kills every model whose estimate was slightly low, which
+    /// is a worse failure than the one it prevents.
+    pub fn with_memory_budget(mut self, bytes: u64) -> Self {
+        self.budget_bytes = Some(bytes);
+        self
     }
 }
 
@@ -552,13 +566,36 @@ impl GenerationProvider for MlxProvider {
             .worker
             .lock()
             .map_err(|_| Error::invariant("the worker lock was poisoned"))?;
+
+        // Checked between tokens rather than on a timer: it is the only moment
+        // this side of the pipe is awake, and it is frequent enough that a
+        // runaway is caught in well under a second.
+        let mut watchdog = self.budget_bytes.map(|b| w.watchdog(b));
+        let mut breach: Option<Error> = None;
+
         let (text, thinking, usage, stop_reason) = w.generate(
             request.envelope,
             request.max_output_tokens,
             request.reasoning.thinking_tokens(),
             request.cancel,
-            on_token,
+            &mut |t| {
+                if breach.is_none() {
+                    if let Some(wd) = watchdog.as_mut() {
+                        if let Err(e) = wd.check() {
+                            // Recorded, not returned: the closure cannot fail
+                            // the call, and cancelling is what actually stops
+                            // the worker.
+                            breach = Some(e);
+                            request.cancel.cancel();
+                        }
+                    }
+                }
+                on_token(t);
+            },
         )?;
+        if let Some(e) = breach {
+            return Err(e);
+        }
         Ok(Completion {
             text,
             thinking: (!thinking.is_empty()).then_some(thinking),
@@ -773,6 +810,57 @@ sleep 30"#
         let p = MlxProvider::new(Worker::start(&rt).unwrap(), "m", "Qwen 3.5 4B");
         assert_eq!(p.describe(), "Qwen 3.5 4B via MLX");
         assert_eq!(p.boundary(), Boundary::Local);
+    }
+
+    #[test]
+    fn a_worker_that_breaks_its_memory_budget_is_stopped_mid_answer() {
+        // LLM-021/022. Checked between tokens, because that is the only moment
+        // this side of the pipe is awake — and a runaway must not be allowed to
+        // finish just because it is producing output.
+        let (_t, rt) = fake(&format!(
+            r#"{READY}
+read line
+echo '{{"id":"r0","event":"token","text":"a"}}'
+echo '{{"id":"r0","event":"token","text":"b"}}'
+echo '{{"id":"r0","event":"token","text":"c"}}'
+echo '{{"id":"r0","event":"token","text":"d"}}'
+echo '{{"id":"r0","event":"done","promptTokens":1,"outputTokens":4,"stopReason":"stop"}}'
+sleep 5"#
+        ));
+        // A budget of one byte, so every reading is over it.
+        let p = MlxProvider::new(Worker::start(&rt).unwrap(), "m", "Test").with_memory_budget(1);
+        let cancel = Cancel::new();
+        let envelope = envelope();
+        let result = p.generate(
+            crate::provider::GenerateRequest {
+                model_id: "m",
+                envelope: &envelope,
+                reasoning: crate::request::Reasoning::Off,
+                max_output_tokens: 64,
+                cancel: &cancel,
+            },
+            &mut |_| {},
+        );
+        #[cfg(target_os = "macos")]
+        {
+            let e = result.expect_err("a runaway must not be allowed to finish");
+            assert_eq!(e.code(), Code::ModInsufficientMemory);
+            assert!(e.message().contains("was stopped"), "{}", e.message());
+        }
+        let _ = result;
+    }
+
+    #[test]
+    fn a_provider_with_no_budget_is_not_secretly_unlimited_it_is_unwatched() {
+        // The distinction matters when reading the code later: `None` is not a
+        // very large number, it is the absence of a check.
+        let (_t, rt) = fake(&format!("{READY}\nsleep 5"));
+        let p = MlxProvider::new(Worker::start(&rt).unwrap(), "m", "Test");
+        assert_eq!(p.budget_bytes, None);
+        assert_eq!(
+            p.with_memory_budget(4_000_000_000).budget_bytes,
+            Some(4_000_000_000)
+        );
     }
 
     #[test]
@@ -1172,5 +1260,269 @@ mod real {
             usage.prompt_tokens,
             text.trim()
         );
+    }
+}
+
+/// Keeps a worker inside its memory budget (LLM-021, LLM-022).
+///
+/// # Why this is a watchdog and not an `rlimit`
+///
+/// `RLIMIT_AS` is the obvious answer and it is the wrong one here. MLX maps a
+/// large virtual address space on Apple Silicon — unified memory means the
+/// GPU's allocations live in the same map — so a limit tight enough to be
+/// useful kills a model that would have run, and one loose enough not to is
+/// not a limit. `RLIMIT_DATA` is not honoured for `mmap`ed regions, which is
+/// most of a model.
+///
+/// So the budget is enforced by watching **resident** size, which is the
+/// number that actually matters to a machine that is about to swap, and
+/// killing the worker when it exceeds it. LLM-022: killed, not waited on —
+/// waiting on a process that has already broken its budget is how a laptop
+/// gets hot.
+#[derive(Debug)]
+pub struct Watchdog {
+    pid: u32,
+    limit_bytes: u64,
+    /// Consecutive readings over the limit before killing. One reading can
+    /// catch a transient peak during load; three cannot.
+    strikes: u32,
+    over: u32,
+}
+
+/// How many consecutive over-budget readings end the process.
+const STRIKES: u32 = 3;
+
+impl Watchdog {
+    pub fn new(pid: u32, limit_bytes: u64) -> Self {
+        Self {
+            pid,
+            limit_bytes,
+            strikes: STRIKES,
+            over: 0,
+        }
+    }
+
+    pub fn limit_bytes(&self) -> u64 {
+        self.limit_bytes
+    }
+
+    /// Resident bytes, or `None` when the platform will not say.
+    pub fn resident_bytes(&self) -> Option<u64> {
+        resident_bytes(self.pid)
+    }
+
+    /// Check once. `Err` means the budget is broken and the worker must die.
+    ///
+    /// Returns the reading so the caller can report it — a kill that does not
+    /// say how much was used is unactionable.
+    pub fn check(&mut self) -> Result<Option<u64>> {
+        let Some(rss) = self.resident_bytes() else {
+            // Cannot measure. Not a reason to kill: refusing to run because we
+            // cannot watch would disable local models on every platform that
+            // does not answer.
+            return Ok(None);
+        };
+        if rss <= self.limit_bytes {
+            self.over = 0;
+            return Ok(Some(rss));
+        }
+        self.over += 1;
+        if self.over < self.strikes {
+            tracing::warn!(
+                pid = self.pid,
+                rss_mb = rss / 1_000_000,
+                limit_mb = self.limit_bytes / 1_000_000,
+                strike = self.over,
+                "worker over its memory budget"
+            );
+            return Ok(Some(rss));
+        }
+        Err(Error::new(
+            Code::ModInsufficientMemory,
+            format!(
+                "The model used {} GB, over its {} GB budget, and was stopped. \
+                 Try a smaller model or a shorter context.",
+                rss as f64 / 1e9,
+                self.limit_bytes as f64 / 1e9
+            ),
+        ))
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)] // One documented read of a kernel-owned struct.
+fn resident_bytes(pid: u32) -> Option<u64> {
+    // `proc_pid_rusage` rather than shelling out to `ps`: this runs on the
+    // supervisor's tick, and a subprocess per sample would be the same mistake
+    // the hardware sampler exists to avoid.
+    const RUSAGE_INFO_V2: libc::c_int = 2;
+    #[repr(C)]
+    #[derive(Default)]
+    struct RUsageInfoV2 {
+        ri_uuid: [u8; 16],
+        ri_user_time: u64,
+        ri_system_time: u64,
+        ri_pkg_idle_wkups: u64,
+        ri_interrupt_wkups: u64,
+        ri_pageins: u64,
+        ri_wired_size: u64,
+        ri_resident_size: u64,
+        ri_phys_footprint: u64,
+        ri_proc_start_abstime: u64,
+        ri_proc_exit_abstime: u64,
+        ri_child_user_time: u64,
+        ri_child_system_time: u64,
+        ri_child_pkg_idle_wkups: u64,
+        ri_child_interrupt_wkups: u64,
+        ri_child_pageins: u64,
+        ri_child_elapsed_abstime: u64,
+        ri_diskio_bytesread: u64,
+        ri_diskio_byteswritten: u64,
+    }
+    extern "C" {
+        fn proc_pid_rusage(
+            pid: libc::c_int,
+            flavor: libc::c_int,
+            buffer: *mut libc::c_void,
+        ) -> libc::c_int;
+    }
+    let mut info = RUsageInfoV2::default();
+    let rc = unsafe {
+        proc_pid_rusage(
+            pid as libc::c_int,
+            RUSAGE_INFO_V2,
+            &mut info as *mut _ as *mut libc::c_void,
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    // `phys_footprint` rather than `resident_size`: it is what Activity
+    // Monitor calls Memory, and it counts compressed and IOKit-mapped pages
+    // that a model's weights actually occupy.
+    Some(info.ri_phys_footprint.max(info.ri_resident_size))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resident_bytes(_pid: u32) -> Option<u64> {
+    None
+}
+
+impl Worker {
+    /// The process id, so a watchdog can be pointed at it.
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// Attach a budget. Checked by the caller on its own cadence — the worker
+    /// does not spawn a thread for this, because the supervisor already has
+    /// one ticking.
+    pub fn watchdog(&self, limit_bytes: u64) -> Watchdog {
+        Watchdog::new(self.pid(), limit_bytes)
+    }
+}
+
+#[cfg(test)]
+mod budget {
+    use super::*;
+
+    fn sleeper() -> Child {
+        Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn")
+    }
+
+    #[test]
+    fn a_worker_inside_its_budget_is_left_alone() {
+        let mut child = sleeper();
+        let mut w = Watchdog::new(child.id(), 4_000_000_000);
+        for _ in 0..STRIKES + 1 {
+            assert!(w.check().is_ok(), "a small process must not be killed");
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn a_worker_over_its_budget_is_killed_after_three_readings_not_one() {
+        // One reading can catch a transient peak while weights are loading;
+        // three consecutive ones cannot.
+        let mut child = sleeper();
+        // A limit of one byte, so every reading is over.
+        let mut w = Watchdog::new(child.id(), 1);
+        #[cfg(target_os = "macos")]
+        {
+            assert!(w.check().is_ok(), "the first reading is a warning");
+            assert!(w.check().is_ok(), "the second is too");
+            let e = w.check().unwrap_err();
+            assert_eq!(e.code(), Code::ModInsufficientMemory);
+            assert!(
+                e.message().contains("GB"),
+                "must name the numbers: {}",
+                e.message()
+            );
+            assert!(e.message().contains("smaller model"), "must name a remedy");
+        }
+        let _ = w.check();
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn a_reading_back_under_the_limit_clears_the_strikes() {
+        // Otherwise a model that peaks once during load dies on its third
+        // unrelated peak an hour later.
+        let mut child = sleeper();
+        let mut w = Watchdog::new(child.id(), 1);
+        let _ = w.check();
+        let _ = w.check();
+        w.limit_bytes = u64::MAX;
+        assert!(w.check().is_ok());
+        assert_eq!(w.over, 0, "a good reading must reset the count");
+        w.limit_bytes = 1;
+        #[cfg(target_os = "macos")]
+        {
+            assert!(
+                w.check().is_ok(),
+                "the count restarted, so this is strike one"
+            );
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn a_process_that_cannot_be_measured_is_not_killed_for_it() {
+        // Refusing to run because we cannot watch would disable local models
+        // on every platform that does not answer.
+        let mut w = Watchdog::new(u32::MAX, 1);
+        assert!(w.check().is_ok());
+        assert_eq!(w.resident_bytes(), None);
+    }
+
+    #[test]
+    fn a_real_worker_reports_a_plausible_footprint() {
+        let mut child = sleeper();
+        let w = Watchdog::new(child.id(), 1);
+        #[cfg(target_os = "macos")]
+        {
+            // A shell that has just started is genuinely tiny — around 80 KB
+            // of footprint before it faults much in. The assertion is that we
+            // are reading *something* real, not a fixed size.
+            let rss = w.resident_bytes().expect("macOS must answer");
+            assert!(rss > 10_000, "implausibly small: {rss}");
+            assert!(
+                rss < 1_000_000_000,
+                "a shell should not use a gigabyte: {rss}"
+            );
+        }
+        let _ = w.limit_bytes();
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }

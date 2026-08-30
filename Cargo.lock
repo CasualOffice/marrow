@@ -2267,11 +2267,24 @@ name = "marrow-model"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "libc",
  "marrow-core",
  "marrow-hw",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
+ "tracing",
+ "ureq",
+]
+
+[[package]]
+name = "marrow-net"
+version = "0.1.0"
+dependencies = [
+ "marrow-core",
+ "serde",
+ "serde_json",
  "tempfile",
  "tracing",
  "ureq",
@@ -2333,6 +2346,19 @@ dependencies = [
  "tempfile",
  "tracing",
  "ulid",
+]
+
+[[package]]
+name = "marrow-tools"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "marrow-core",
+ "marrow-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

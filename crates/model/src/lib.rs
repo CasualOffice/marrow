@@ -14,7 +14,11 @@
 //!                     UI · CLI · MCP
 //! ```
 
-#![forbid(unsafe_code)]
+// Not `forbid`: `worker` reads a child process's resident size through
+// `proc_pid_rusage`, because macOS has no portable way to ask that question
+// safely. The unsafe is confined to one function and every call is a
+// documented read with no lifetime to get wrong.
+#![deny(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
 pub mod admission;

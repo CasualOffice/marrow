@@ -221,7 +221,8 @@ nobody is asking.
 - [x] The context envelope (§114) — per-session delimiter, collision regeneration, untrusted never last
 - [x] KV prefix reuse: 604-token prompt, 487 cached on a follow-up
 - [x] Fast / Thorough wired to the model's own reasoning flag and billed apart
-- [ ] rlimits on the worker (memory cap, CPU share) — only the wall clock is enforced today
+- [x] Memory budget on the worker, enforced between tokens. Not an `rlimit`: `RLIMIT_AS` is useless against MLX on unified memory, so the guard watches resident footprint and kills on three consecutive breaches
+- [ ] CPU share — not enforced; the load ceiling in admission defers work instead
 
 ### S5 — the ask surface `[x]`
 - [x] Streaming to the window over a Tauri channel, token by token

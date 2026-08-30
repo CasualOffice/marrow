@@ -213,7 +213,7 @@ fn strip_markers(s: &str) -> String {
 
 /// Run one question end to end, streaming to `emit`.
 #[allow(clippy::too_many_arguments)] // Each is a distinct input the window
-// has; a struct would move the list rather than shorten it.
+                                     // has; a struct would move the list rather than shorten it.
 pub fn run(
     core: &Arc<Core>,
     hub: &Arc<Hub>,

@@ -19,8 +19,8 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use marrow_hw::{
-    assess, choose, default_profile, offerable, KvPrecision, Machine, Probe, Profile, Sampler,
-    Workload,
+    assess, choose, default_profile, offerable, KvPrecision, Machine, Probe, Profile, Requirement,
+    Sampler, Workload,
 };
 use marrow_model::detect::{self, Scan};
 use marrow_model::download::{self, Https, Progress, Stage};
@@ -573,9 +573,23 @@ impl Hub {
             }
             let mut worker = Worker::start(&runtime)?;
             worker.load(model_id, &dir)?;
+
+            // The model's own footprint plus half again. Set to the bare
+            // estimate it would kill every model whose estimate was slightly
+            // low — a worse failure than the runaway it prevents — and set to
+            // the machine's total it would never fire before the OS did.
+            let budget = Requirement::estimate(
+                &self.machine,
+                &entry.shape(entry.default_context, KvPrecision::F16),
+            )
+            .ai_footprint()
+                * 3
+                / 2;
+
             *slot = Some(Loaded {
                 model_id: model_id.to_string(),
-                provider: MlxProvider::new(worker, model_id, entry.display_name.clone()),
+                provider: MlxProvider::new(worker, model_id, entry.display_name.clone())
+                    .with_memory_budget(budget),
             });
         }
 
