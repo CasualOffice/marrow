@@ -387,6 +387,52 @@ fn a_scoped_question_is_answered_only_from_that_subtree() {
     );
 }
 
+/// **Evidence may not eat the window.**
+///
+/// A count of chunks is not a bound on a prompt: twelve chunks of a dense
+/// document produced 29 KB, the answer budget subtracted that from the planned
+/// window, and what was left was clamped up to a floor the model then overran
+/// mid-sentence. The user asked for an HTML page and got about 4,000
+/// characters of one.
+///
+/// What is dropped is what retrieval ranked lowest, and it is reported in the
+/// same `excluded` list that already carries the self-written exclusions —
+/// silently sending less than was found is how a short answer comes to look
+/// like the model having nothing to say.
+#[test]
+fn evidence_is_bounded_so_the_answer_still_has_room() {
+    let (_corpus, _db_dir, db) = indexed_corpus();
+    let core = Core::open(db).expect("core");
+    let mut convo = marrow_desktop::models::Conversation::default();
+
+    let (envelope, _, excluded) = ask::assemble(
+        &core,
+        "lease rent renewal",
+        &[],
+        &mut convo,
+        None,
+        None,
+        None,
+    )
+    .expect("assemble");
+
+    // 16 KB of evidence plus the template; the whole prompt must stay well
+    // inside the 8,192-token window the runtime plans around.
+    assert!(
+        envelope.text.len() < 24 * 1024,
+        "the prompt is {} bytes, which leaves the answer nothing",
+        envelope.text.len()
+    );
+    // Nothing was dropped on this small corpus, but if it ever is, the reason
+    // has to travel with it.
+    for e in &excluded {
+        assert!(
+            !e.reason.is_empty(),
+            "a dropped source must say why it was dropped"
+        );
+    }
+}
+
 /// Where do two turns' prompts stop matching? Diagnostic, and it needs no
 /// model — the envelope is assembled without one.
 #[test]

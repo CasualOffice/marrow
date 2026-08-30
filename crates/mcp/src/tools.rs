@@ -31,6 +31,16 @@ document it came from.
 
 Matches on words, not substrings: `refresh_token` finds `refresh` and `token`.
 
+**Hand it the question, not keywords.** By default any word may match and BM25 \
+ranks a document matching more of them higher, so `when does the lease renew` \
+still finds the lease that says *renews*. Pass `match: \"all\"` to require every \
+word, or `match: \"phrase\"` for an exact sequence. The mode that ran is echoed \
+back as `match`.
+
+Refuses, with the reason: a `workspace` name that does not exist — rather than \
+returning nothing, which is indistinguishable from a genuine miss — and a query \
+with no letters or digits, which names `search_literal` instead.
+
 Every result carries `provenance` (exact | degraded | approximate) and `origin`. \
 A result with `origin: self_written` was produced by an agent and must not be \
 cited as independent evidence.",
@@ -59,6 +69,11 @@ cited as independent evidence.",
                     "path_contains": {
                         "type": "string",
                         "description": "Restrict to paths containing this substring."
+                    },
+                    "match": {
+                        "type": "string",
+                        "enum": ["any", "all", "phrase"],
+                        "description": "How a multi-word query is read. `any` (the default) lets any word match and ranks documents matching more of them higher — the right mode for a question. `all` requires every word, which returns nothing when the document phrases one of them differently. `phrase` requires the words adjacent and in order. A single-word query behaves identically in all three."
                     }
                 },
                 "required": ["query"]
@@ -83,6 +98,10 @@ index; the scan has a time budget and will stop before it has seen everything.
 **Always read `coverage`.** `complete: false` means the scan did not look \
 everywhere, so no match found is not the same as not present. Every file it \
 skipped is counted there with the reason.
+
+Refuses, with the reason: an empty `pattern`, a `regex` that does not compile, \
+and a `workspace` name that does not exist — the last rather than scanning \
+nothing, because an empty scan is indistinguishable from a genuine miss.
 
 Results carry `origin`; a result with `origin: self_written` was produced by \
 an agent and must not be cited as independent evidence.",
@@ -159,6 +178,15 @@ reading one would trigger a download of its contents.",
 Everything Marrow knows about one file: its stable identity, content hash, \
 previous paths if it has moved, version count, tier state, and index status.
 
+**The disk is checked, not just the index.** `present_on_disk` says whether the \
+path is still there now; when it is false, `citable` and `indexed_for_search` \
+are false, `tier_state` is `missing`, and `note` says what the remaining \
+figures describe. The index is only as current as the last scan, so a file \
+deleted or renamed since then is still recorded — reported rather than refused, \
+because `previous_paths` and `content_hash` are how you find where it went.
+
+Refuses a path that is not in the index at all.
+
 Every fact names how it was derived. Facts Marrow cannot yet establish are \
 reported as null rather than omitted, so absence is distinguishable from \
 ignorance.",
@@ -175,7 +203,14 @@ ignorance.",
     Tool {
         name: "list_workspaces",
         description: "\
-List the folders Marrow has been granted, with file counts and index freshness. \
+List the folders Marrow has been granted, each with its file count, chunk \
+count, byte total, cloud-only count and how many files have no searchable text.
+
+Freshness is reported once for the whole index, not per folder: \
+`last_indexed_ms`, `watcher`, `may_be_stale` and a `freshness` sentence, taken \
+from the least healthy root so a watched folder cannot vouch for an unwatched \
+one. They are the same four values `index_status` returns.
+
 Use this first when a search returns nothing — the answer is often that the \
 folder was never granted.",
         schema: || json!({ "type": "object", "properties": {} }),
@@ -183,11 +218,24 @@ folder was never granted.",
     Tool {
         name: "index_status",
         description: "\
-Index health: how many files are indexed, how many are parsed into searchable \
-chunks, and how many were deliberately skipped.
+Index health, and specifically the gap between the two numbers people conflate.
 
-Cloud-only files are counted separately and are never read. A search that misses \
-something is often explained here.",
+`files_indexed` is every file Marrow has a record of; all of them are findable \
+by name. `files_searchable` is the far smaller count whose text was actually \
+extracted into the `searchable_chunks` that `search` reads — only those can be \
+quoted or cited. On a real photo-heavy corpus the second is a small fraction of \
+the first, and that is the expected state, not a fault.
+
+`files_not_searchable` says why, and its three parts sum to its total: \
+`no_parser` (nothing to extract — photos, binaries, empty files; not a failure \
+and not fixable), `parse_failed` (a parser ran and did not get the whole file — \
+the only one worth acting on), and `not_processed` (never attempted yet, which \
+another index run clears). `cloud_only_not_read` is counted separately and those \
+files are never opened.
+
+Also reports `content_bytes`, `workspaces`, `schema_version`, and the freshness \
+of all of it: `last_indexed_ms`, `watcher`, `may_be_stale` and a `freshness` \
+sentence. A search that misses something is often explained here.",
         schema: || json!({ "type": "object", "properties": {} }),
     },
 ];
@@ -215,6 +263,35 @@ pub fn find(name: &str) -> Option<&'static Tool> {
 /// here either writes one or sends a request off this machine. A model reading
 /// `tools/list` should be able to see that boundary without reading the
 /// descriptions.
+/// What `expect` means, written out on every tool that takes it.
+///
+/// All three write tools deserialize the same `Expect`, so the wording was
+/// shared by pointing two of them at the third: "As `create_file`." A model is
+/// handed one tool's schema, not the set, so that sentence left it with no
+/// type, no enum and no way to construct a valid call — it had to guess, and
+/// the guess fails a staleness check it cannot see. Sharing the text as a
+/// constant keeps the three in step *and* keeps each schema self-contained.
+const EXPECT_DESCRIPTION: &str = "What you believe is at `path` right now. \
+`\"new\"` (the default) creates the file and refuses if anything is already \
+there. To replace, pass `{\"replacing\": \"<blake3 hex>\"}` — the digest you got \
+when you last read or wrote it. There is deliberately no unconditional \
+overwrite: the check runs immediately before the write, because the user may \
+have the file open in their editor.";
+
+/// The two shapes `expect` accepts, as JSON Schema.
+fn expect_shape() -> Value {
+    json!([
+        { "type": "string", "enum": ["new"] },
+        {
+            "type": "object",
+            "properties": {
+                "replacing": { "type": "string", "description": "BLAKE3 digest, lower-case hex, of the content being replaced." }
+            },
+            "required": ["replacing"]
+        }
+    ])
+}
+
 pub const WRITE_TOOLS: &[Tool] = &[
     Tool {
         name: "create_file",
@@ -241,11 +318,8 @@ validated, because the user has the file open in their editor.",
                     },
                     "body": { "type": "string", "description": "The file's contents." },
                     "expect": {
-                        "description": "`\"new\"` (the default) creates and refuses if anything is there. To replace, pass {\"replacing\": \"<blake3 hex>\"} — the digest you last read. There is deliberately no unconditional overwrite.",
-                        "oneOf": [
-                            { "type": "string", "enum": ["new"] },
-                            { "type": "object", "properties": { "replacing": { "type": "string" } }, "required": ["replacing"] }
-                        ]
+                        "description": EXPECT_DESCRIPTION,
+                        "oneOf": expect_shape()
                     },
                     "workspace": { "type": "string", "description": "Workspace name. Omit when there is only one." }
                 },
@@ -275,8 +349,11 @@ diagram file renders as nothing at all.",
                     "path": { "type": "string", "description": "Workspace-relative, ending `.md` or `.mmd`." },
                     "mermaid": { "type": "string", "description": "Mermaid source, starting with its diagram type." },
                     "title": { "type": "string", "description": "Optional heading, used only for `.md`." },
-                    "expect": { "description": "As `create_file`." },
-                    "workspace": { "type": "string" }
+                    "expect": {
+                        "description": EXPECT_DESCRIPTION,
+                        "oneOf": expect_shape()
+                    },
+                    "workspace": { "type": "string", "description": "Workspace name. Omit when there is only one." }
                 },
                 "required": ["path", "mermaid"]
             })
@@ -300,10 +377,16 @@ protected or excluded directory, a name the filesystem would mangle, a stale \
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Workspace-relative, ending `.html` or `.htm`." },
-                    "title": { "type": "string" },
+                    "title": {
+                        "type": "string",
+                        "description": "Plain text, escaped into `<title>` and the top-level heading. Markup here is written out as characters, not as tags."
+                    },
                     "body": { "type": "string", "description": "HTML for the document body." },
-                    "expect": { "description": "As `create_file`." },
-                    "workspace": { "type": "string" }
+                    "expect": {
+                        "description": EXPECT_DESCRIPTION,
+                        "oneOf": expect_shape()
+                    },
+                    "workspace": { "type": "string", "description": "Workspace name. Omit when there is only one." }
                 },
                 "required": ["path", "title", "body"]
             })
@@ -350,9 +433,19 @@ pub fn all() -> impl Iterator<Item = &'static Tool> {
 mod tests {
     use super::*;
 
+    // **Every test below iterates `all()`, never `TOOLS`.**
+    //
+    // They all used to iterate `TOOLS`, which is the read-only half of the
+    // surface — so the four tools that write to the user's disk and reach the
+    // network were the only ones nothing checked, and they were the ones where
+    // a wrong schema costs the most. `create_page.title` and two `workspace`
+    // parameters shipped with no description at all, and `expect` shipped
+    // pointing at another tool's documentation. If a third list is ever added,
+    // `all()` is what has to grow.
+
     #[test]
     fn every_tool_has_a_valid_object_schema() {
-        for t in TOOLS {
+        for t in all() {
             let s = (t.schema)();
             assert_eq!(
                 s["type"],
@@ -369,7 +462,7 @@ mod tests {
         // A `required` naming a property that does not exist is accepted by
         // most validators and then fails at call time, which reads as a server
         // bug rather than a schema bug.
-        for t in TOOLS {
+        for t in all() {
             let s = (t.schema)();
             let props = s["properties"].as_object().expect("properties");
             if let Some(req) = s.get("required").and_then(|r| r.as_array()) {
@@ -388,7 +481,7 @@ mod tests {
     #[test]
     fn every_parameter_is_described() {
         // The schema is the only documentation the model gets.
-        for t in TOOLS {
+        for t in all() {
             let s = (t.schema)();
             for (name, spec) in s["properties"].as_object().expect("properties") {
                 assert!(
@@ -401,13 +494,58 @@ mod tests {
     }
 
     #[test]
+    fn every_parameter_says_what_shape_it_takes() {
+        // A description without a shape is not enough to call the tool with.
+        // `expect` carried the whole sentence "As `create_file`." — accurate,
+        // useless: a model is given one tool's schema, and from that it could
+        // not tell whether to send a string, an object, or which keys.
+        for t in all() {
+            for (name, spec) in (t.schema)()["properties"]
+                .as_object()
+                .expect("properties")
+                .iter()
+            {
+                assert!(
+                    ["type", "enum", "oneOf", "anyOf", "allOf", "$ref"]
+                        .iter()
+                        .any(|k| spec.get(k).is_some()),
+                    "{}: parameter `{name}` declares no type a caller could construct",
+                    t.name
+                );
+            }
+        }
+    }
+
+    #[test]
     fn descriptions_say_what_a_tool_refuses() {
         // A tool that silently returns nothing teaches the model to distrust
         // it. The refusal has to be in the description.
-        let search = find("search").unwrap();
+        //
+        // Applied to every tool that takes an argument, because taking an
+        // argument is what makes a refusal possible. `list_workspaces` and
+        // `index_status` take none and refuse nothing, so demanding the word
+        // from them would only teach the next author to paste it in.
+        for t in all() {
+            let takes_arguments = !(t.schema)()["properties"]
+                .as_object()
+                .expect("properties")
+                .is_empty();
+            if !takes_arguments {
+                continue;
+            }
+            assert!(
+                t.description.contains("Refuses") || t.description.contains("refus"),
+                "{} takes arguments and never says what it will refuse",
+                t.name
+            );
+        }
+
+        // Two refusals that are invariants rather than argument checking, and
+        // so have to be named individually.
+        let search = find("search").expect("search exists");
         assert!(search.description.contains("self_written"));
-        let read = find("read_file").unwrap();
-        assert!(read.description.contains("Refuses"));
+        let fetch = find("fetch_url").expect("fetch_url exists");
+        assert!(fetch.description.contains("off the machine"));
     }
 
     /// Names every parameter the dispatcher actually reads.
@@ -418,7 +556,14 @@ mod tests {
     const HANDLED: &[(&str, &[&str])] = &[
         (
             "search",
-            &["query", "limit", "workspace", "extension", "path_contains"],
+            &[
+                "query",
+                "limit",
+                "workspace",
+                "extension",
+                "path_contains",
+                "match",
+            ],
         ),
         (
             "search_literal",
@@ -436,11 +581,24 @@ mod tests {
         ("file_info", &["path"]),
         ("list_workspaces", &[]),
         ("index_status", &[]),
+        // The write tools read `workspace` in `Server::write_workspace` and
+        // the rest through the `marrow_tools` request structs, which is where
+        // these lists come from: `CreateFile`, `CreateDiagram`, `CreatePage`.
+        ("create_file", &["path", "body", "expect", "workspace"]),
+        (
+            "create_diagram",
+            &["path", "mermaid", "title", "expect", "workspace"],
+        ),
+        (
+            "create_page",
+            &["path", "title", "body", "expect", "workspace"],
+        ),
+        ("fetch_url", &["url"]),
     ];
 
     #[test]
     fn every_declared_parameter_is_actually_handled() {
-        for t in TOOLS {
+        for t in all() {
             let declared: Vec<String> = (t.schema)()["properties"]
                 .as_object()
                 .expect("properties")
@@ -463,17 +621,38 @@ mod tests {
     }
 
     #[test]
+    fn no_handled_entry_names_a_parameter_the_schema_never_declares() {
+        // The other direction of the same check. A name in `HANDLED` that no
+        // schema declares means the list has drifted, and a stale list is what
+        // let four tools go unchecked in the first place.
+        for (tool, params) in HANDLED {
+            let t = find(tool).unwrap_or_else(|| panic!("HANDLED names `{tool}`, which is gone"));
+            let declared = (t.schema)();
+            let declared = declared["properties"].as_object().expect("properties");
+            for p in *params {
+                assert!(
+                    declared.contains_key(*p),
+                    "{tool}: HANDLED lists `{p}`, which the schema does not declare"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn tool_names_are_unique() {
+        // Across both lists: `find` walks them in order, so a name repeated in
+        // `WRITE_TOOLS` would be shadowed by the read-only one and the write
+        // tool would be unreachable while still appearing in `tools/list`.
         let mut seen = std::collections::HashSet::new();
-        for t in TOOLS {
+        for t in all() {
             assert!(seen.insert(t.name), "duplicate tool name {}", t.name);
         }
     }
 
     #[test]
     fn lookup_finds_every_declared_tool_and_nothing_else() {
-        for t in TOOLS {
-            assert!(find(t.name).is_some());
+        for t in all() {
+            assert!(find(t.name).is_some(), "{} is not reachable", t.name);
         }
         assert!(find("delete_everything").is_none());
     }

@@ -168,7 +168,9 @@ impl Server {
             filters.workspace = Some(self.workspace_by_name(name)?);
         }
 
+        let mode = match_mode(args)?;
         let q = marrow_index::TextQuery::new(query)
+            .mode(mode)
             .limit(limit)
             .with_filters(filters);
         let hits = self.index.search(&q)?;
@@ -199,6 +201,11 @@ impl Server {
 
         Ok(json!({
             "query": query,
+            // Echoed rather than assumed. A caller that omitted `match` gets a
+            // disjunctive search whether it expected one or not, and a result
+            // set is not interpretable without knowing which question was
+            // asked of the index.
+            "match": mode_name(mode),
             "total": results.len(),
             "results": results,
         }))
@@ -492,9 +499,41 @@ impl Server {
                     ))
                 },
             )
-            .map_err(|_| bad("That file is not indexed."))?;
+            .map_err(|_| {
+                bad(
+                    "That path is not in the index. Call list_workspaces to see which folders \
+                     Marrow has been granted — a path outside all of them is never indexed.",
+                )
+            })?;
 
         let (file_id, tier, origin, workspace, size, hash, mime, mtime, versions, chunks) = row;
+
+        // **The disk decides whether the file is still there; the index only
+        // remembers when it last looked.**
+        //
+        // `files.status = 'ACTIVE'` means the most recent reconciliation saw
+        // this file, not that it exists now, and nothing marks a file deleted
+        // between sweeps. So this tool answered `citable: true,
+        // indexed_for_search: true, tier_state: "resident"` for files that had
+        // been gone for hours, while `read_file` on the same path correctly
+        // reported them missing — because `read_file` opens the file and this
+        // never touched the disk at all. An agent calls `file_info` precisely
+        // to decide whether a source can be trusted, so that was the one
+        // question it exists to answer, answered wrong.
+        //
+        // Reported as missing rather than refused, deliberately. A refusal
+        // would be indistinguishable from "no such path in the index", which
+        // is a different fact and the wrong next move; and it would throw away
+        // the file id, the content hash and `previous_paths` — which are what
+        // tell a caller the content was *renamed* rather than destroyed. The
+        // metadata stays, labelled as describing the copy last seen.
+        //
+        // `symlink_metadata`, not `metadata`: it stats the path itself and
+        // opens nothing, so it cannot follow a link out of the workspace and
+        // cannot hydrate a cloud placeholder (invariant #3). A placeholder is
+        // a real directory entry, so it still reports present — which is
+        // right, and `tier_state` is what says it cannot be read.
+        let present = std::fs::symlink_metadata(path).is_ok();
 
         // Path history is the point of a stable file id: it is how a rename
         // stays the same file (invariant #2).
@@ -516,10 +555,34 @@ impl Server {
             "modified_ms": mtime,
             "versions": versions,
             "chunks": chunks,
-            "indexed_for_search": chunks > 0,
-            "tier_state": tier.to_lowercase(),
+            "present_on_disk": present,
+            // Both gated on the file still existing. Chunks of a file that is
+            // gone are still in the index and `search` may still return them
+            // until the next sweep, but they cannot be verified against the
+            // source, and "citable" means exactly that they can.
+            "indexed_for_search": present && chunks > 0,
+            "citable": present && origin == "USER",
+            "tier_state": if present {
+                tier.to_lowercase()
+            } else {
+                "missing".to_string()
+            },
+            // What the last scan recorded, kept alongside so the two are
+            // distinguishable: `missing` is a fact about now, `resident` was a
+            // fact about then, and collapsing them loses which is which.
+            "recorded_tier_state": tier.to_lowercase(),
             "origin": origin.to_lowercase(),
-            "citable": origin == "USER",
+            "note": if present {
+                Value::Null
+            } else {
+                json!(
+                    "This path is in the index but is not on the disk now, so nothing here \
+                     can be read or cited. The size, hash, version and chunk counts describe \
+                     the copy last seen, not a file that exists. Check `previous_paths` \
+                     first — a rename the last scan has not caught up with looks exactly \
+                     like this — then run `marrow index` to reconcile."
+                )
+            },
             "previous_paths": history.iter().filter(|p| p.as_str() != path).collect::<Vec<_>>(),
             // Explicitly null rather than omitted: M1 does not extract these,
             // and absence must be distinguishable from ignorance (FI-003).
@@ -551,14 +614,71 @@ impl Server {
                 })
             })
             .collect();
-        Ok(json!({ "workspaces": rows }))
+        // **The description promised "index freshness" and the payload had no
+        // such field.** Counts alone read as current, and every one of them is
+        // a snapshot: a folder nobody has watched since this morning reports
+        // the same shape as one being watched live.
+        //
+        // Reported once for the whole index rather than per workspace, because
+        // that is where the fact is honest. The store records freshness per
+        // *root*, and `index_stats` already collapses the roots to the worst
+        // one so a watched folder cannot vouch for an unwatched one. Splitting
+        // it per workspace here would mean a second statement in this crate
+        // answering a question `marrow-query` already answers — which is
+        // exactly the drift `catalog.rs` exists to prevent — and the numbers
+        // would then be free to disagree with `index_status`. They are the
+        // same four field names for the same reason.
+        let st = marrow_query::catalog::index_stats(&conn)?;
+        Ok(json!({
+            "workspaces": rows,
+            "last_indexed_ms": st.last_reconciled_ms,
+            "watcher": st.watcher_health,
+            "may_be_stale": st.may_be_stale(),
+            "freshness": freshness(&st),
+        }))
     }
 
     fn index_status(&self) -> Result<Value> {
         let conn = self.store.reader()?;
         let st = marrow_query::catalog::index_stats(&conn)?;
+
+        // **"79,186 files indexed, 131,519 searchable chunks" reads as "all of
+        // them are searchable".** On the author's index 21,275 files have any
+        // chunk at all: 73% are photos and binaries with no parser, which is
+        // the expected state and not a failure — but nothing in the payload
+        // said so, and the description promised a skipped count that was never
+        // returned.
+        //
+        // Summed from `workspace_stats` rather than counted again here. That
+        // read model already decomposes "no chunks" into the three reasons,
+        // and a fourth statement in this crate could only drift from it.
+        //
+        // The searchable count is the complement, `files - unindexed`, for the
+        // reason `catalog.rs` gives for the same trick: the parts have to sum
+        // to the total, and subtraction is the only way to guarantee that.
+        let per_workspace = marrow_query::catalog::workspace_stats(&conn)?;
+        let sum = |f: fn(&marrow_query::catalog::WorkspaceStats) -> i64| -> i64 {
+            per_workspace.iter().map(f).sum()
+        };
+        let not_searchable = sum(|w| w.unindexed);
+        let searchable = sum(|w| w.files) - not_searchable;
+
         Ok(json!({
             "files_indexed": st.files,
+            // The number that answers "can you quote this corpus to me".
+            "files_searchable": searchable,
+            "files_not_searchable": {
+                "total": not_searchable,
+                // Nothing to extract. A photo or a binary, still findable by
+                // name and date — the expected outcome, not a fault, and the
+                // reason the raw `unindexed` total must never be shown alone.
+                "no_parser": sum(|w| w.no_parser),
+                // The only one worth acting on: the text exists and Marrow
+                // does not have it.
+                "parse_failed": sum(|w| w.parse_failed),
+                // Never attempted yet. Another index run clears these.
+                "not_processed": sum(|w| w.not_processed),
+            },
             "content_bytes": st.content_bytes,
             "searchable_chunks": st.chunks,
             // Never a silent zero: a count of files deliberately not read is
@@ -606,6 +726,58 @@ impl Server {
 
     fn roots(&self) -> Result<Vec<String>> {
         marrow_query::catalog::roots(&self.store.reader()?)
+    }
+}
+
+/// How `search` reads a multi-word query, and why the default is `Any`.
+///
+/// **This surface is a retrieval tool for a model, not a search box for a
+/// person.** The two want opposite defaults. A person typing into a box has
+/// picked their words and can see the result list shrink to nothing, so
+/// conjunction — every term must appear — is right: it is precise, and the
+/// correction is one keystroke. A model calls this once, with the user's
+/// question as written, and cannot see anything. `MatchMode::Terms` then asks
+/// the index for a document containing *when*, *does*, *the*, *lease* **and**
+/// *renew*, which the lease does not contain because it says "renews" — and
+/// zero results is the one answer that reads as fact rather than as a failed
+/// query. The model concludes the corpus is silent and stops looking.
+///
+/// `Any` cannot produce that failure, and it is not the blunt trade it looks
+/// like: FTS5's bm25 sums per-term contributions, so a document matching four
+/// of five terms still outranks one matching only "the". It loses precision in
+/// the tail of the ranking, never the top of it. A single-term query — most
+/// searches — is identical under all three modes, so the default only changes
+/// behaviour in exactly the case where the old one returned nothing.
+///
+/// A caller that wants conjunction says so, and an unrecognised mode is
+/// refused by name rather than silently falling back, because a silent
+/// fallback is how a caller believes it filtered when it did not.
+fn match_mode(args: &Value) -> Result<marrow_index::MatchMode> {
+    let Some(raw) = args.get("match").and_then(Value::as_str) else {
+        return Ok(marrow_index::MatchMode::Any);
+    };
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "any" => Ok(marrow_index::MatchMode::Any),
+        "all" => Ok(marrow_index::MatchMode::Terms),
+        "phrase" => Ok(marrow_index::MatchMode::Phrase),
+        other => Err(bad(&format!(
+            "`match` was `{other}`, which is not a mode this index has. Pass `any` to let \
+             any word match and rank by how many did (the default, and the right one for a \
+             question), `all` to require every word, or `phrase` to require them adjacent \
+             and in order."
+        ))),
+    }
+}
+
+/// The wire name for a mode, so the payload reports what actually ran.
+fn mode_name(mode: marrow_index::MatchMode) -> &'static str {
+    match mode {
+        marrow_index::MatchMode::Any => "any",
+        marrow_index::MatchMode::Terms => "all",
+        marrow_index::MatchMode::Phrase => "phrase",
+        // Not reachable from `match_mode`: the as-you-type mode belongs to a
+        // text field being typed into, and there is no such thing here.
+        marrow_index::MatchMode::Prefix => "prefix",
     }
 }
 

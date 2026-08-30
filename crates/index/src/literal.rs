@@ -12,7 +12,10 @@
 //! - **Stated scope.** The caller supplies the file list. Nothing here walks a
 //!   directory, so there is no hidden reach: the scope is exactly what was
 //!   passed in, and [`LiteralOutcome`] reports what inside that scope was
-//!   skipped and why.
+//!   skipped and why — including
+//!   [`LiteralOutcome::files_in_scope`] and
+//!   [`LiteralOutcome::files_considered`], so a caller cannot report "0 matches"
+//!   without also having the two numbers that say whether that means anything.
 //! - **Time bound.** [`LiteralQuery::time_budget`] is checked between files and
 //!   inside the per-file match loop. Part 6 §116 budgets 10k files in under 3 s
 //!   cold; when the budget runs out the partial result is returned with
@@ -35,6 +38,20 @@
 //! probe if the answer has to be current. Passing a stale `Resident` for a file
 //! that has since been evicted is the caller's defect, and the only one this
 //! module cannot defend against.
+//!
+//! The two callers answer that differently, on purpose. MCP hands over what
+//! `files.tier_state` recorded, because its scope is the index anyway. The CLI
+//! walks the authorised roots and hands over the tier from the `lstat` that
+//! walk just did, because `marrow search --literal` is the command you reach
+//! for *when the index is wrong*, and taking the tier from the index would put
+//! the answer to "may I open this" back inside the thing being bypassed.
+//!
+//! One defence does live here, because it belongs at the open rather than at
+//! the caller: [`read_bounded`] stats with `symlink_metadata` and refuses a
+//! symlink. Whatever proved containment did so when the list was built; a
+//! component swapped for a link since then would otherwise be followed out of
+//! the authorised root by `fs::read`, and invariant #7 says the containment
+//! check is at operation time, not at list-building time.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -185,6 +202,17 @@ pub struct LiteralHit {
 #[derive(Clone, Debug)]
 pub struct LiteralOutcome {
     pub hits: Vec<LiteralHit>,
+    /// How many targets the caller passed in. Echoed back rather than left for
+    /// the caller to remember: "0 matches" means nothing without it, and a
+    /// caller that has to carry the denominator itself is a caller that can
+    /// print `0 of 0` for a scope it never established.
+    pub files_in_scope: usize,
+    /// How many of those the loop reached before it stopped. Equal to
+    /// [`Self::files_in_scope`] on [`StopReason::Completed`]; below it whenever
+    /// the budget, the match limit or a cancel ended the scan early.
+    pub files_considered: usize,
+    /// Reached, resident, readable and actually searched. Always smaller than
+    /// [`Self::files_considered`] by however much was skipped.
     pub files_scanned: usize,
     /// Invariant #5: skipped without being opened.
     pub files_skipped_not_resident: usize,
@@ -201,6 +229,12 @@ pub struct LiteralOutcome {
 }
 
 impl LiteralOutcome {
+    /// Files in scope the loop never reached. The number that turns "0 matches"
+    /// from an answer into a partial one.
+    pub fn files_unreached(&self) -> usize {
+        self.files_in_scope.saturating_sub(self.files_considered)
+    }
+
     /// Whether anything in scope was not actually looked at.
     pub fn has_gaps(&self) -> bool {
         !self.stopped.is_complete()
@@ -294,6 +328,8 @@ pub fn literal_search(
     let started = Instant::now();
     let mut out = LiteralOutcome {
         hits: Vec::new(),
+        files_in_scope: targets.len(),
+        files_considered: 0,
         files_scanned: 0,
         files_skipped_not_resident: 0,
         files_skipped_binary: 0,
@@ -313,6 +349,9 @@ pub fn literal_search(
             out.stopped = StopReason::MatchLimit;
             break;
         }
+        // Counted here, past every `break`: this file was reached and a
+        // decision was made about it, whether or not it was opened.
+        out.files_considered += 1;
 
         // Invariant #5. Before the open, not after: opening is what starts a
         // hydration on some providers.
@@ -541,7 +580,22 @@ enum Read {
 }
 
 fn read_bounded(path: &Path, max: u64) -> Result<Read> {
-    let meta = std::fs::metadata(path)?;
+    // `symlink_metadata`, not `metadata`: invariant #7 is checked at operation
+    // time, and `metadata` follows the link, so a path that was a regular file
+    // inside the authorised root when the target list was built and is a
+    // symlink now would be read straight through to wherever it points. The
+    // walk that builds the CLI's list never yields symlinks and the index never
+    // stores one as a file, so refusing here costs nothing and closes the race.
+    let meta = std::fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() {
+        return Err(Error::new(
+            Code::FsPathEscapeBlocked,
+            "Refused to search through a symbolic link, because its target may be \
+             outside the folder you granted. Add the target's folder as its own \
+             workspace if searching it is intended.",
+        )
+        .with_context(path.display().to_string()));
+    }
     if !meta.is_file() {
         return Err(Error::new(
             Code::FsNotFound,
@@ -727,6 +781,73 @@ mod tests {
         let t = target(dir.path(), "a.txt", "one two three\n", TierState::Resident);
         let out = literal_search(&[t], &LiteralQuery::new(r"\b").regex(), &never()).unwrap();
         assert!(!out.hits.is_empty());
+    }
+
+    #[test]
+    fn the_scope_and_what_was_reached_of_it_are_both_reported() {
+        // The denominator is the point. A caller that has to remember it can
+        // print "0 of 0" for a scope it never established — R10-A, exactly.
+        let dir = tempfile::tempdir().unwrap();
+        let targets: Vec<_> = (0..4)
+            .map(|i| {
+                target(
+                    dir.path(),
+                    &format!("f{i}.txt"),
+                    "needle\n",
+                    TierState::Resident,
+                )
+            })
+            .collect();
+
+        let all = literal_search(&targets, &LiteralQuery::new("needle"), &never()).unwrap();
+        assert_eq!(all.files_in_scope, 4);
+        assert_eq!(all.files_considered, 4);
+        assert_eq!(all.files_unreached(), 0);
+
+        // Stopped early: the scope is still 4, and the gap is visible.
+        let cut = literal_search(
+            &targets,
+            &LiteralQuery::new("needle").max_total_matches(2),
+            &never(),
+        )
+        .unwrap();
+        assert_eq!(cut.stopped, StopReason::MatchLimit);
+        assert_eq!(cut.files_in_scope, 4);
+        assert!(cut.files_considered < 4, "it stopped before the end");
+        assert!(cut.files_unreached() > 0);
+    }
+
+    #[test]
+    fn an_empty_scope_is_never_reported_as_a_searched_one() {
+        let out = literal_search(&[], &LiteralQuery::new("needle"), &never()).unwrap();
+        assert_eq!(out.files_in_scope, 0);
+        assert_eq!(out.files_considered, 0);
+        // `Completed` over nothing is true of the *loop* and useless to a user,
+        // which is why the caller has `files_in_scope` to check as well.
+        assert!(out.stopped.is_complete());
+    }
+
+    #[test]
+    fn a_symlink_is_refused_rather_than_followed_out_of_the_root() {
+        // Invariant #7 at operation time. `fs::metadata` follows the link, so
+        // before this check a path that turned into a symlink after the target
+        // list was built was read straight through to wherever it pointed.
+        let inside = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "needle in the wrong tree\n").unwrap();
+        let link = inside.path().join("innocent.txt");
+        std::os::unix::fs::symlink(&secret, &link).unwrap();
+
+        let out = literal_search(
+            &[LiteralTarget::new(FileId::new(), link, TierState::Resident)],
+            &LiteralQuery::new("needle"),
+            &never(),
+        )
+        .unwrap();
+        assert!(out.hits.is_empty(), "the link's target must not be read");
+        assert_eq!(out.files_failed, 1, "and the refusal must be counted");
+        assert_eq!(out.files_scanned, 0);
     }
 
     #[test]

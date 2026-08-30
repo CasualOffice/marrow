@@ -36,6 +36,20 @@ use crate::state::RetrievedChunk;
 /// dilutes it and blows the context budget §114 exists to protect.
 const MAX_CHUNKS: usize = 12;
 
+/// The most prompt the evidence may occupy, in bytes.
+///
+/// **A count of chunks is not a bound on a context window.** Twelve chunks of
+/// a dense document is a very different prompt from twelve chunks of a sparse
+/// one, and the reported truncation came from exactly that: retrieval produced
+/// 29 KB, the answer budget subtracted it from the window, and what was left
+/// was clamped up to a floor the model then overran mid-sentence.
+///
+/// Bounded in bytes because bytes are what we have before the worker has
+/// tokenized anything. Four bytes per token is conservative for code and
+/// markup, so 16 KB is about 4,000 tokens — half of the 8,192 the runtime
+/// plans around, which leaves the other half for the answer and the thinking.
+const MAX_EVIDENCE_BYTES: usize = 16 * 1024;
+
 /// The runtime template. Assembled here, in the binary — **no retrieved text
 /// ever reaches it** (§114.1).
 const SYSTEM: &str = "\
@@ -208,7 +222,20 @@ pub fn assemble(
     let mut citations = Vec::new();
     let mut excluded = Vec::new();
 
+    let mut spent = 0usize;
     for (i, hit) in chunks.iter().enumerate() {
+        // Stop before the evidence eats the window rather than after. Dropping
+        // the tail is right because retrieval already ranked it: what goes is
+        // what mattered least, and saying so is what stops a short answer
+        // looking like the model had nothing to say.
+        if spent + hit.text.len() > MAX_EVIDENCE_BYTES && i > 0 {
+            excluded.push(Excluded {
+                relative_path: hit.relative_path.clone(),
+                reason: "the context window was full; this ranked below what was sent".into(),
+            });
+            continue;
+        }
+        spent += hit.text.len();
         let id = format!("E{}", i + 1);
         // Invariant #9 is enforced inside the envelope, but the *reason* has
         // to be collected here where the path is still known.

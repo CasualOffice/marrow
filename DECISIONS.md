@@ -299,6 +299,20 @@ Two rules follow. **Freshness is persisted, not held in memory** — the MCP ser
 
 The corollary is that the app has to *earn* the fresh state: the desktop now runs a watcher per root, and both watchers sweep once before they start listening. A watcher is not live the instant it opens, and nothing is listening while the app is shut — so without that first sweep a change in either window waits six hours for the scheduled reconciliation, which is indistinguishable from having no watcher at all.
 
+### D59 — Context window, structured output and the 4B ceiling *(settled 2026-08-30)*
+
+Prompted by a review of the model layer. Four of the five points hold; two land differently in this stack than they would in llama.cpp, and one was already validated by our own measurements.
+
+**Never run at the advertised ceiling.** Qwen 3.5 4B reports a 262,144-token context and we run at 8,192. KV is ~160 KB per token — an architectural property, not a function of parameter count — so 8k costs about 1.3 GB and 16k costs 2.6 GB against weights of ~2.5 GB. The ceiling is displayed beside the run context precisely so the gap is visible. The subtlety the review is right about: `default_context` was a *planning* number for sizing the memory watchdog, not an enforced limit, because MLX allocates KV lazily. Enforcement is now real and lives in two places — the evidence is bounded to 16 KB before assembly, and the answer budget asks how much fits in the memory that is free rather than subtracting the prompt from a constant.
+
+**Constrained decoding: not applicable yet, and the reason matters.** Nothing in this system asks the 4B for JSON or for a tool call. The MCP tools are called by an external agent; the local model only answers from evidence. So there is no format to drift on today. It becomes load-bearing the moment the intent router lands, and `mlx-lm` accepts `logits_processors`, so schema-constrained sampling is available in this stack — the llama.cpp GBNF answer has an MLX equivalent. **The router must not ship without it.** Retrying malformed output is a worse design than making it structurally impossible, and discovering that after the router is built is the expensive order.
+
+**Tiering already exists** — `Profile::{Efficient, Balanced, LargerLocal, Cloud}` chosen from probed memory, with `LargerLocal` covering 8B and up where it fits. A 32 GB machine still defaults to Balanced/4B, which is a deliberate choice about battery and thermals rather than an oversight.
+
+**CPU-only is out of scope, and that is a decision, not an omission.** This is MLX on Apple Silicon (D55); there is no CPU path to be slow on. It also means we have excluded those users entirely, which is worth stating plainly rather than discovering later.
+
+**The GGUF quantisation warning does not apply, but its underlying point already bit us.** We do not use llama.cpp or GGUF at all. But the warning — a new architecture behaves differently from what tooling assumes — was correct, and we hit it somewhere else: Qwen 3.5's hybrid cache mixes `ArraysCache` with `KVCache`, `can_trim_prompt_cache` returns false for it, and KV prefix reuse therefore does not work on this model at all. The 81% reuse figure applies to the 0.6B. The worker reports `cacheTrimmable` for exactly this reason. So: test the actual artefact, confirmed — and the fallbacks named (Ministral 3 3B, Gemma 4 E4B) are worth keeping in the catalogue's sights.
+
 ### D57 — Who assembles the migration chain? → **`marrow_index::MIGRATIONS`, never a composition root** *(settled 2026-08-30)*
 
 The chain is numbered across crates: `marrow-store` owns 1 and 3, `marrow-index` owns 2 and 4, and `marrow-index` depends on `marrow-store` so store cannot reference it back ([D3](#d3)). The binary composing them is right. The binary *enumerating* them is not.
