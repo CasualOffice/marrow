@@ -10,6 +10,7 @@ publish.workspace = true
 marrow-core.workspace = true
 marrow-store.workspace = true
 marrow-index.workspace = true
+marrow-query.workspace = true
 marrow-tools.workspace = true
 marrow-net.workspace = true
 serde.workspace = true

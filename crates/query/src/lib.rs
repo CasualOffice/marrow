@@ -41,6 +41,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
+pub mod catalog;
 pub mod explain;
 pub mod intelligence;
 pub mod search;

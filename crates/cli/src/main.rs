@@ -9,6 +9,7 @@
 
 #![forbid(unsafe_code)]
 
+mod literal;
 mod render;
 mod search;
 mod waiting;
@@ -85,6 +86,22 @@ enum Cmd {
         /// Maximum results
         #[arg(short = 'n', long, default_value_t = 20)]
         limit: usize,
+        /// Scan the files themselves instead of the index
+        ///
+        /// The index tokenizes, so `}});` and `TODO(name)` are unfindable
+        /// through it. This reads the files. It is slower, it only sees files
+        /// that are on this disk, and it says how many it skipped.
+        #[arg(long)]
+        literal: bool,
+        /// Treat the pattern as a regular expression (with --literal)
+        #[arg(long, requires = "literal")]
+        regex: bool,
+        /// Ignore case (with --literal)
+        #[arg(short = 'i', long, requires = "literal")]
+        ignore_case: bool,
+        /// Match whole words only (with --literal)
+        #[arg(short = 'w', long, requires = "literal")]
+        whole_word: bool,
     },
     /// Index health
     Status,
@@ -213,7 +230,14 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
         }
         Cmd::Workspace(WorkspaceCmd::List) => workspace_list(cli.json, style, out),
         Cmd::Index { name, gitignore } => index(name.as_deref(), *gitignore, cli.json, style, out),
-        Cmd::Search { query, limit } => {
+        Cmd::Search {
+            query,
+            limit,
+            literal,
+            regex,
+            ignore_case,
+            whole_word,
+        } => {
             let q = query.join(" ");
             if q.trim().is_empty() {
                 return Err(Error::new(
@@ -228,6 +252,21 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
                 .map(|(_, p, _)| p)
                 .collect();
             drop(conn);
+            if *literal {
+                let cancel = waiting::install_interrupt_handler();
+                return literal::run(
+                    &store,
+                    &q,
+                    *regex,
+                    *ignore_case,
+                    *whole_word,
+                    *limit,
+                    cli.json,
+                    style,
+                    out,
+                    cancel.as_flag(),
+                );
+            }
             let index = marrow_index::Fts5Index::open(&store)?;
             search::run(&store, &index, &q, *limit, &roots, cli.json, style, out)
         }

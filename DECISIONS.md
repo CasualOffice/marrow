@@ -26,23 +26,6 @@ Recorded, not yet fixed in the spec text. Each was found by building against Par
 
 ---
 
-### D48 — Does MCP (M2) still come before the desktop shell (M3)?
-
-**Needed by:** end of M1.
-
-Now that the desktop app is the product, the milestone order is a real tradeoff:
-
-| Order | For | Against |
-|---|---|---|
-| **MCP first, then GUI** *(recommended)* | Cheapest possible end-to-end test of the query API — 1–2 weeks. A bad API found through MCP costs a day; found after three panes are built on it, it costs a rewrite. If the GUI slips, the index is still useful daily via Claude Code | Delays the thing you actually want to look at by ~2 weeks |
-| **GUI first** | Motivation. Risk **S7** says interest fades before something is usable daily, and a window is more motivating than a stdio server | Builds UI on an unvalidated query API |
-
-**Recommendation: MCP first**, on the engineering argument. But S7 is a real risk and this is a call about your own motivation, which I can't make for you.
-
-- [ ] Decide at end of M1
-
----
-
 ### D46 — Crate namespace on crates.io
 
 **Needed by:** first `cargo publish`, or never if the crates stay unpublished.
@@ -155,6 +138,88 @@ LLD §8's ~5 ms lexical budget holds to ~10% df, and as-you-type is 0.4 ms — i
 #### Migration composition
 
 `marrow-index` depends on `marrow-store`, so store cannot reference index's migration back — that is a cycle. The **composition root** (the binary) assembles the chain instead, via `Store::open_with_migrations`. Store stays unaware of index; index stays a swappable implementation of a port. Verified: a fresh database opens at `schema_version 2` with both migrations applied through the one runner, backup-before-migrate intact.
+
+### D48 — MCP before the desktop shell? → **MCP first, and it was the right call** *(settled 2026-08-30)*
+
+MCP shipped first and the query API was validated through it before three
+panes were built on it, which is exactly the argument that won. The risk it
+was weighed against — S7, interest fading before something is usable daily —
+did not materialise.
+
+What did happen is [D56](#d56--the-milestone-boundary-dissolved-and-nobody-said-so).
+
+### D54 — PDF text and geometry → **PDFKit, not PDFium** *(settled 2026-08-30)*
+
+M3 planned PDFium. PDFKit wins on the thing that actually matters:
+`characterBoundsAtIndex` returns a rectangle **per character** in page
+coordinates, which is what makes a citation to an exact region possible rather
+than a citation to a page number. Verified on a real 49-page document before
+any of it was built on: page count, media box and per-character rects all
+present.
+
+It also removes a multi-megabyte Chromium library to vendor, sign, notarize and
+version-track, in exchange for a framework already on every Mac.
+
+The cost, stated: it is macOS-only. Elsewhere the parser refuses and the file
+stays findable by name (T5), which is the same outcome as having no PDF parser
+at all — so this trades a portability we do not have for a capability we do.
+
+The trap it introduced is worth remembering: `characterBoundsAtIndex` indexes an
+`NSString`, which is UTF-16, while Rust offsets are UTF-8. They agree on ASCII
+and diverge on everything else, so the naive version is correct on the documents
+you test with and wrong on the ones with an em dash in them.
+
+### D55 — Replace the Python MLX sidecar? → **No. Keep it, bundle the venv** *(settled 2026-08-30)*
+
+A comparison suggested `omlx` had already built Part 8's supervisor and that
+three teams had written real Rust MLX bindings. Investigated properly
+([Decision_MLX_Runtime.md](docs/Decision_MLX_Runtime.md)):
+
+- `omlx` is real and its supervisor is good, but it publishes **no library** —
+  only an HTTP service — and depends on the same `mlx-lm` the sidecar does,
+  pinned harder.
+- Three teams wrote Rust bindings; **none published one**. The only published
+  binding has generation commented out on main and an empty KV cache.
+- Routing embeddings through omlx would reintroduce the padding defect
+  `_embed` was written to avoid, because its API has no `padding` field and it
+  length-sorts inputs. A chunk's vector would depend on what was batched with
+  it, so a rebuild would not reproduce the index.
+
+For one person on one Mac who wants this working in two years, an ugly sidecar
+that works beats a dependency that is unmaintained in eighteen months.
+
+The real fragility is not the sidecar: `mlx` and `mlx-lm` are Apple's and
+pushed daily, but **`mlx-embeddings` is one person's**. That is the thing to
+watch.
+
+### D56 — The milestone boundary dissolved, and nobody said so *(recorded 2026-08-30)*
+
+Recorded because it is a process decision that was made by not making it.
+
+[D-agent-layer](#d-agent-layer--build-our-own-agent-runtime-model-gateway-approval-ux-chat-ui--no)
+says: no agent runtime, no model gateway, no approval UX, no chat UI — Marrow
+is the index, MCP is the interface, and that deletes ~60% of the spec from the
+critical path.
+
+All four now exist. A desktop app, a model supervisor with admission and a
+circuit breaker, a conversational Ask surface with streaming and citations.
+Each was asked for and each was built, and none of them was weighed against
+D-agent-layer at the time. Part 7 names this as risk **S1**; it is no longer
+hypothetical.
+
+Two things follow, and only the second is a decision:
+
+1. **D-agent-layer is superseded in fact.** The reversal of [D42](#d42--build-a-gui--yes-the-desktop-app-is-the-product-reversed-2026-08-30)
+   already made the desktop app the product, and a desktop app that answers
+   questions needs a model gateway. That is coherent. What was missing is that
+   it was never written down, so the constraint stayed in the file saying the
+   opposite of what was being built.
+2. **The rule that failed was "check the tracker before building".** It did not
+   fail because it was wrong; it failed because a long run of *proceed* is
+   exactly the condition under which nobody re-reads it. There is no mechanism
+   proposed here — a solo project cannot police itself with process — but the
+   drift is now on the record, which is the only thing that makes the next one
+   visible.
 
 ### D49 — SYNC-006 columns → **`origin_device_id` only, canonical tables only**
 

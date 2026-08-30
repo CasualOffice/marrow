@@ -343,67 +343,36 @@ impl Core {
     }
 
     pub fn workspaces(&self) -> Result<Vec<WorkspaceRow>> {
+        // One statement, in `marrow-query`. This and MCP's listing were two
+        // separately-maintained queries answering the same question about the
+        // same index.
         let conn = self.store.reader()?;
-        // One query per workspace rather than a global row: the sidebar has to
-        // show WHICH workspace is degraded, and a single total cannot.
-        let mut stmt = conn
-            .prepare(
-                "SELECT w.name,
-                        COALESCE(r.canonical_path,''),
-                        (SELECT count(*) FROM files f
-                          WHERE f.workspace_id=w.workspace_id AND f.status='ACTIVE'),
-                        (SELECT count(*) FROM chunks c
-                           JOIN file_versions v ON v.version_id=c.version_id
-                           JOIN files f2 ON f2.file_id=v.file_id
-                          WHERE f2.workspace_id=w.workspace_id AND c.status='ACTIVE'),
-                        (SELECT COALESCE(sum(v2.size_bytes),0) FROM file_versions v2
-                           JOIN files f3 ON f3.file_id=v2.file_id
-                          WHERE f3.workspace_id=w.workspace_id AND v2.status='CURRENT'),
-                        (SELECT count(*) FROM files f4
-                          WHERE f4.workspace_id=w.workspace_id AND f4.tier_state!='RESIDENT'),
-                        (SELECT count(*) FROM files f5
-                           JOIN file_versions v5
-                             ON v5.file_id=f5.file_id AND v5.status='CURRENT'
-                          WHERE f5.workspace_id=w.workspace_id AND f5.status='ACTIVE'
-                            AND NOT EXISTS (SELECT 1 FROM chunks c5
-                                             WHERE c5.version_id=v5.version_id))
-                   FROM workspaces w
-              LEFT JOIN workspace_roots r ON r.workspace_id=w.workspace_id
-                  WHERE w.status='ACTIVE' ORDER BY w.name",
-            )
-            .map_err(|e| marrow_store::map_sqlite(e, "listing workspaces"))?;
-        stmt.query_map([], |r| {
-            Ok(WorkspaceRow {
-                name: r.get(0)?,
-                path: r.get(1)?,
-                files: r.get(2)?,
-                chunks: r.get(3)?,
-                content_bytes: r.get(4)?,
-                cloud_only: r.get(5)?,
-                unindexed: r.get(6)?,
+        Ok(marrow_query::catalog::workspace_stats(&conn)?
+            .into_iter()
+            .map(|w| WorkspaceRow {
+                name: w.name,
+                path: w.path,
+                files: w.files,
+                chunks: w.chunks,
+                content_bytes: w.content_bytes,
+                cloud_only: w.cloud_only,
+                unindexed: w.unindexed,
             })
-        })
-        .and_then(|it| it.collect())
-        .map_err(|e| marrow_store::map_sqlite(e, "listing workspaces"))
+            .collect())
     }
 
     pub fn health(&self) -> Result<IndexHealth> {
         let conn = self.store.reader()?;
-        let (files, bytes, cloud_only): (i64, i64, i64) = conn
-            .query_row(
-                "SELECT (SELECT count(*) FROM files WHERE status='ACTIVE'),
-                        (SELECT COALESCE(sum(size_bytes),0) FROM file_versions WHERE status='CURRENT'),
-                        (SELECT count(*) FROM files WHERE tier_state != 'RESIDENT')",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
-            .map_err(|e| marrow_store::map_sqlite(e, "reading index health"))?;
+        let s = marrow_query::catalog::index_stats(&conn)?;
         Ok(IndexHealth {
-            files,
-            chunks: marrow_store::read::chunk_count(&conn)?,
-            content_bytes: bytes,
-            cloud_only,
-            schema_version: self.store.schema_version(),
+            files: s.files,
+            chunks: s.chunks,
+            content_bytes: s.content_bytes,
+            cloud_only: s.cloud_only,
+            // From the database, not from a build constant: the chain is
+            // numbered across crates, so `marrow_core::SCHEMA_VERSION` is the
+            // store's own maximum and not what an open database is at.
+            schema_version: s.schema_version,
         })
     }
 
@@ -633,13 +602,7 @@ impl Core {
     }
 
     fn roots(&self) -> Result<Vec<String>> {
-        let conn = self.store.reader()?;
-        let mut stmt = conn
-            .prepare("SELECT canonical_path FROM workspace_roots")
-            .map_err(|e| marrow_store::map_sqlite(e, "reading roots"))?;
-        stmt.query_map([], |r| r.get(0))
-            .and_then(|it| it.collect())
-            .map_err(|e| marrow_store::map_sqlite(e, "reading roots"))
+        marrow_query::catalog::roots(&self.store.reader()?)
     }
 }
 

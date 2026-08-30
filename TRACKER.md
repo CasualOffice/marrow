@@ -158,17 +158,34 @@ find ~ -flags dataless 2>/dev/null | wc -l
 - [x] Results carry `provenance`, `origin` and a `citable` flag
 - [x] Both `initialize` and `server/discover` handshakes accepted
 - [x] `.mcp.json` written; verified working from an arbitrary cwd
-- [ ] Use it for a week; note which tool you actually reach for → informs M3
-- [ ] `search --literal` over MCP — `marrow-index::literal` exists, the tool does not expose it yet (removed from the schema rather than advertised-and-ignored)
+- [?] Use it for a week; note which tool you actually reach for → **yours, not
+  mine.** Left open deliberately rather than ticked on your behalf
+- [x] `search --literal` — wired in the **CLI** first, because the zero-results
+  screen had been suggesting it since M1 while the flag did not exist. It
+  reports how many files it did *not* reach: "0 matches in 7,195 of 35,134
+  files" plus the reason it stopped
+- [ ] `search_literal` over MCP — the CLI proves the wiring; the tool is not
+  exposed yet
 - [x] `marrow-query` landed (32 tests) — read path: RRF fusion shape, FI read model, explain
-- [ ] Swap MCP's and desktop's hand-rolled SQL for `marrow-query`
+- [x] Swapped MCP's and desktop's hand-rolled SQL onto `marrow_query::catalog`.
+  Both had their own workspace listing and index status, and `roots()` was
+  byte-identical in two crates — two statements answering one question about
+  one index is two answers with nothing saying which is right
 
 ---
 
 ## M3 — PDF + tables
 
-- [ ] PDFium integration; text + page + bbox provenance
-- [ ] Scanned-PDF detection (yield ≈ 0 with pages > 0) — flag, don't silently drop
+**PDFs are done; tables are not started.** The milestone was scoped as one
+thing and is two, and the second half is a genuine body of work rather than
+a few unticked boxes.
+
+- [x] **PDFKit**, not PDFium ([D54](DECISIONS.md)) — text + page + per-character
+  bbox, verified on a real 49-page document
+- [x] Scanned-PDF detection (yield ≈ 0 with pages > 0) — flagged for OCR, never
+  silently dropped
+- [x] Provenance is `Degraded`, not `Exact`: the text is what PDFKit extracted,
+  not what is on the page, and the citation badge depends on that distinction
 - [ ] Table IR schema (`table_ir`, `table_cells`)
 - [ ] CSV / Markdown / HTML tables
 - [ ] XLSX via calamine — formulas, named ranges, number formats

@@ -135,13 +135,19 @@ impl Runtime {
     /// Names the command, because "MLX is not available" is a dead end and
     /// this is a thing they can actually do.
     pub fn setup_hint(data_dir: &Path) -> String {
+        // **Both packages.** `mlx-lm` alone gives a runtime that generates and
+        // cannot embed: `op_load` imports `mlx_embeddings` for an embedding
+        // model, because an embedding model is not a causal LM with the head
+        // removed. Following a hint that named only the first would leave
+        // semantic search broken while Ask worked, with nothing saying why.
+        let venv = data_dir.join("runtime/mlx");
         format!(
             "No MLX runtime found. Create one with:\n\n    \
              python3.11 -m venv {}\n    \
-             {}/bin/pip install mlx-lm\n\n\
+             {}/bin/pip install mlx-lm mlx-embeddings\n\n\
              It needs about 450 MB and Apple Silicon.",
-            data_dir.join("runtime/mlx").display(),
-            data_dir.join("runtime/mlx").display(),
+            venv.display(),
+            venv.display(),
         )
     }
 }
@@ -958,6 +964,8 @@ sleep 5"#
         let hint = Runtime::setup_hint(Path::new("/data"));
         assert!(hint.contains("venv"), "{hint}");
         assert!(hint.contains("mlx-lm"), "{hint}");
+        // Both, or semantic search is broken while Ask works.
+        assert!(hint.contains("mlx-embeddings"), "{hint}");
         assert!(hint.contains("450 MB"), "must say what it costs: {hint}");
     }
 

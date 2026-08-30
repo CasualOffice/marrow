@@ -321,51 +321,45 @@ impl Server {
     }
 
     fn list_workspaces(&self) -> Result<Value> {
+        // The same statement the desktop sidebar uses. These were two queries
+        // answering one question about one index, which is two answers with
+        // nothing saying which is right.
         let conn = self.store.reader()?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT w.name, COALESCE(r.canonical_path,''),
-                        (SELECT count(*) FROM files f
-                          WHERE f.workspace_id = w.workspace_id AND f.status='ACTIVE')
-                   FROM workspaces w
-              LEFT JOIN workspace_roots r ON r.workspace_id = w.workspace_id
-                  WHERE w.status = 'ACTIVE' ORDER BY w.name",
-            )
-            .map_err(|e| marrow_store::map_sqlite(e, "listing workspaces"))?;
-        let rows: Vec<Value> = stmt
-            .query_map([], |r| {
-                Ok(json!({
-                    "name": r.get::<_, String>(0)?,
-                    "path": r.get::<_, String>(1)?,
-                    "files": r.get::<_, i64>(2)?,
-                }))
+        let rows: Vec<Value> = marrow_query::catalog::workspace_stats(&conn)?
+            .into_iter()
+            .map(|w| {
+                json!({
+                    "name": w.name,
+                    "path": w.path,
+                    "files": w.files,
+                    "chunks": w.chunks,
+                    "contentBytes": w.content_bytes,
+                    // TIER-001: never a silent zero. A workspace that is mostly
+                    // in the cloud is not one that is mostly indexed.
+                    "cloudOnly": w.cloud_only,
+                    "unindexed": w.unindexed,
+                    "degraded": w.is_degraded(),
+                })
             })
-            .and_then(|it| it.collect())
-            .map_err(|e| marrow_store::map_sqlite(e, "listing workspaces"))?;
+            .collect();
         Ok(json!({ "workspaces": rows }))
     }
 
     fn index_status(&self) -> Result<Value> {
         let conn = self.store.reader()?;
-        let (files, bytes, cloud_only): (i64, i64, i64) = conn
-            .query_row(
-                "SELECT (SELECT count(*) FROM files WHERE status='ACTIVE'),
-                        (SELECT COALESCE(sum(size_bytes),0) FROM file_versions WHERE status='CURRENT'),
-                        (SELECT count(*) FROM files WHERE tier_state != 'RESIDENT')",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
-            .map_err(|e| marrow_store::map_sqlite(e, "reading index health"))?;
-        let chunks = marrow_store::read::chunk_count(&conn)?;
-
+        let st = marrow_query::catalog::index_stats(&conn)?;
         Ok(json!({
-            "files_indexed": files,
-            "content_bytes": bytes,
-            "searchable_chunks": chunks,
+            "files_indexed": st.files,
+            "content_bytes": st.content_bytes,
+            "searchable_chunks": st.chunks,
             // Never a silent zero: a count of files deliberately not read is
             // the thing that explains a search which should have matched.
-            "cloud_only_not_read": cloud_only,
-            "schema_version": self.store.schema_version(),
+            "cloud_only_not_read": st.cloud_only,
+            "workspaces": st.workspaces,
+            // From the database rather than a build constant — the migration
+            // chain is numbered across crates, so a constant in any one of them
+            // is not what an open database is at.
+            "schema_version": st.schema_version,
         }))
     }
 
@@ -394,15 +388,7 @@ impl Server {
     }
 
     fn roots(&self) -> Result<Vec<String>> {
-        let conn = self.store.reader()?;
-        let mut stmt = conn
-            .prepare("SELECT canonical_path FROM workspace_roots")
-            .map_err(|e| marrow_store::map_sqlite(e, "reading roots"))?;
-        let v = stmt
-            .query_map([], |r| r.get(0))
-            .and_then(|it| it.collect())
-            .map_err(|e| marrow_store::map_sqlite(e, "reading roots"))?;
-        Ok(v)
+        marrow_query::catalog::roots(&self.store.reader()?)
     }
 }
 

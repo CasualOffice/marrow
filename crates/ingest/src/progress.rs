@@ -27,6 +27,16 @@ impl Cancel {
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::Relaxed)
     }
+
+    /// The raw flag, for callees that take one.
+    ///
+    /// `marrow-index`'s literal scanner takes an `&AtomicBool` because it does
+    /// not depend on this crate and should not. Handing it the flag is better
+    /// than either giving it a dependency or making the CLI carry two
+    /// cancellation tokens that can disagree.
+    pub fn as_flag(&self) -> &AtomicBool {
+        &self.0
+    }
 }
 
 /// Which stage a counter belongs to.

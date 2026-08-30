@@ -28,7 +28,13 @@ pub use model::{
     VersionStatus,
 };
 
-/// Schema version this build writes. Bumped by every migration.
+/// The highest migration **this crate's chain** defines.
+///
+/// Not the version an opened database is at. The chain is numbered across
+/// crates — `marrow-index` owns 2 and 4 — so a live database opened by the app
+/// is at the maximum of the *composed* chain, which is higher than this. Read
+/// it from `schema_meta` when you want to know what a database actually is;
+/// this is only what `marrow-store` alone would apply.
 pub const SCHEMA_VERSION: i64 = 3;
 
 /// Chunk bodies larger than this go to the content-addressed cache rather than

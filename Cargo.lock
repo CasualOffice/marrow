@@ -2258,6 +2258,7 @@ dependencies = [
  "marrow-core",
  "marrow-index",
  "marrow-net",
+ "marrow-query",
  "marrow-store",
  "marrow-tools",
  "rusqlite",
