@@ -82,3 +82,50 @@ picker at top-centre. Marrow's answers carry citations and an evidence list,
 which those products do not have, and the existing `--prose-measure` column
 plus the sources disclosure is the better fit. Copying their chrome wholesale
 would cost the thing that makes this different.
+
+
+---
+
+## Found by audit, not by use (2026-08-30)
+
+Four read-only sweeps run after the reported bugs were fixed, on the principle
+that one bug is rarely one bug. The two criticals were both invisible from
+every surface: nothing errors, nothing logs, the feature simply does not happen.
+
+| # | sev | What you are told | What happens | Where |
+|---|---|---|---|---|
+| C1 | **critical** | MCP `fetch_url`: "a first fetch of a new host needs the user's confirmation" | It can **never** fetch anything. `Consent::new()` is built fresh inside the handler and never populated, so every URL returns `NewHost` and MCP turns every confirmation into an error. 100% refusal, every host, forever. The description promises a flow that cannot exist. | `mcp/src/server.rs:835`, `net/src/policy.rs:428` |
+| C2 | **critical** | `marrow embed` builds semantic search; TRACKER says M4 Semantic **Done** | The vector index is read by **one** call site in the repo — desktop **Ask**. `marrow search`, the desktop **Search** view and MCP `search` never open `SqliteVectorIndex`. A 2¼-hour backfill changes nothing on two of the three surfaces. Adding `marrow embed` and the Build button fixed the *producer*; the *consumer* was never wired. | `cli/src/search.rs:48`, `desktop/src/state.rs:369`, `mcp/src/server.rs:147` |
+| C3 | high | Error: "Run `marrow reindex`, or delete the index directory" | `marrow reindex` does not exist (it is `index`), and there is no index directory — FTS5 lives inside `marrow.db` (D3), so the fallback tells the user to delete their **corrections**, which hard rule 8 says are the one thing that cannot be rebuilt. | `index/src/fts5.rs:566,654` |
+| C4 | high | `--literal` was removed from library messages in `5aff922` | Two survivors in the same file: the too-many-terms error and the FTS5-syntax error both still name a CLI flag on all three surfaces. | `index/src/fts5.rs:388,665` |
+| C5 | high | Zero-results page, first run: **"Add a folder"** and **"Run an index"** | Both call `unavailable("policy")` — a message about `workspace_set_policy`, a different feature. Both capabilities now exist and work from the Status page. | `ZeroResults.tsx:80,94` |
+| C6 | high | Zero-results: "Nothing is missing from the index — every file in every workspace was read." | Shown whenever three narrow checks pass, which is the ordinary state. It is false: most files have no chunks. `unindexed` arrives on the same query and the component never reads it. | `ZeroResults.tsx:161` |
+| C7 | high | Settings: "the **eight read-only commands** are the entire surface between it and the disk" | There are 22 and several mutate — `add_workspace` writes the DB, `download_model` writes 200 MB over the network, `reindex` rewrites the index. The test cited as enforcement only asserts the count and that no *name* contains "write"/"delete". Body copy a user reads to understand the security posture. | `SettingsView.tsx:37,150`, `api.ts:13`, `commands.rs:469` |
+| C8 | high | Settings: "cannot start an index run (`index_run`)" | `reindex` exists and Status calls it. | `SettingsView.tsx:46` |
+| C9 | high | `marrow status` — "Index health" | Prints counts with **no freshness at all**, human or `--json`. The exact bug fixed for MCP and desktop in `dbf4636`; the CLI reads the same `IndexStats` and ignores the three fields. | `cli/src/main.rs:659` |
+| C10 | high | TRACKER ticks `marrow-query`: "RRF fusion, FI read model, explain" | `search_hybrid`, `intelligence` (1,049 lines) and `explain` (259 lines) have no caller. The desktop re-implements a smaller fusion inline. ~1,900 lines exercised only by their own tests. | `query/src/{search,intelligence,explain}.rs` |
+| C11 | med | MCP `search` "returns ranked excerpts" | Does not pin the snippet column, so FTS5 picks the best-matching column and an excerpt can be the **filename**. The port's own doc says to pin Body when the snippet goes to a model; the desktop does, MCP does not. | `mcp/src/server.rs:144`, `index/src/port.rs:178` |
+| C12 | med | MCP `search` — an agent's default retrieval tool | Defaults to `Terms` (every word must appear), so "when does the lease renew" finds nothing against a document saying "renews". `Any` exists, the desktop uses it, MCP exposes no mode and never warns. | `mcp/src/server.rs:144` |
+| C13 | med | The schema test: "a parameter declared but ignored is the worst kind of bug" | All four schema tests iterate `TOOLS`, not `all()` — the four **write** tools are unchecked. `create_page.title`/`workspace` ship with no description. | `mcp/src/tools.rs:349` |
+| C14 | med | `--json` "on every command" | `marrow embed --json` and `marrow watch --json` parse the flag and discard it. | `cli/src/main.rs:282,284` |
+| C15 | med | `releaseModel` — free the loaded model | Registered, exported, typed — **no caller**. Same shape as `start_semantic_backfill` before it was fixed. | `commands.rs:800`, `api.ts:622` |
+| C16 | med | `ask(scope)` | Threaded through five layers with no control that sets it. *(Picker now being added.)* | `commands.rs:756` |
+| C17 | med | MCP `list_workspaces`: "with file counts **and index freshness**" | The payload has no freshness field of any kind. | `mcp/src/tools.rs:178` |
+| C18 | med | `SearchHit.reason`: "`exact` \| `semantic` \| `path` \| `recent`", rendered as a badge in three components | Hard-coded to `"exact"` for every hit. The badge is always the same word. | `commands.rs:399` |
+| C19 | low | Exit codes "a script needs to tell the two apart" | `MODEL_UNAVAILABLE = 5` and `INTERRUPTED = 5` are the same number. | `cli/src/main.rs:32,44` |
+| C20 | low | Zero-results hint prints `marrow search --literal {query}` | Unquoted, in the one message whose whole purpose is patterns a shell eats. The sibling error 200 lines up quotes it and explains why. | `cli/src/search.rs:243` |
+| C21 | **doc** | `CLAUDE.md` — the file every agent is told to obey | "Currently specification-only. No code yet." (15 crates, a shipped app) and "Don't build a UI (D42)" — D42 was reversed. | `CLAUDE.md:9,48` |
+| C22 | **doc** | `README.md` | "M1 complete, currently at M2"; "Full text **Tantivy**" (D3 settled FTS5); "Parsers **PDFium**" (D54 settled PDFKit); "UI deferred past M6". | `README.md:5,79,81,84` |
+| C23 | **doc** | TRACKER Progress: M4 Semantic **Done** | 11 of its 13 items are unticked, and per C2 it is not true in substance either. | `TRACKER.md:19` |
+
+### Came back clean
+
+Tauri command registration (all 22 agree across three lists) · every advertised
+keyboard shortcut has a live handler, and the one that does not is marked
+missing with its reason · MCP **read**-tool parameter handling · every CLI
+subcommand does what its help says · `.mcp.json` and `tauri.conf.json` resolve
+and match their claims · `search_literal`'s coverage block genuinely reports
+what it promises · serde field names across every struct on the Rust↔TS
+boundary, both directions · no `flatten`/`untagged`/`skip_serializing_if` on the
+boundary, so `Option` arrives as explicit `null` and FI-003 holds · all numerics
+well inside 2^53; every timestamp epoch-ms.
