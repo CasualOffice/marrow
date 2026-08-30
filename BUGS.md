@@ -231,3 +231,31 @@ by wildcard. Stage explicit paths, or give each agent its own worktree.
 | A parser upgrade never reprocessed anything already indexed; `parser_version` was written with every result and only ever read back for display | `093d375` |
 | MCP: `limit` bounds advertised and silently clamped; `total` never said a page was cut; `read_file` past EOF returned empty rather than saying where the file ends | `b41b69c` |
 | Semantic coverage (1.3% of chunks) invisible on every surface | `5d6e155` |
+
+
+---
+
+## Missing features, assessed (2026-08-30)
+
+Asked for as essential. Three of the six already existed and had simply never
+been seen, because the app had not been rebuilt since they landed — which is
+itself worth noting: **shipping and being visible are different events**.
+
+| | State |
+|---|---|
+| Workspace setup | **exists** — `add_workspace`, native picker in Rust, canonicalizes and refuses overlapping roots |
+| Model download and configuration | **exists** — download, cancel, profile, detection, release, with fit arithmetic on the Models page |
+| New / clean session, chat history | **exists** as of `226e211` — persists across quit, sidebar list, rename, soft delete, ⌘N |
+| File upload | **missing** — folders only, through a picker. A PDF on the desktop cannot be asked about without moving it first |
+| Images | **missing** — indexed from metadata alone; a screenshot of an error is findable by filename and nothing else |
+| Scratch / session workspace | **missing** — there is a scratch dir for model weights, none for the user |
+| First-run setup | **missing** — no path from installed to working; you land on a search box over an empty index |
+| Video and audio | **scoped, not built** — see the TRACKER parking lot. A shallow version would read as support and answer nothing |
+
+### And one found while checking
+
+**The AI profile never persists.** `Hub` holds it in a `Mutex<Profile>`
+initialised from `default_profile(&machine)` at startup; `set_profile` writes
+only to that mutex. Choosing Efficient or LargerLocal survives until the next
+launch and then silently reverts to the hardware default — a setting that
+appears to work and undoes itself is worse than one that is not offered.
