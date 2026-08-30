@@ -446,6 +446,42 @@ Ideas that came up but aren't scheduled. Move to a milestone or delete — don't
 - `integrity_check` on unclean shutdown — belongs with the CLI `status` work.
 - `chunks.provenance_class` CHECK constraint — when M4 first writes chunks.
 
+### Audio and video — scoped, not scheduled
+
+Asked for as essential (2026-08-30). Writing the shape down rather than
+half-building it, because **a shallow version is worse than none**: filename and
+duration would render as "video is supported" and answer nothing, and the first
+question anyone asks of a recording is what was *said* in it.
+
+`SourceSpan::Time { start_ms, end_ms }` already exists and nothing produces it,
+so the IR is ready and only the producers are missing. That is the good news;
+the rest is real work.
+
+**The valuable half is audio, not frames.** For the kind of corpus this indexes
+— meetings, screen recordings, talks — the words carry the content and the
+pixels mostly repeat. Transcription first, frames second, and possibly never.
+
+| Piece | How | Cost |
+|---|---|---|
+| Demux, duration, track list | AVFoundation, already on the machine | small |
+| Transcription | Whisper via MLX (the worker exists), or `SFSpeechRecognizer` | **the milestone.** A model download, a second worker mode, and roughly real-time-or-better on Apple Silicon — a one-hour recording is minutes, not seconds |
+| Transcript → chunks | Segment on speaker turns or silence, each chunk a `Time` span | small, once transcription exists |
+| Frames | Keyframes only, OCR each (the image parser lands first), dedupe near-identical | medium, low value on most corpora |
+| Diarisation | Who spoke | out of scope; needs a second model and is rarely what a search is for |
+
+**What makes it more than a parser.** Every other parser is a pure function of
+bytes that returns in milliseconds. This one needs a model, takes minutes, and
+must be resumable — which means it is a *job*, not a parse: keyed on
+`(source_version, processor, processor_version)` like everything else under hard
+rule 7, cancellable, and restartable after the kill that will happen. The
+parser router has no notion of that today, and pretending a ten-minute
+transcription is a parse would put the whole pipeline behind one file.
+
+**Therefore:** opt-in per file or per folder, never on the default walk. A
+folder of screen recordings must not turn `marrow index` into an overnight job
+without anyone asking for it.
+
+
 ---
 
 ## Log
