@@ -246,6 +246,7 @@ pub fn ingest_root_with_index(
             root_id,
             &h,
             &self_written,
+            &router,
             &mut inflight,
         ) {
             Ok((file_id, Some(ids))) => {
@@ -506,6 +507,7 @@ pub fn apply_hints(
             root_id,
             &h,
             &self_written,
+            &router,
             &mut inflight,
         ) {
             Ok((_, Some(ids))) => {
@@ -695,6 +697,7 @@ fn record(
     root_id: RootId,
     h: &Hashed,
     self_written: &HashSet<ContentHash>,
+    router: &marrow_parse::ParserRouter,
     inflight: &mut Vec<Pending<()>>,
 ) -> Result<(FileId, Option<RecordedIds>)> {
     let now = Timestamp::now();
@@ -796,7 +799,20 @@ fn record(
         Some(c) if !changed => !marrow_store::read::content_stage_finished(conn, c.version_id)?,
         _ => false,
     };
-    let changed = changed || unfinished;
+
+    // **A parser fix has to reach the files already indexed.** PAR-003 calls the
+    // parser's version "the mechanism by which an upgrade schedules
+    // reprocessing", and it was written with every parse result and never read
+    // back — so improving a parser changed nothing for the existing corpus,
+    // because the bytes had not moved and the gate compared only content
+    // hashes. The improvement applied to files indexed after it and to nothing
+    // else, silently.
+    let stale = match &current {
+        Some(c) if !changed && !unfinished => stale_parser(conn, router, c.version_id)?,
+        _ => false,
+    };
+
+    let changed = changed || unfinished || stale;
 
     let mut ids = None;
     if changed {
@@ -835,6 +851,39 @@ fn record(
     // first one to know what it did *not* see.
     let _ = wrote;
     Ok((file.file_id, ids))
+}
+
+/// Whether the parser that produced this version's result has moved on.
+///
+/// Asked of the recorded `parser_id`, so a build that no longer carries that
+/// parser leaves the file alone rather than reprocessing it with something
+/// else — losing a parser is a different event from improving one, and only the
+/// second is a reason to re-read a file that has not changed.
+fn stale_parser(
+    conn: &ReadConn,
+    router: &marrow_parse::ParserRouter,
+    version_id: VersionId,
+) -> Result<bool> {
+    let mut stmt = conn
+        .prepare_cached("SELECT parser_id, parser_version FROM parse_results WHERE version_id = ?1")
+        .map_err(|e| marrow_store::map_sqlite(e, "reading the parser that produced a version"))?;
+    let rows = stmt
+        .query_map([version_id.to_string()], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
+        .map_err(|e| marrow_store::map_sqlite(e, "reading the parser that produced a version"))?;
+
+    for row in rows {
+        let (id, was) =
+            row.map_err(|e| marrow_store::map_sqlite(e, "reading a recorded parser version"))?;
+        if let Some(now) = router.version_of(&id) {
+            if now != was {
+                debug!(parser = %id, was = %was, now = %now, "the parser moved on; reprocessing");
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// What `record` produced, so the content stage knows what to attach chunks to.

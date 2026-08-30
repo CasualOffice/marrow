@@ -98,6 +98,26 @@ impl ParserRouter {
         self.parsers.iter().map(|p| p.id()).collect()
     }
 
+    /// What version of `id` this build carries, if it carries it at all.
+    ///
+    /// PAR-003 makes the parser's identity and version "the mechanism by which
+    /// an upgrade schedules reprocessing", and the version was faithfully
+    /// written with every parse result and **never read back**. So a parser fix
+    /// was dead on arrival for every file already indexed: the ingest gate
+    /// compares content hashes, the bytes did not change, and the improved
+    /// parser never saw them again.
+    ///
+    /// Asked by id rather than by re-routing the file, because routing wants a
+    /// probe and possibly the bytes, and the question here is narrower: the
+    /// stored result already says which parser produced it, so the only thing
+    /// missing is what that parser says today.
+    pub fn version_of(&self, id: &str) -> Option<&'static str> {
+        self.parsers
+            .iter()
+            .find(|p| p.id() == id)
+            .map(|p| p.version())
+    }
+
     /// Run the chain. **Never** returns an error for "nothing handled it".
     ///
     /// It does still return an error for a storage or policy failure raised by

@@ -541,3 +541,53 @@ fn a_cancelled_sweep_never_concludes_that_the_files_it_missed_are_gone() {
         .unwrap();
     assert_eq!(after, before, "a cancelled sweep emptied the index");
 }
+
+/// **A parser fix must reach the files that are already indexed.**
+///
+/// PAR-003 calls the parser's version "the mechanism by which an upgrade
+/// schedules reprocessing". It was written faithfully with every parse result
+/// and never read back, so improving a parser changed nothing for the existing
+/// corpus: the bytes had not moved, the gate compared only content hashes, and
+/// the better output applied to files indexed afterwards and to nothing else.
+///
+/// Simulated by ageing the recorded version, which is what an upgrade looks
+/// like from the next run's point of view.
+#[test]
+fn a_file_is_reparsed_when_the_parser_that_read_it_has_moved_on() {
+    let f = setup();
+    let first = run(&f);
+    assert!(first.parsed > 0, "the fixture must parse something");
+
+    // Unchanged bytes: nothing to do, which is the behaviour that made the bug
+    // invisible.
+    let second = run(&f);
+    assert_eq!(
+        second.parsed, 0,
+        "an unchanged corpus must not be re-parsed"
+    );
+
+    // Now the parser claims a different version than the one on record.
+    f.store
+        .writer()
+        .submit(|c| {
+            c.execute("UPDATE parse_results SET parser_version = 'ancient'", [])
+                .map(|_| ())
+                .map_err(|e| marrow_store::map_sqlite(e, "ageing the recorded parser version"))
+        })
+        .unwrap();
+    f.store.flush().unwrap();
+
+    let third = run(&f);
+    assert!(
+        third.parsed > 0,
+        "the parser moved on and nothing was re-read, so the fix never reaches \
+         any file already in the index"
+    );
+
+    // And it settles: having caught up, the next run has nothing to do again.
+    let fourth = run(&f);
+    assert_eq!(
+        fourth.parsed, 0,
+        "reprocessing did not converge — every run would re-parse the corpus"
+    );
+}
