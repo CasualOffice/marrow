@@ -16,6 +16,10 @@ export type IconName =
   | "fileDim"
   | "folder"
   | "ask"
+  | "chip"
+  | "plus"
+  | "pencil"
+  | "trash"
   | "activity"
   | "settings"
   | "warning"
@@ -50,6 +54,28 @@ const PATHS: Record<IconName, JSX.Element> = {
     <path d="M1.5 4a1 1 0 0 1 1-1h3.2l1.4 1.6h6.4a1 1 0 0 1 1 1v6.9a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" />
   ),
   ask: <path d="M13.5 8.5a5 5 0 0 1-5 5H3l1.4-2.2A5 5 0 1 1 13.5 8.5z" />,
+  /* Models. A die, not the speech bubble Ask uses — in an icon-only switcher
+     two sections drawn with the same glyph are one section drawn twice. */
+  chip: (
+    <>
+      <rect x="4.5" y="4.5" width="7" height="7" rx="1.2" />
+      <path d="M6.5 1.75v2.75M9.5 1.75v2.75M6.5 11.5v2.75M9.5 11.5v2.75M1.75 6.5h2.75M1.75 9.5h2.75M11.5 6.5h2.75M11.5 9.5h2.75" />
+    </>
+  ),
+  plus: <path d="M8 3.25v9.5M3.25 8h9.5" />,
+  pencil: (
+    <>
+      <path d="M11.4 2.4a1.6 1.6 0 0 1 2.2 2.2L5.5 12.7l-3 .8.8-3z" />
+      <path d="M10.2 3.6l2.2 2.2" />
+    </>
+  ),
+  trash: (
+    <>
+      <path d="M2.75 4.25h10.5" />
+      <path d="M6 4.25V2.9a.9.9 0 0 1 .9-.9h2.2a.9.9 0 0 1 .9.9v1.35" />
+      <path d="M4.1 4.25l.6 8.1a1.2 1.2 0 0 0 1.2 1.15h4.2a1.2 1.2 0 0 0 1.2-1.15l.6-8.1" />
+    </>
+  ),
   activity: <path d="M1.5 8h3l2-4.5L9.5 12l2-4h3" />,
   settings: (
     <>

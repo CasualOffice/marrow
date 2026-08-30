@@ -44,6 +44,22 @@ const GROUPS: ReadonlyArray<{ title: string; items: Binding[] }> = [
     ],
   },
   {
+    // The two row keys are live wherever a conversation row has focus, which is
+    // the same place the pencil and the bin appear. Neither is the only way in:
+    // GUI §11 asks for a keyboard equivalent to every mouse action, and a
+    // shortcut that is the *sole* path is that rule read backwards.
+    title: "Conversations",
+    items: [
+      { keys: "⌘N", label: "Command N", action: "Start a new conversation" },
+      { keys: "F2", action: "Rename the focused conversation" },
+      {
+        keys: "⌫",
+        label: "Delete",
+        action: "Delete the focused conversation (it is kept, not erased)",
+      },
+    ],
+  },
+  {
     title: "Acting",
     items: [
       { keys: "↵", label: "Return", action: "Read it here — focus the preview" },

@@ -1,5 +1,10 @@
-/* Navigation, on the canvas. No sheet, no border, no fill — Enclave's shell
-   puts the nav *behind* the content rather than beside it in its own box. */
+/* The rail, on the canvas. No sheet, no border, no fill — Enclave's shell puts
+   the nav *behind* the content rather than beside it in its own box.
+ *
+ * Two lists share the height: conversations take what is left after the
+ * workspaces, and the workspaces are capped at a third of the column. That way
+ * a day of asking questions cannot push the workspace health out of sight
+ * (GUI §11), and a folder list cannot squeeze the thread list to two rows. */
 
 .sidebar {
   min-width: 0;
@@ -23,33 +28,33 @@
   gap: 1px;
 }
 
-.item {
+.top {
+  padding: var(--sp-2) var(--sp-4) var(--sp-5) var(--sp-6);
+}
+
+/* The one thing on this rail that is an action rather than a destination, so
+   it is the one thing that carries its shortcut on its face. */
+.newThread {
   display: flex;
   align-items: center;
   gap: var(--sp-4);
   width: 100%;
-  min-height: var(--ctl-h-lg);
+  min-height: var(--ctl-h);
   padding: 0 var(--sp-4);
+  border: 0;
   border-radius: var(--r-ctrl);
+  background: var(--sheet);
+  box-shadow: var(--hairline);
+  color: var(--fg);
+  font: inherit;
   font-size: var(--fs-body);
-  font-weight: 450;
-  color: var(--fg2);
-  text-align: left;
-}
-
-.item:hover {
-  background: var(--hover);
-  color: var(--fg);
-}
-
-/* The selected section, as the reference marks a selected saved view: a sunken
-   plate and full-strength text. Not an accent fill — the accent is reserved for
-   focus and for the cursor, and a nav that shouts competes with the results. */
-.active,
-.active:hover {
-  background: var(--sunken);
-  color: var(--fg);
   font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.newThread:hover {
+  background: var(--hover);
 }
 
 .icon {
@@ -57,7 +62,7 @@
   flex-shrink: 0;
 }
 
-.active .icon {
+.newThread:hover .icon {
   color: var(--fg);
 }
 
@@ -84,11 +89,144 @@
   color: var(--fg3);
 }
 
+/* ── conversations ────────────────────────────────────────────────────────
+ *
+ * The row is a container, not a button: the two actions on it are buttons of
+ * their own and a button cannot hold a button. `focus-within` is what keeps the
+ * keyboard equal to the mouse — the actions appear when anything inside the row
+ * has focus, so tabbing to them is possible without a hover that never happens. */
+
+.threads {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.convRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: var(--ctl-h-lg);
+  padding-right: var(--sp-2);
+  border-radius: var(--r-ctrl);
+  color: var(--fg2);
+}
+
+.convRow:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.convActive,
+.convActive:hover {
+  background: var(--sunken);
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.convOpen {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--ctl-h-lg);
+  padding: 0 var(--sp-4);
+  border: 0;
+  border-radius: var(--r-ctrl);
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-body);
+  text-align: left;
+  cursor: pointer;
+}
+
+.convMeta {
+  flex: none;
+  display: flex;
+  align-items: center;
+}
+
+.age {
+  font-size: var(--fs-xs);
+  color: var(--fg3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Hidden until the row is under the pointer or holds focus. Not `display:none`
+   at rest — that would take the buttons out of the tab order and leave the
+   keyboard with only `F2` and `⌫`, which is a worse deal than it sounds: it
+   makes the shortcuts the only path rather than the fast one. */
+.rowActions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity var(--motion-rerank) var(--ease);
+}
+
+.convRow:hover .rowActions,
+.convRow:focus-within .rowActions {
+  width: auto;
+  opacity: 1;
+}
+
+.convRow:hover .age,
+.convRow:focus-within .age {
+  display: none;
+}
+
+.rowAction {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--r-chip);
+  background: none;
+  color: var(--fg3);
+  cursor: pointer;
+}
+
+.rowAction:hover {
+  background: var(--selected);
+  color: var(--fg);
+}
+
+.renameField {
+  width: 100%;
+  min-height: var(--ctl-h-lg);
+  padding: 0 var(--sp-4);
+  border: 0;
+  border-radius: var(--r-ctrl);
+  background: var(--sheet);
+  box-shadow: var(--hairline);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--fs-body);
+}
+
+.renameField:focus-visible {
+  outline: var(--focus-ring-w) solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
 /* ── workspace rows ───────────────────────────────────────────────────────
  *
  * GUI §11: every degraded state visible here without navigating. The dot is
  * decorative; `.state` is the word a screen reader gets, and the count column
  * carries the tone so the number itself is the warning. */
+
+.spaces {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 33%;
+  overflow-y: auto;
+}
 
 .wsRow {
   display: grid;
@@ -159,15 +297,11 @@
   padding-bottom: var(--sp-1);
 }
 
-.scroll {
-  overflow-y: auto;
-  min-height: 0;
-}
-
 .none {
-  padding: 0 var(--sp-8);
-  font-size: var(--fs-body);
+  padding: var(--sp-2) var(--sp-8);
+  font-size: var(--fs-xs);
   color: var(--fg3);
+  line-height: var(--lh-body);
 }
 
 .problem {
@@ -178,11 +312,6 @@
   padding: 0 var(--sp-8);
   font-size: var(--fs-sm);
   color: var(--warn-text);
-}
-
-.spacer {
-  flex-grow: 1;
-  min-height: var(--sp-4);
 }
 
 /* ── collapsed ────────────────────────────────────────────────────────────

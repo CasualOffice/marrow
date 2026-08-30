@@ -46,6 +46,16 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "m3_self_written",
         up: schema::SCHEMA_V3,
     },
+    // **Five, not four.** `marrow-index` took 4 for the vector table, by the
+    // same rule that gave it 2. The composed chain is what a real database is
+    // at, and `Store::compose` refuses a chain with a hole in it — so the next
+    // free number is the one after the highest either crate has claimed, not
+    // the one after this list's own last entry.
+    Migration {
+        version: 5,
+        name: "m5_conversations",
+        up: schema::SCHEMA_V5,
+    },
 ];
 
 /// The schema version this build writes.

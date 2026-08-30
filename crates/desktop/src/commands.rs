@@ -505,7 +505,25 @@ const COMMAND_NAMES: &[&str] = &[
     "forget_conversation",
     "start_semantic_backfill",
     "stop_semantic_backfill",
+    "list_conversations",
+    "load_conversation",
+    "save_turn",
+    "rename_conversation",
+    "delete_conversation",
 ];
+
+/// Names that read as a mutation and are one.
+///
+/// The assertion below is a tripwire on the *shape of a name*, and a tripwire
+/// with no way to acknowledge a real case is one that gets deleted the first
+/// time it fires. Adding a name here is a deliberate act: it says this command
+/// changes something, and that what it changes was thought about.
+///
+/// `delete_conversation` is a **soft** delete of a row Marrow wrote itself —
+/// `status` moves to `DELETED` and nothing leaves the database. It touches
+/// nothing the user wrote, which is what the rule below is actually protecting.
+#[cfg(test)]
+const DELIBERATE_MUTATIONS: &[&str] = &["delete_conversation"];
 
 #[cfg(test)]
 mod tests {
@@ -631,11 +649,15 @@ mod tests {
         // to the user's disk; when one does it needs a deliberate addition.
         // `reindex` is the closest — it re-reads granted folders and rewrites
         // Marrow's own derived index, which is rebuildable by definition.
-        assert_eq!(COMMAND_NAMES.len(), 23);
+        assert_eq!(COMMAND_NAMES.len(), 28);
         for n in COMMAND_NAMES {
+            if DELIBERATE_MUTATIONS.contains(n) {
+                continue;
+            }
             assert!(
                 !n.contains("write") && !n.contains("delete") && !n.contains("exec"),
-                "{n} looks like a mutation; M1 exposes none"
+                "{n} looks like a mutation; add it to DELIBERATE_MUTATIONS with a \
+                 reason, or give it a name that says what it does"
             );
         }
         // `open_path` hands a file to another application, which is the closest
@@ -769,6 +791,16 @@ pub async fn ask(
     let token = hub.register_ask(cancel.clone());
     let handle = token.clone();
     blocking(move || {
+        // First, before retrieval and before any model work: this is the only
+        // way the window can learn the handle while there is still something to
+        // cancel. The command's own return value arrives when the answer is
+        // over (see `AskEvent::Started`).
+        if on_event
+            .send(crate::ask::AskEvent::Started { id: handle.clone() })
+            .is_err()
+        {
+            cancel.cancel();
+        }
         let turns = crate::ask::turns_from(&history);
         crate::ask::run(
             &core,
@@ -813,6 +845,141 @@ pub async fn release_model(
         Ok(hub.snapshot())
     })
     .await
+}
+
+// ── conversations (B7) ────────────────────────────────────────────────────
+//
+// The window held its thread in component state, so Marrow had exactly one
+// conversation and it ended when the process did. These five give it a list.
+
+/// One conversation, as the sidebar lists it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationSummary {
+    pub id: String,
+    pub title: String,
+    /// The project the thread was last scoped to. `null` is every project.
+    pub scope: Option<String>,
+    pub created_ms: i64,
+    /// When it was last *used*, which is what the list is ordered by. A thread
+    /// you came back to this morning belongs above one abandoned last week.
+    pub updated_ms: i64,
+    pub turns: i64,
+}
+
+/// One exchange, restored.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredTurn {
+    pub question: String,
+    pub answer: String,
+    pub thorough: bool,
+    pub model: Option<String>,
+    pub scope: Option<String>,
+    /// Exactly what was cited at the time. Not re-retrieved: the chunk behind a
+    /// citation can be superseded or its file deleted between asking and
+    /// returning, and a conversation that quietly shows different sources than
+    /// it was answered from is worse than one that shows none.
+    pub citations: Vec<crate::ask::Citation>,
+    pub excluded: Vec<crate::ask::Excluded>,
+    /// Which projects the evidence came from — derived here from the stored
+    /// citations by the same function the live answer uses, rather than stored
+    /// as a column of its own. A second copy of a rule that decides *how deep a
+    /// project is* would drift from the first, and then a reopened conversation
+    /// would disagree with the one it was a moment ago.
+    pub projects: Vec<String>,
+    pub usage: Option<TurnUsage>,
+    pub asked_ms: i64,
+}
+
+/// What a finished generation cost. Mirrors [`crate::ask::AskEvent::Done`],
+/// which is where the window gets it from.
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnUsage {
+    pub prompt_tokens: u32,
+    pub output_tokens: u32,
+    pub thinking_tokens: u32,
+    pub cached_prefix_tokens: u32,
+    pub stop_reason: String,
+    pub elapsed_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationDetail {
+    pub id: String,
+    pub title: String,
+    pub scope: Option<String>,
+    pub turns: Vec<StoredTurn>,
+}
+
+/// A finished exchange on its way to disk.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewTurn {
+    pub question: String,
+    pub answer: String,
+    pub thorough: bool,
+    pub model: Option<String>,
+    pub scope: Option<String>,
+    pub citations: Vec<crate::ask::Citation>,
+    pub excluded: Vec<crate::ask::Excluded>,
+    pub usage: Option<TurnUsage>,
+}
+
+/// Which conversation a saved turn landed in, and what it is called.
+///
+/// Both, because the first turn of a thread creates it: the window has no id
+/// until this returns one, and it would otherwise have to re-list to find out
+/// what the row it just made is called.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedTurn {
+    pub id: String,
+    pub title: String,
+}
+
+#[tauri::command]
+pub async fn list_conversations(
+    core: State<'_, Arc<Core>>,
+    limit: usize,
+) -> Res<Vec<ConversationSummary>> {
+    let core = Arc::clone(&core);
+    blocking(move || core.conversations(limit)).await
+}
+
+#[tauri::command]
+pub async fn load_conversation(core: State<'_, Arc<Core>>, id: String) -> Res<ConversationDetail> {
+    let core = Arc::clone(&core);
+    blocking(move || core.conversation(&id)).await
+}
+
+/// Persist a finished exchange. `conversation` is `None` for the first turn of
+/// a thread, which is what creates it.
+#[tauri::command]
+pub async fn save_turn(
+    core: State<'_, Arc<Core>>,
+    conversation: Option<String>,
+    turn: NewTurn,
+) -> Res<SavedTurn> {
+    let core = Arc::clone(&core);
+    blocking(move || core.save_turn(conversation, turn)).await
+}
+
+#[tauri::command]
+pub async fn rename_conversation(core: State<'_, Arc<Core>>, id: String, title: String) -> Res<()> {
+    let core = Arc::clone(&core);
+    blocking(move || core.rename_conversation(id, title)).await
+}
+
+/// Take a conversation off the list. **Soft delete** — `status` moves to
+/// `DELETED` and every row stays where it is, because a conversation is the one
+/// thing in this database that cannot be re-derived from the user's files.
+#[tauri::command]
+pub async fn delete_conversation(core: State<'_, Arc<Core>>, id: String) -> Res<()> {
+    let core = Arc::clone(&core);
+    blocking(move || core.delete_conversation(id)).await
 }
 
 /// Drop a conversation's session. Called when the thread is cleared, so a

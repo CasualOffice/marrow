@@ -10,21 +10,39 @@
   background: var(--canvas);
 }
 
-/* Reserves the corner macOS paints the traffic lights into. */
+/* Reserves the corner macOS paints the traffic lights into. The right-hand one
+   is the same width so the centre stays centred in the window rather than in
+   what is left of it. */
 .lights {
   width: 64px;
   flex-shrink: 0;
 }
 
-.title {
-  flex-grow: 1;
-  text-align: center;
-  font-family: var(--tight);
-  font-size: var(--fs-body);
-  font-weight: 500;
-  letter-spacing: var(--ls-tight);
-  color: var(--fg3);
+/* The switcher, centred. `min-width: 0` so a narrow window shrinks this rather
+   than pushing the strip wider than the frame. */
+.centre {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.rail {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--ctl-h-sm);
+  height: var(--ctl-h-sm);
+  border: 0;
+  border-radius: var(--r-ctrl);
+  background: none;
+  color: var(--fg3);
+  cursor: pointer;
+}
+
+.rail:hover {
+  background: var(--hover);
+  color: var(--fg);
 }

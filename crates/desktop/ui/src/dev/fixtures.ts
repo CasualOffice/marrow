@@ -15,6 +15,11 @@
 import type {
   AskEvent,
   Citation,
+  ConversationDetail,
+  ConversationSummary,
+  NewTurn,
+  SavedTurn,
+  StoredTurn,
   FileDetail,
   FileRow,
   IndexHealth,
@@ -591,6 +596,77 @@ const SOURCE = [
   "    }",
 ];
 
+/**
+ * Conversations, in memory for the life of the page.
+ *
+ * Enough to exercise the list, the ordering, renaming and deleting in
+ * `pnpm dev`, and nothing more: persistence is the Rust half and a fixture that
+ * simulated it would be testing the fixture.
+ */
+const DEV_THREADS = new Map<
+  string,
+  {
+    title: string;
+    scope: string | null;
+    updatedMs: number;
+    turns: StoredTurn[];
+  }
+>([
+  [
+    "01DEVSEED",
+    {
+      title: "How does the vault rotate tokens?",
+      scope: null,
+      updatedMs: now - 2 * 3_600_000,
+      turns: [
+        {
+          question: "How does the vault rotate tokens?",
+          answer:
+            "Every fifteen minutes; a refresh that arrives after the window is rejected rather than extended [E1].",
+          thorough: false,
+          model: "Qwen 3.5 4B",
+          scope: null,
+          citations: [
+            {
+              id: "E1",
+              path: `${ROOT}/services/vault/src/auth/token.rs`,
+              relativePath: "services/vault/src/auth/token.rs",
+              location: "services/vault/src/auth/token.rs:88",
+              line: 88,
+              excerpt: "Tokens are rotated every fifteen minutes.",
+              provenance: "exact",
+            },
+          ],
+          excluded: [],
+          projects: ["services/vault"],
+          usage: {
+            promptTokens: 812,
+            outputTokens: 44,
+            thinkingTokens: 0,
+            cachedPrefixTokens: 0,
+            stopReason: "stop",
+            elapsedMs: 2_100,
+          },
+          askedMs: now - 2 * 3_600_000,
+        },
+      ],
+    },
+  ],
+]);
+
+function devConversations(): ConversationSummary[] {
+  return [...DEV_THREADS.entries()]
+    .map(([id, t]) => ({
+      id,
+      title: t.title,
+      scope: t.scope,
+      createdMs: t.updatedMs,
+      updatedMs: t.updatedMs,
+      turns: t.turns.length,
+    }))
+    .sort((a, b) => b.updatedMs - a.updatedMs);
+}
+
 export async function mockInvoke<T>(
   cmd: string,
   args?: Record<string, unknown>,
@@ -678,6 +754,62 @@ export async function mockInvoke<T>(
     case "start_semantic_backfill":
     case "stop_semantic_backfill":
       return devModels() as T;
+    case "list_conversations":
+      return devConversations() as T;
+    case "load_conversation": {
+      const id = String(args?.["id"] ?? "");
+      const found = DEV_THREADS.get(id);
+      if (!found) throw { code: "CFG_INVALID", message: "No such conversation." };
+      const detail: ConversationDetail = {
+        id,
+        title: found.title,
+        scope: found.scope,
+        turns: found.turns,
+      };
+      return detail as T;
+    }
+    case "save_turn": {
+      const into = args?.["conversation"];
+      const turn = args?.["turn"] as NewTurn;
+      const id = typeof into === "string" ? into : `01DEV${DEV_THREADS.size}`;
+      const existing = DEV_THREADS.get(id);
+      const stored: StoredTurn = {
+        question: turn.question,
+        answer: turn.answer,
+        thorough: turn.thorough,
+        model: turn.model,
+        scope: turn.scope,
+        citations: turn.citations,
+        excluded: turn.excluded,
+        // Derived in Rust from the stored citations; the fixture keeps its own
+        // hands off it rather than inventing a second rule.
+        projects: [],
+        usage: turn.usage,
+        askedMs: Date.now(),
+      };
+      const title = existing?.title ?? turn.question.slice(0, 60);
+      DEV_THREADS.set(id, {
+        title,
+        scope: turn.scope,
+        updatedMs: Date.now(),
+        turns: [...(existing?.turns ?? []), stored],
+      });
+      const saved: SavedTurn = { id, title };
+      return saved as T;
+    }
+    case "rename_conversation": {
+      const id = String(args?.["id"] ?? "");
+      const row = DEV_THREADS.get(id);
+      if (row) DEV_THREADS.set(id, { ...row, title: String(args?.["title"] ?? "") });
+      return undefined as T;
+    }
+    case "delete_conversation": {
+      // Soft in the app; the fixture has no `status` column to flip, and a
+      // browser-only stub that pretended otherwise would be modelling a
+      // database it does not have.
+      DEV_THREADS.delete(String(args?.["id"] ?? ""));
+      return undefined as T;
+    }
     case "cancel_ask":
       return true as T;
     case "forget_conversation":
@@ -710,6 +842,9 @@ export async function mockAsk(
   onEvent: (e: AskEvent) => void,
   priorTurns = 0,
 ): Promise<string> {
+  // The handle first, exactly as the command does: Stop has to have something
+  // to cancel for the whole time it is on screen.
+  onEvent({ kind: "started", id: "dev-ask" });
   // The stages a real run emits, with delays long enough to actually see —
   // a fixture that skips straight to tokens hides every layout problem the
   // waiting state has.

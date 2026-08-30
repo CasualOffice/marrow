@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./App.module.css";
 import { TitleBar } from "./components/TitleBar";
 import { Sidebar } from "./components/Sidebar";
+import { ViewSwitcher } from "./components/ViewSwitcher";
 import { SearchView } from "./components/SearchView";
 import { FilesView } from "./components/FilesView";
 import { AskView } from "./components/AskView";
@@ -42,7 +43,7 @@ import {
   useSettledFlag,
   useWorkspaces,
 } from "./queries";
-import { anchorOf, hitKey, useUi, type View } from "./store";
+import { anchorOf, hitKey, useUi } from "./store";
 import { copyCitation, openInSystem, revealInFileManager } from "./actions";
 import type { SearchHit } from "./api";
 
@@ -51,15 +52,6 @@ const SLOW_AFTER_MS = 150;
 
 /** A stable empty ranking, so "no results" is not a new array every render. */
 const NO_HITS: readonly SearchHit[] = [];
-
-const TITLES: Record<View, string> = {
-  search: "Marrow",
-  ask: "Ask",
-  files: "Files",
-  models: "Models",
-  status: "Status",
-  settings: "Settings",
-};
 
 export function App() {
   const view = useUi((s) => s.view);
@@ -186,6 +178,13 @@ export function App() {
         ui.setView("search");
         searchRef.current?.focus();
         searchRef.current?.select();
+        return;
+      }
+      // ⌘N — a fresh thread, from anywhere. The one action on the rail that is
+      // not a destination, so it is the one that earns a global key.
+      if (meta && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        ui.startConversation();
         return;
       }
       if (meta && e.key === "\\") {
@@ -330,7 +329,9 @@ export function App() {
 
   return (
     <div className={styles.app}>
-      <TitleBar title={TITLES[view]} />
+      <TitleBar>
+        <ViewSwitcher />
+      </TitleBar>
 
       <div className={cx(styles.body, collapsed && styles.collapsed)}>
         <Sidebar ref={sidebarRef} />

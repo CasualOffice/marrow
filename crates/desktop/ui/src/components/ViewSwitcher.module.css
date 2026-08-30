@@ -1,0 +1,53 @@
+/* A segmented control on the canvas, in the title strip.
+   The same idiom the composer's mode switch uses: a sunken track, and the
+   selected item lifted onto a sheet with a hairline. One vocabulary for
+   "these are the options and this is the one you are on". */
+
+.switcher {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px;
+  border-radius: var(--r-ctrl);
+  background: var(--sunken);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: var(--ctl-h-sm);
+  padding: 0 var(--ctl-pad-sm);
+  border: 0;
+  border-radius: var(--r-ctrl);
+  background: none;
+  color: var(--fg3);
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 450;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.item:hover {
+  color: var(--fg);
+}
+
+.active,
+.active:hover {
+  background: var(--sheet);
+  box-shadow: var(--hairline);
+  color: var(--fg);
+  font-weight: 500;
+}
+
+/* Narrow windows: the icons carry it. The accessible name is on the button and
+   does not depend on this, so nothing is lost but width. */
+@media (max-width: 900px) {
+  .label {
+    display: none;
+  }
+  .item {
+    padding: 0 var(--sp-4);
+  }
+}

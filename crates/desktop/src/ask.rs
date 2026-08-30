@@ -73,6 +73,16 @@ prose, write a ```mermaid block.";
     tag = "kind"
 )]
 pub enum AskEvent {
+    /// The handle `cancel_ask` needs, sent before anything else happens.
+    ///
+    /// It used to reach the window only as the command's **return value**,
+    /// which resolves when the answer is finished — so for the entire time the
+    /// Stop button was on screen there was nothing for it to cancel, and both
+    /// it and Esc did nothing at all. A cancel handle that arrives after the
+    /// work it cancels is not a handle.
+    Started {
+        id: String,
+    },
     /// What the pipeline is doing right now.
     ///
     /// Between pressing Enter and the first token there is retrieval, possibly
@@ -156,7 +166,12 @@ pub fn turns_from(history: &[PriorTurn]) -> Vec<Turn> {
 }
 
 /// One evidence block, as the UI shows it.
-#[derive(Clone, Debug, Serialize)]
+///
+/// `Deserialize` as well, because a conversation is persisted with the
+/// citations it was answered from and the window sends them back verbatim when
+/// the turn finishes. Re-deriving them at save time would risk storing
+/// something the reader was never shown.
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Citation {
     pub id: String,
@@ -168,7 +183,7 @@ pub struct Citation {
     pub provenance: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Excluded {
     pub relative_path: String,
@@ -284,7 +299,7 @@ pub fn assemble(
 /// tells them apart, two when it does not. A file sitting directly in the
 /// workspace root is in no project and contributes nothing — its own filename
 /// is not a project name.
-fn projects_of(citations: &[Citation]) -> Vec<String> {
+pub(crate) fn projects_of(citations: &[Citation]) -> Vec<String> {
     let folders: Vec<Vec<&str>> = citations
         .iter()
         .map(|c| c.relative_path.split('/').collect::<Vec<_>>())

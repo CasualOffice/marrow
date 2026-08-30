@@ -13,6 +13,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import styles from "./AskView.module.css";
 import { cx } from "../lib/cx";
@@ -22,24 +23,22 @@ import { Icon } from "./Icon";
 import { Kbd } from "./Kbd";
 import {
   ask,
+  asUiError,
   cancelAsk,
   forgetConversation,
+  loadConversation,
+  saveTurn,
   type AskEvent,
   type Citation,
   type ExcludedSource,
   type PriorTurn,
+  type StoredTurn,
+  type TurnUsage,
 } from "../api";
-import { useProjects } from "../queries";
+import { CONVERSATIONS_KEY, useProjects } from "../queries";
 import { useUi } from "../store";
 
-interface Usage {
-  readonly promptTokens: number;
-  readonly outputTokens: number;
-  readonly thinkingTokens: number;
-  readonly cachedPrefixTokens: number;
-  readonly stopReason: string;
-  readonly elapsedMs: number;
-}
+type Usage = TurnUsage;
 
 interface Turn {
   readonly id: string;
@@ -83,12 +82,48 @@ function newTurn(question: string, thorough: boolean): Turn {
   };
 }
 
-function conversationId() {
+/**
+ * The key the model runtime caches a conversation's KV prefix under.
+ *
+ * Deliberately **not** the stored conversation's identifier, and the two live
+ * side by side for the whole life of a thread. A conversation gets its ULID from
+ * the store when its first answer is saved, which is several seconds after the
+ * question was asked; keying the session on that would mean the first turn had
+ * no key, or that the key changed under the cache between turn one and turn two
+ * and threw away the ~80% prefix reuse that is the entire reason the session
+ * exists. Reopening a stored conversation *does* use its id as the key — by
+ * then it is stable, and one identity is better than two.
+ */
+function sessionKey() {
   return `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** A stored turn, back in the shape the thread renders. */
+function restore(t: StoredTurn, i: number): Turn {
+  return {
+    id: `stored-${i}`,
+    question: t.question,
+    thorough: t.thorough,
+    answer: t.answer,
+    // Reasoning is not persisted: GEN-015 says it is never evidence and never
+    // cited, and it is the largest thing a turn produces. Its absence in a
+    // reopened thread is the honest rendering of that.
+    thinking: "",
+    sources: t.citations,
+    excluded: t.excluded,
+    projects: t.projects,
+    // `bytes: 0` reads as "not recorded" in the summary line, which is what it
+    // is. Local is the only boundary this pipeline has ever had.
+    meta: t.model === null ? null : { boundary: "local", model: t.model, bytes: 0 },
+    usage: t.usage,
+    failure: null,
+    stage: null,
+    running: false,
+  };
+}
+
 export function AskView() {
-  const [conversation, setConversation] = useState(conversationId);
+  const [session, setSession] = useState(sessionKey);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [question, setQuestion] = useState("");
   const [thorough, setThorough] = useState(false);
@@ -100,7 +135,26 @@ export function AskView() {
   const scroller = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const stickToBottom = useRef(true);
+  /**
+   * The write for the previous turn, while it is still in flight.
+   *
+   * The first turn of a thread is what creates the conversation, and its
+   * identifier only exists once that write comes back. A follow-up sent in the
+   * gap would read "no conversation yet" and start a second one — two rows in
+   * the list for one exchange, and neither of them the whole of it. Waiting is
+   * a few milliseconds against a question that has just taken seconds.
+   */
+  const pendingSave = useRef<Promise<unknown> | null>(null);
   const setView = useUi((s) => s.setView);
+  const notify = useUi((s) => s.notify);
+  const epoch = useUi((s) => s.conversationEpoch);
+  const client = useQueryClient();
+
+  /* Read inside async closures that outlive the render that made them. */
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const epochRef = useRef(epoch);
+  epochRef.current = epoch;
 
   /**
    * Follow the stream, but stop the moment the user scrolls up. Yanking
@@ -126,10 +180,116 @@ export function AskView() {
     setTurns((all) => all.map((t) => (t.id === id ? f(t) : t)));
   }, []);
 
+  /** An empty thread with a session key nothing else has used. */
+  const startFresh = useCallback(() => {
+    // The runtime is holding a KV prefix for the thread being left. Nobody is
+    // coming back to it under this key — reopening the conversation uses its
+    // stored id — so releasing it now is a few hundred megabytes recovered
+    // rather than held for a cache hit that cannot happen.
+    void forgetConversation(sessionRef.current);
+    setSession(sessionKey());
+    setTurns([]);
+    setQuestion("");
+    setScope(null);
+    field.current?.focus();
+  }, []);
+
+  /**
+   * Show a stored conversation.
+   *
+   * Guarded on the epoch across the await: two clicks in quick succession must
+   * not race, and the second one is the one the user meant.
+   */
+  const open = useCallback(
+    async (id: string, atEpoch: number) => {
+      try {
+        const c = await loadConversation(id);
+        if (epochRef.current !== atEpoch) return;
+        void forgetConversation(sessionRef.current);
+        setSession(id);
+        setTurns(c.turns.map(restore));
+        setScope(c.scope);
+        setQuestion("");
+        stickToBottom.current = true;
+        field.current?.focus();
+      } catch (e) {
+        if (epochRef.current === atEpoch) notify(asUiError(e).message);
+      }
+    },
+    [notify],
+  );
+
+  /*
+   * The sidebar asks for a thread; this is where it arrives.
+   *
+   * Keyed on the epoch rather than on the id, so recording the id of a
+   * conversation this view has just created does not reload the thread that is
+   * already on screen. Anything still generating is stopped first: what it has
+   * written by then is saved against its own conversation, not the one being
+   * opened, because the target was captured when the question was sent.
+   */
+  const openedAt = useRef(epoch);
+  useEffect(() => {
+    if (openedAt.current === epoch) return;
+    openedAt.current = epoch;
+    if (askId.current) {
+      void cancelAsk(askId.current);
+      notify("Stopped the answer in progress. What was written is kept.");
+    }
+    const id = useUi.getState().activeConversationId;
+    if (id === null) startFresh();
+    else void open(id, epoch);
+  }, [epoch, notify, open, startFresh]);
+
+  /**
+   * Write a finished exchange to the store.
+   *
+   * `into` is captured when the question is sent, not read here: a turn that
+   * finishes after the user has moved on belongs to the conversation it was
+   * asked in. For the same reason the returned id is only adopted when the
+   * window is still on the thread that created it.
+   */
+  const persist = useCallback(
+    async (
+      into: string | null,
+      turn: Turn,
+      askedWithin: string | null,
+      atEpoch: number,
+    ) => {
+      try {
+        const saved = await saveTurn(into, {
+          question: turn.question,
+          answer: turn.answer,
+          thorough: turn.thorough,
+          model: turn.meta?.model ?? null,
+          // The scope the question was asked under, not whatever the picker
+          // says by the time the answer lands.
+          scope: askedWithin,
+          citations: turn.sources,
+          excluded: turn.excluded,
+          usage: turn.usage,
+        });
+        if (into === null && epochRef.current === atEpoch) {
+          useUi.getState().setActiveConversationId(saved.id);
+        }
+        await client.invalidateQueries({ queryKey: CONVERSATIONS_KEY });
+      } catch (e) {
+        // Not fatal to the answer, which is on screen and readable. Said out
+        // loud all the same: silence here means the thread is gone at quit and
+        // nothing warned anybody.
+        notify(`The answer could not be saved. ${asUiError(e).message}`);
+      }
+    },
+    [client, notify],
+  );
+
   const send = useCallback(
     async (text: string, mode: boolean) => {
       const q = text.trim();
       if (!q || running) return;
+      // See `pendingSave`: this is what stops a fast follow-up starting a
+      // second conversation for the same thread.
+      if (pendingSave.current) await pendingSave.current;
 
       // Sent before this turn is appended, so the model sees the conversation
       // as it was when the question was asked.
@@ -148,13 +308,40 @@ export function AskView() {
       setRunning(true);
       stickToBottom.current = true;
 
+      /*
+       * The conversation this answer belongs to, and the thread that is on
+       * screen, decided **now**. Both can change while the model is talking —
+       * the user can open another conversation, and the first turn of this one
+       * creates a row that did not exist when it was asked.
+       */
+      const into = useUi.getState().activeConversationId;
+      const atEpoch = epochRef.current;
+
+      /*
+       * A local copy of the turn, moved by the same functions that move the
+       * rendered one. What gets written to the store is then the thing that was
+       * displayed, by construction — reading it back out of component state
+       * after the stream ends would be a second version of the same turn, and
+       * the one that goes to disk is the one nobody looks at.
+       */
+      let record = turn;
+      const applyToTurn = (f: (t: Turn) => Turn) => {
+        record = f(record);
+        update(turn.id, f);
+      };
+
       const onEvent = (e: AskEvent) => {
         switch (e.kind) {
+          case "started":
+            // Before anything else, so Stop and Esc have something to cancel
+            // for the whole time they are on screen.
+            askId.current = e.id;
+            break;
           case "stage":
-            update(turn.id, (t) => ({ ...t, stage: { stage: e.stage, detail: e.detail } }));
+            applyToTurn((t) => ({ ...t, stage: { stage: e.stage, detail: e.detail } }));
             break;
           case "sources":
-            update(turn.id, (t) => ({
+            applyToTurn((t) => ({
               ...t,
               sources: e.hits,
               excluded: e.excluded,
@@ -165,19 +352,19 @@ export function AskView() {
           case "token":
             // The first token ends the waiting state: once text is arriving,
             // a stage line beside it would be describing the past.
-            update(turn.id, (t) => ({ ...t, answer: t.answer + e.text, stage: null }));
+            applyToTurn((t) => ({ ...t, answer: t.answer + e.text, stage: null }));
             break;
           case "thinking":
             // Reasoning arriving is output arriving. Leaving the skeleton up
             // through a long Thorough think would say "nothing yet" while the
             // model is visibly working.
-            update(turn.id, (t) => ({ ...t, thinking: t.thinking + e.text, stage: null }));
+            applyToTurn((t) => ({ ...t, thinking: t.thinking + e.text, stage: null }));
             break;
           case "done":
-            update(turn.id, (t) => ({ ...t, usage: e, stage: null }));
+            applyToTurn((t) => ({ ...t, usage: e, stage: null }));
             break;
           case "failed":
-            update(turn.id, (t) => ({
+            applyToTurn((t) => ({
               ...t,
               failure: { code: e.code, message: e.message },
             }));
@@ -186,12 +373,12 @@ export function AskView() {
       };
 
       try {
-        askId.current = await ask(
-          { conversation, question: q, history, thorough: mode, scope },
+        await ask(
+          { conversation: session, question: q, history, thorough: mode, scope },
           onEvent,
         );
       } catch (e) {
-        update(turn.id, (t) => ({
+        applyToTurn((t) => ({
           ...t,
           failure: {
             code: "UI_UNEXPECTED",
@@ -199,41 +386,62 @@ export function AskView() {
           },
         }));
       } finally {
-        update(turn.id, (t) => ({ ...t, running: false, stage: null }));
+        applyToTurn((t) => ({ ...t, running: false, stage: null }));
         setRunning(false);
         askId.current = null;
         field.current?.focus();
       }
+
+      // A cancelled answer is still an answer — it is what was written, and it
+      // is what the reader will expect to find when they come back. A turn with
+      // no text at all is a failure, and a list of questions that were never
+      // answered is not a conversation worth keeping.
+      if (record.answer.trim() !== "") {
+        const write = persist(into, record, scope, atEpoch).finally(() => {
+          if (pendingSave.current === write) pendingSave.current = null;
+        });
+        pendingSave.current = write;
+      }
     },
-    [conversation, running, scope, turns, update],
+    [persist, running, scope, session, turns, update],
   );
 
   const stop = useCallback(() => {
     if (askId.current) void cancelAsk(askId.current);
   }, []);
 
-  const clear = useCallback(() => {
-    void forgetConversation(conversation);
-    setConversation(conversationId());
-    setTurns([]);
-    setQuestion("");
-    field.current?.focus();
-  }, [conversation]);
-
   const retry = useCallback(
     (t: Turn) => {
-      // Drop this turn and everything after it, then ask again — the same
-      // shape as editing a message, and it keeps the history consistent.
-      setTurns((all) => all.slice(0, all.findIndex((x) => x.id === t.id)));
+      // Asked again, at the end. It used to drop this turn and everything after
+      // it first — which was fine while a thread lived only in this component
+      // and is not now: the store has no notion of un-asking, so the view would
+      // have shown one conversation today and a longer one tomorrow.
       void send(t.question, t.thorough);
     },
     [send],
   );
 
+  /*
+   * **Where the composer sits is the whole of the empty state.**
+   *
+   * Pinned to the bottom from the start, an unused Ask view is three lines of
+   * grey text floating in a large void with the one control you want at the far
+   * edge of it. Every chat product opens with the input in the middle under a
+   * short greeting and drops it to the bottom once there is an answer to read,
+   * for the same reason: before the first question the composer *is* the
+   * content.
+   *
+   * One class, not a second layout: the scroller stops claiming the free height
+   * and the column centres what is left, which is the greeting and the composer
+   * as a pair. Nothing moves except by the flex rules already here, so there is
+   * no animation to suppress under `prefers-reduced-motion`.
+   */
+  const opening = turns.length === 0;
+
   return (
-    <section className={styles.view} aria-label="Ask">
+    <section className={cx(styles.view, opening && styles.viewOpening)} aria-label="Ask">
       <div className={styles.scroll} ref={scroller} onScroll={onScroll}>
-        {turns.length === 0 ? (
+        {opening ? (
           <Empty />
         ) : (
           <ol className={styles.thread}>
@@ -265,6 +473,11 @@ export function AskView() {
             }
             if (e.key === "Escape" && running) {
               e.preventDefault();
+              // The window binds Escape too, and there it clears the search
+              // query and takes focus to the search field — so stopping an
+              // answer would also throw you out of the composer you are still
+              // typing in. It means one thing here.
+              e.stopPropagation();
               stop();
             }
           }}
@@ -273,30 +486,8 @@ export function AskView() {
           {/* GEN-012: the switch is visible before the request is sent, next
               to what it costs, so the trade is legible while choosing. */}
           <ScopePicker value={scope} onChange={setScope} disabled={running} />
-          <div className={styles.modes} role="radiogroup" aria-label="Answer mode">
-            {([false, true] as const).map((t) => (
-              <button
-                key={String(t)}
-                type="button"
-                role="radio"
-                aria-checked={thorough === t}
-                className={cx(styles.mode, thorough === t && styles.modeOn)}
-                onClick={() => setThorough(t)}
-                disabled={running}
-              >
-                <span className={styles.modeName}>{t ? "Thorough" : "Fast"}</span>
-                <span className={styles.modeWhy}>
-                  {t ? "reasons first, slower" : "straight answer"}
-                </span>
-              </button>
-            ))}
-          </div>
+          <ModeSwitch value={thorough} onChange={setThorough} disabled={running} />
           <span className={styles.grow} />
-          {turns.length > 0 && !running && (
-            <button type="button" className={styles.ghost} onClick={clear}>
-              New
-            </button>
-          )}
           {running ? (
             <button type="button" className={styles.stop} onClick={stop}>
               Stop <Kbd>Esc</Kbd>
@@ -371,6 +562,53 @@ function ScopePicker({
         ))}
       </select>
     </label>
+  );
+}
+
+/**
+ * Fast or Thorough, as one control instead of two cards.
+ *
+ * It was two ~280×56px buttons on a row of their own: 560px of the composer
+ * spent on a binary choice, sitting above the input that is the reason anyone
+ * is on this screen at all. GEN-012 wants the trade legible before the request
+ * is sent, and one short line describing the mode you are actually in does that
+ * — the alternative's second caption describes an option you did not pick.
+ */
+function ModeSwitch({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: boolean;
+  onChange: (v: boolean) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className={styles.mode}>
+      <div className={styles.modes} role="radiogroup" aria-label="Answer mode">
+        {([false, true] as const).map((t) => (
+          <button
+            key={String(t)}
+            type="button"
+            role="radio"
+            aria-checked={value === t}
+            className={cx(styles.modeBtn, value === t && styles.modeOn)}
+            title={
+              t
+                ? "Reasons before answering. Slower, and better on a question that needs several sources put together."
+                : "Answers straight from the evidence."
+            }
+            onClick={() => onChange(t)}
+            disabled={disabled}
+          >
+            {t ? "Thorough" : "Fast"}
+          </button>
+        ))}
+      </div>
+      <span className={styles.modeWhy}>
+        {value ? "reasons first, slower" : "straight answer"}
+      </span>
+    </div>
   );
 }
 
@@ -460,7 +698,10 @@ function TurnBlock({
                 {turn.excluded.length} not used
               </span>
             )}
-            {turn.meta && (
+            {/* `0` is a reopened turn, where the size of the prompt was not
+                recorded. "0 B of context" would be a measurement; saying
+                nothing is the absence it actually is. */}
+            {turn.meta && turn.meta.bytes > 0 && (
               <span className={styles.sourcesBytes}>{bytes(turn.meta.bytes)} of context</span>
             )}
             {/* Said here rather than only inside the list, because it changes

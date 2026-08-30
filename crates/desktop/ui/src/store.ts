@@ -116,6 +116,25 @@ interface UiState {
   /** Anchored to result identity, never to an index. */
   anchor: Anchor | null;
 
+  /**
+   * Which stored conversation Ask is showing. `null` is a thread that has not
+   * been saved yet, which is every thread until its first answer finishes.
+   *
+   * This is window state and not core state: it is *which* conversation is on
+   * screen, not what is in it. The turns themselves come from `load_conversation`.
+   */
+  activeConversationId: string | null;
+  /**
+   * Bumped whenever the thread on screen must be replaced — a different
+   * conversation opened, or a new one started.
+   *
+   * A counter rather than a flag because "open the conversation I am already
+   * looking at" is a real request (it discards an unsaved draft and reloads),
+   * and an id alone cannot express it. Ask watches this, not the id, so
+   * recording the id of a thread it has just saved does not reload the thread.
+   */
+  conversationEpoch: number;
+
   quickFindOpen: boolean;
   quickFindQuery: string;
   shortcutsOpen: boolean;
@@ -144,6 +163,13 @@ interface UiState {
   focusPane: (p: Pane) => void;
   cyclePane: (back: boolean) => void;
   setAnchor: (a: Anchor | null) => void;
+
+  /** Show a stored conversation in Ask. Switches the view to it. */
+  openConversation: (id: string) => void;
+  /** Start an empty thread. Nothing is written until it has an answer in it. */
+  startConversation: () => void;
+  /** Ask reporting which conversation it is in, without asking for a reload. */
+  setActiveConversationId: (id: string | null) => void;
 
   openQuickFind: () => void;
   closeQuickFind: () => void;
@@ -174,6 +200,8 @@ export const useUi = create<UiState>((set, get) => ({
   sidebarCollapsed: false,
   focusedPane: "results",
   anchor: null,
+  activeConversationId: null,
+  conversationEpoch: 0,
   quickFindOpen: false,
   quickFindQuery: "",
   shortcutsOpen: false,
@@ -210,6 +238,20 @@ export const useUi = create<UiState>((set, get) => ({
       return { focusedPane: next ?? "results" };
     }),
   setAnchor: (anchor) => set({ anchor }),
+
+  openConversation: (id) =>
+    set((s) => ({
+      view: "ask",
+      activeConversationId: id,
+      conversationEpoch: s.conversationEpoch + 1,
+    })),
+  startConversation: () =>
+    set((s) => ({
+      view: "ask",
+      activeConversationId: null,
+      conversationEpoch: s.conversationEpoch + 1,
+    })),
+  setActiveConversationId: (activeConversationId) => set({ activeConversationId }),
 
   openQuickFind: () => set({ quickFindOpen: true }),
   closeQuickFind: () => set({ quickFindOpen: false, quickFindQuery: "" }),

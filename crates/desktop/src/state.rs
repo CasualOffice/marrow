@@ -5,7 +5,8 @@ use marrow_index::{Fts5Index, TextIndex, TextQuery, VectorIndex};
 use marrow_store::Store;
 
 use crate::commands::{
-    to_hit, FileDetail, FileRow, IndexHealth, Region, SearchHit, SearchResponse, WorkspaceRow,
+    to_hit, ConversationDetail, ConversationSummary, FileDetail, FileRow, IndexHealth, NewTurn,
+    Region, SavedTurn, SearchHit, SearchResponse, StoredTurn, WorkspaceRow,
 };
 
 /// Everything the commands need. Opened once at startup.
@@ -789,6 +790,135 @@ impl Core {
     fn roots(&self) -> Result<Vec<String>> {
         marrow_query::catalog::roots(&self.store.reader()?)
     }
+
+    // ------------------------------------------------------- conversations
+    //
+    // The window used to hold the thread in component state, so there was one
+    // conversation and it ended with the process. These four are what make the
+    // sidebar's list worth its width.
+
+    pub fn conversations(&self, limit: usize) -> Result<Vec<ConversationSummary>> {
+        let conn = self.store.reader()?;
+        Ok(
+            marrow_store::conversations::list_conversations(&conn, limit)?
+                .into_iter()
+                .map(|c| ConversationSummary {
+                    id: c.conversation_id,
+                    title: c.title,
+                    scope: c.scope,
+                    created_ms: c.created_at.as_millis(),
+                    updated_ms: c.updated_at.as_millis(),
+                    turns: c.turns,
+                })
+                .collect(),
+        )
+    }
+
+    pub fn conversation(&self, id: &str) -> Result<ConversationDetail> {
+        let conn = self.store.reader()?;
+        let (head, turns) = marrow_store::conversations::load_conversation(&conn, id)?;
+        Ok(ConversationDetail {
+            id: head.conversation_id,
+            title: head.title,
+            scope: head.scope,
+            turns: turns
+                .into_iter()
+                .map(|t| {
+                    // Stored JSON, parsed back into the shapes the window
+                    // renders. A blob that will not parse costs the turn its
+                    // citation list and nothing else: the answer is still what
+                    // was said, and refusing to open the whole conversation
+                    // over one unreadable column would lose far more.
+                    let citations: Vec<crate::ask::Citation> = decode(&t.citations, "citations");
+                    StoredTurn {
+                        question: t.question,
+                        answer: t.answer,
+                        thorough: t.mode == marrow_store::TurnMode::Thorough,
+                        model: t.model,
+                        scope: t.scope,
+                        projects: crate::ask::projects_of(&citations),
+                        citations,
+                        excluded: decode(&t.excluded, "excluded"),
+                        usage: t.usage.as_deref().and_then(|u| decode_one(u, "usage")),
+                        asked_ms: t.asked_at.as_millis(),
+                    }
+                })
+                .collect(),
+        })
+    }
+
+    /// Persist a finished exchange, starting the conversation if there is not
+    /// one yet.
+    ///
+    /// The citations go in as the JSON that was shown, not as references to the
+    /// chunks they came from: reopening a conversation must show what the
+    /// answer actually cited, and a chunk can be superseded or its file deleted
+    /// between asking and returning.
+    pub fn save_turn(&self, into: Option<String>, turn: NewTurn) -> Result<SavedTurn> {
+        let question = turn.question.clone();
+        let id = self.store.append_turn(
+            into,
+            marrow_store::NewTurn {
+                question: turn.question,
+                answer: turn.answer,
+                mode: if turn.thorough {
+                    marrow_store::TurnMode::Thorough
+                } else {
+                    marrow_store::TurnMode::Fast
+                },
+                model: turn.model,
+                scope: turn.scope,
+                citations: encode(&turn.citations),
+                excluded: encode(&turn.excluded),
+                usage: turn.usage.as_ref().map(encode),
+                at: marrow_core::Timestamp::now(),
+            },
+        )?;
+        Ok(SavedTurn {
+            id,
+            // Derived from the first question, so the window can label the row
+            // it just created without a second round trip for the list.
+            title: marrow_store::conversations::title_from(&question),
+        })
+    }
+
+    pub fn rename_conversation(&self, id: String, title: String) -> Result<()> {
+        self.store
+            .rename_conversation(id, title, marrow_core::Timestamp::now())
+    }
+
+    /// Soft delete. The rows stay; `status` moves to `DELETED`.
+    pub fn delete_conversation(&self, id: String) -> Result<()> {
+        self.store.delete_conversation(id)
+    }
+}
+
+/// Serialize a value the store holds as an opaque JSON column.
+///
+/// Infallible in practice — these are plain structs of strings and numbers, and
+/// `serde_json` only fails on a map with non-string keys or a non-finite float.
+/// An empty array is the honest fallback: it says "nothing recorded", which is
+/// exactly what a column that could not be written would mean.
+fn encode<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_string(value).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "a conversation column could not be serialized");
+        "[]".to_string()
+    })
+}
+
+fn decode<T: serde::de::DeserializeOwned>(json: &str, what: &str) -> Vec<T> {
+    serde_json::from_str(json).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, column = what, "stored conversation JSON did not parse");
+        Vec::new()
+    })
+}
+
+fn decode_one<T: serde::de::DeserializeOwned>(json: &str, what: &str) -> Option<T> {
+    serde_json::from_str(json)
+        .map_err(
+            |e| tracing::warn!(error = %e, column = what, "stored conversation JSON did not parse"),
+        )
+        .ok()
 }
 
 /// One chunk as a `TextHit`, for a candidate only the semantic branch found.

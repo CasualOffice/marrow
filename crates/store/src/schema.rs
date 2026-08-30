@@ -51,7 +51,7 @@ PRAGMA query_only   = ON;
 ///
 /// The text index's own tables are not here: they live in `marrow-index` and
 /// are applied through the same chain from there.
-pub const LATER_TABLES: &[&str] = &["self_written"];
+pub const LATER_TABLES: &[&str] = &["self_written", "conversations", "conversation_turns"];
 
 /// Every table this build expects to find.
 pub fn all_tables() -> Vec<&'static str> {
@@ -381,6 +381,79 @@ CREATE TABLE self_written (
     written_at   INTEGER NOT NULL
 );
 CREATE INDEX idx_self_written_at ON self_written(written_at);
+"#;
+
+/// Migration 5: conversations that survive quitting the app.
+///
+/// Five, not four: `marrow-index` holds 4 for the vector table. See
+/// `migrate::MIGRATIONS`.
+///
+/// Ask held its thread in the window's own component state, so there was
+/// exactly one conversation and it lasted until the process did. Everything
+/// else this app shows is a report that can be recomputed from the index; a
+/// conversation is the one thing here that is not derived from anything and
+/// cannot be rebuilt once it is gone.
+///
+/// **The citations are stored with the turn, as the JSON that was shown.**
+/// The tempting alternative is a row per citation keyed on `chunk_id`, joined
+/// back to `chunks` when the conversation is reopened — and that would be
+/// wrong twice over. A chunk can be superseded or its file deleted between
+/// asking and reopening, so the join would either lose the citation or return
+/// different text under the same claim; and re-deriving an excerpt at read time
+/// means the conversation shows something the model was never given. What the
+/// answer cited is a fact about a moment, not a live query. Nothing joins
+/// across citations, so the relational form would buy nothing to pay for that
+/// with.
+///
+/// `status` is the soft delete: removing a conversation is flipping a column,
+/// never a `DELETE`, because physical deletion belongs to the forget path
+/// alone.
+pub const SCHEMA_V5: &str = r#"
+CREATE TABLE conversations (
+    conversation_id     TEXT PRIMARY KEY,            -- ULID
+    -- Derived from the first question at creation, and renameable. Never
+    -- computed at read time: a conversation whose name changes because its
+    -- first question was edited elsewhere is not a name, it is a caption.
+    title               TEXT NOT NULL,
+    -- The project the thread was scoped to, so reopening restores the question
+    -- as it was framed. NULL is every project, which is the default.
+    scope               TEXT,
+    status              TEXT NOT NULL DEFAULT 'ACTIVE'
+                          CHECK (status IN ('ACTIVE','DELETED')),
+    created_at          INTEGER NOT NULL,
+    updated_at          INTEGER NOT NULL
+);
+-- The list is "my conversations, newest first", and it is the only query this
+-- table serves. Both columns are in it so the ordering never touches a row the
+-- filter would have dropped.
+CREATE INDEX idx_conversations_recent ON conversations(status, updated_at DESC);
+
+CREATE TABLE conversation_turns (
+    turn_id             TEXT PRIMARY KEY,            -- ULID
+    conversation_id     TEXT NOT NULL
+                          REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+    -- 1-based position in the thread. Explicit rather than inferred from
+    -- `asked_at` or from the ULID, because two turns can share a millisecond
+    -- and the order of a conversation is the one thing about it that cannot be
+    -- approximately right.
+    ordinal             INTEGER NOT NULL,
+    question            TEXT NOT NULL,
+    answer              TEXT NOT NULL,
+    mode                TEXT NOT NULL CHECK (mode IN ('FAST','THOROUGH')),
+    -- What answered. NULL only for a turn recorded before a model was
+    -- resolved; a footer that names no model is honest, one that names the
+    -- currently-loaded model would be a lie about the past.
+    model               TEXT,
+    scope               TEXT,
+    citations           TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(citations)),
+    -- What was retrieved and not sent, and why. Kept for the same reason it is
+    -- shown live: silence looks like the file was never found.
+    excluded            TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(excluded)),
+    usage               TEXT CHECK (usage IS NULL OR json_valid(usage)),
+    asked_at            INTEGER NOT NULL,
+    UNIQUE(conversation_id, ordinal)
+);
+CREATE INDEX idx_turns_conversation ON conversation_turns(conversation_id, ordinal);
 "#;
 
 #[cfg(test)]

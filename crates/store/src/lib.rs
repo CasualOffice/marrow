@@ -22,6 +22,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
+pub mod conversations;
 pub mod migrate;
 pub mod read;
 pub mod schema;
@@ -32,6 +33,7 @@ use std::path::{Path, PathBuf};
 use marrow_core::{Code, Error, FileId, JobId, Result, RootId, Timestamp, VersionId, WorkspaceId};
 use rusqlite::{Connection, OpenFlags};
 
+pub use conversations::{ConversationRow, NewTurn, TurnMode, TurnRow};
 pub use read::{
     Enqueued, FileRow, JobStatus, LeasedJob, NewFile, NewJob, NewRoot, NewVersion, NewWorkspace,
     PathRow, ReadConn, StorageKind, VersionRow,
@@ -350,6 +352,33 @@ impl Store {
         self.handle
             .submit(move |c| read::release_expired_leases(c, now))
     }
+
+    // ------------------------------------------------------- conversations
+    //
+    // Reads go through `reader()` like every other read; only the three writes
+    // need a helper, because they must go through the one writer connection.
+
+    /// Record a completed exchange, starting the conversation if `into` is
+    /// `None`. Returns the conversation it landed in.
+    pub fn append_turn(
+        &self,
+        into: Option<String>,
+        turn: conversations::NewTurn,
+    ) -> Result<String> {
+        self.handle
+            .submit(move |c| conversations::append_turn(c, into.as_deref(), &turn))
+    }
+
+    pub fn rename_conversation(&self, id: String, title: String, at: Timestamp) -> Result<()> {
+        self.handle
+            .submit(move |c| conversations::rename_conversation(c, &id, &title, at))
+    }
+
+    /// Soft delete — `status` moves to `DELETED` and every row stays.
+    pub fn delete_conversation(&self, id: String) -> Result<()> {
+        self.handle
+            .submit(move |c| conversations::delete_conversation(c, &id))
+    }
 }
 
 /// Map a rusqlite failure onto the §108 taxonomy.
@@ -417,7 +446,14 @@ mod compose_tests {
         // reports as present. This is the case that broke.
         let chain = compose(&[INDEX_TWO, INDEX_FOUR]).unwrap();
         let versions: Vec<i64> = chain.iter().map(|m| m.version).collect();
-        assert_eq!(versions, vec![1, 2, 3, 4]);
+        // Contiguous from 1, however many this crate has since added: the
+        // property is the ordering, not the length.
+        assert_eq!(
+            versions,
+            (1..=versions.len() as i64).collect::<Vec<_>>(),
+            "{versions:?}"
+        );
+        assert!(versions.len() >= 4, "both extensions are in: {versions:?}");
         assert_eq!(chain[1].name, "index_two", "the extension keeps its place");
     }
 

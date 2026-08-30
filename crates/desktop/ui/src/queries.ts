@@ -21,12 +21,14 @@ import {
   asUiError,
   fileDetail,
   indexHealth,
+  listConversations,
   listFiles,
   listProjects,
   listWorkspaces,
   modelsOverview,
   readRegion,
   search,
+  type ConversationSummary,
   type FileDetail,
   type FileRow,
   type IndexHealth,
@@ -84,6 +86,30 @@ export function useProjects() {
     queryFn: listProjects,
     // The set only changes when a folder is indexed, so this is cheap to hold
     // and expensive to recompute — it walks every indexed path.
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
+/** The key everything that changes a conversation invalidates. */
+export const CONVERSATIONS_KEY = ["conversations"] as const;
+
+/**
+ * The thread list in the sidebar.
+ *
+ * Not polled. Conversations only change because *this* window changed them —
+ * a turn finished, a rename, a delete — and every one of those invalidates the
+ * key itself. An interval here would be a query re-running all day to discover
+ * what it already did.
+ */
+export function useConversations(): UseQueryResult<
+  ConversationSummary[],
+  UiError
+> {
+  return useQuery<ConversationSummary[], UiError>({
+    queryKey: CONVERSATIONS_KEY,
+    queryFn: () =>
+      listConversations().catch((e) => Promise.reject(asUiError(e))),
     staleTime: 60_000,
     retry: false,
   });

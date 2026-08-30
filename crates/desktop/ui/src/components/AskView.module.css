@@ -17,6 +17,20 @@
   flex-direction: column;
 }
 
+/* The opening state: greeting and composer centred as a pair, rather than a
+   void with the input pinned to the far edge of it. The scroller stops claiming
+   the free height and the column centres what is left. Two declarations, no
+   second layout, and nothing animates — so there is nothing here for
+   `prefers-reduced-motion` to suppress. */
+.viewOpening {
+  justify-content: center;
+}
+
+.viewOpening .scroll {
+  flex: 0 1 auto;
+  padding-bottom: 0;
+}
+
 /* ── the thread ─────────────────────────────────────────────────────── */
 
 .thread {
@@ -50,8 +64,8 @@
 }
 
 .empty {
-  margin: auto;
-  max-width: 34ch;
+  margin: 0 auto;
+  max-width: 42ch;
   text-align: center;
   display: flex;
   flex-direction: column;
@@ -144,49 +158,57 @@
   gap: var(--sp-4);
 }
 
-/* GEN-012: the trade is visible before the request is sent. */
+/* GEN-012: the trade is visible before the request is sent — but as one
+   control beside the scope picker, not as two cards on a row of their own.
+   Same segmented idiom as the section switcher: a sunken track, the selected
+   option lifted onto a sheet. */
+.mode {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+
 .modes {
   display: flex;
-  gap: 2px;
+  gap: 1px;
   padding: 2px;
   border-radius: var(--r-ctrl);
   background: var(--sunken);
 }
 
-.mode {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1px;
-  padding: var(--sp-2) var(--sp-5);
+.modeBtn {
+  height: 20px;
+  padding: 0 var(--sp-4);
   border: 0;
   border-radius: var(--r-ctrl);
   background: none;
   color: var(--fg2);
   font: inherit;
-  text-align: left;
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
 
 .modeOn {
   background: var(--sheet);
   color: var(--fg);
+  font-weight: 500;
   box-shadow: var(--hairline);
 }
 
-.mode:disabled {
+.modeBtn:disabled {
   cursor: default;
   opacity: 0.6;
 }
 
-.modeName {
-  font-size: var(--fs-ctl);
-  font-weight: 500;
-}
-
+/* Describes the mode you are in, not the one you are not. The second caption
+   the two cards carried was an explanation of an option nobody had chosen. */
 .modeWhy {
   font-size: var(--fs-micro);
   color: var(--fg3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .grow {

@@ -909,3 +909,119 @@ mod watching {
         );
     }
 }
+
+/// Conversations, through the same boundary the window uses.
+///
+/// The store has its own tests for the SQL. These are about the seam above it:
+/// a citation is a Rust struct in `ask.rs`, JSON in a SQLite column, and a
+/// TypeScript interface in the window, and the only place all three have to
+/// agree is right here.
+mod conversations {
+    use marrow_desktop::commands::{NewTurn, TurnUsage};
+
+    fn cite(id: &str, location: &str) -> marrow_desktop::ask::Citation {
+        marrow_desktop::ask::Citation {
+            id: id.into(),
+            path: format!("/root/{location}"),
+            relative_path: location.into(),
+            location: location.into(),
+            line: Some(14),
+            excerpt: "renews on 31 December 2031".into(),
+            provenance: "exact".into(),
+        }
+    }
+
+    #[test]
+    fn a_conversation_comes_back_with_the_sources_it_was_answered_from() {
+        // A conversation you can return to but whose citations are gone is not
+        // the same conversation: the claims survive and nothing says where any
+        // of them came from.
+        let (_dir, core) = super::watchable_workspace();
+
+        let saved = core
+            .save_turn(
+                None,
+                NewTurn {
+                    question: "When does the lease renew?".into(),
+                    answer: "On 31 December 2031 [E1].".into(),
+                    thorough: true,
+                    model: Some("qwen3.5-4b".into()),
+                    scope: Some("services/STT".into()),
+                    citations: vec![cite("E1", "lease.md:14")],
+                    excluded: vec![marrow_desktop::ask::Excluded {
+                        relative_path: "notes.md".into(),
+                        reason: "written by Marrow itself, so it cannot support a claim".into(),
+                    }],
+                    usage: Some(TurnUsage {
+                        prompt_tokens: 512,
+                        output_tokens: 41,
+                        thinking_tokens: 7,
+                        cached_prefix_tokens: 400,
+                        stop_reason: "stop".into(),
+                        elapsed_ms: 1_200,
+                    }),
+                },
+            )
+            .expect("save the first turn");
+        assert_eq!(saved.title, "When does the lease renew?");
+
+        let detail = core.conversation(&saved.id).expect("reopen");
+        assert_eq!(detail.turns.len(), 1);
+        let turn = &detail.turns[0];
+        assert_eq!(turn.answer, "On 31 December 2031 [E1].");
+        assert!(turn.thorough, "the mode it was answered in");
+        assert_eq!(turn.model.as_deref(), Some("qwen3.5-4b"));
+        assert_eq!(turn.scope.as_deref(), Some("services/STT"));
+        assert_eq!(turn.citations.len(), 1);
+        assert_eq!(turn.citations[0].id, "E1");
+        assert_eq!(turn.citations[0].line, Some(14));
+        assert_eq!(turn.citations[0].location, "lease.md:14");
+        assert_eq!(turn.excluded.len(), 1, "why a source was not used survives");
+        let usage = turn.usage.as_ref().expect("usage");
+        assert_eq!(usage.output_tokens, 41);
+        assert_eq!(usage.stop_reason, "stop");
+    }
+
+    #[test]
+    fn deleting_a_conversation_hides_it_without_losing_it() {
+        let (_dir, core) = super::watchable_workspace();
+        let keep = core
+            .save_turn(None, turn("keep this one"))
+            .expect("save")
+            .id;
+        let gone = core.save_turn(None, turn("not this one")).expect("save").id;
+
+        core.delete_conversation(gone.clone()).expect("delete");
+
+        let listed = core.conversations(50).expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, keep);
+
+        // Soft: the rows are still there. This is the one thing in the database
+        // that cannot be re-derived from the user's files.
+        let rows: i64 = core
+            .store()
+            .reader()
+            .expect("reader")
+            .query_row(
+                "SELECT count(*) FROM conversation_turns WHERE conversation_id = ?1",
+                [&gone],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(rows, 1);
+    }
+
+    fn turn(question: &str) -> NewTurn {
+        NewTurn {
+            question: question.into(),
+            answer: "an answer".into(),
+            thorough: false,
+            model: None,
+            scope: None,
+            citations: Vec::new(),
+            excluded: Vec::new(),
+            usage: None,
+        }
+    }
+}
