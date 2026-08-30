@@ -714,7 +714,15 @@ impl Hub {
                 } else {
                     Reasoning::Off
                 },
-                max_output_tokens: answer_budget(&entry, envelope, thorough),
+                max_output_tokens: answer_budget(
+                    &self.machine,
+                    &entry,
+                    envelope,
+                    thorough,
+                    self.sampler
+                        .conditions(SAMPLE_INTERVAL * 4)
+                        .min_available_bytes,
+                ),
                 cancel,
             },
             on_token,
@@ -1157,20 +1165,39 @@ pub struct Conversation {
 
 /// How many tokens the answer may use.
 ///
-/// Derived, not chosen. A flat 1,024 was cutting ordinary answers off
-/// mid-sentence — measured at 859 tokens for a single-document summary, so the
-/// ceiling was one long answer away at all times. The number that is actually
-/// available is what the context window has left after the prompt and the
-/// thinking budget, and that is what this returns.
+/// **The budget is a memory question, not a subtraction.** The previous version
+/// took `default_context` — a flat 8,192 — and subtracted the prompt from it.
+/// That reads as arithmetic about a window, but `default_context` is a
+/// *planning* number used to size the memory watchdog; MLX allocates KV lazily
+/// as tokens arrive, so nothing about 8,192 is a wall the model hits.
 ///
-/// The prompt is estimated from bytes rather than tokenized: tokenizing here
-/// would mean a round trip to the worker before the worker can be asked to do
-/// anything, and the estimate only has to be conservative. Four bytes per token
-/// is low for English prose and about right for code and markup, which is what
-/// this index mostly holds.
-fn answer_budget(entry: &marrow_model::Entry, envelope: &Envelope, thorough: bool) -> u32 {
+/// The subtraction had a reported consequence. A question that retrieved 41
+/// sources produced a 29 KB prompt, about 7,424 tokens: `8192 - 7424 = 768`,
+/// clamped back up to the 1,024 floor. The user had asked for an HTML page and
+/// got roughly 4,000 characters of one. **The clamp is what made it silent** —
+/// an overrun became a floor instead of a report, so the answer stopped
+/// mid-output with nothing saying why.
+///
+/// What actually bounds the answer is what the machine can hold: KV grows with
+/// every token of prompt *and* answer, at a rate that is a property of the
+/// architecture. So this asks how much answer fits in the memory that is free
+/// right now, rather than what is left of a constant.
+///
+/// The prompt is estimated from bytes rather than tokenized, because tokenizing
+/// here would mean a round trip to the worker before the worker can be asked to
+/// do anything, and the estimate only has to be conservative. Four bytes per
+/// token is low for English prose and about right for code and markup, which is
+/// what this index mostly holds.
+fn answer_budget(
+    machine: &Machine,
+    entry: &marrow_model::Entry,
+    envelope: &Envelope,
+    thorough: bool,
+    available_bytes: u64,
+) -> u32 {
     /// Never below this: an answer that cannot finish a paragraph is not worth
-    /// the load.
+    /// the load, and if the machine cannot afford even this then the request
+    /// should have been refused at admission rather than half-answered.
     const FLOOR: u32 = 1_024;
     /// Never above this either. A model that runs away produces minutes of
     /// tokens nobody reads, and the queue has to be able to promise an end.
@@ -1182,11 +1209,34 @@ fn answer_budget(entry: &marrow_model::Entry, envelope: &Envelope, thorough: boo
     } else {
         0
     };
-    entry
-        .default_context
-        .saturating_sub(prompt)
-        .saturating_sub(thinking)
-        .clamp(FLOOR, CEILING)
+    let fixed = prompt.saturating_add(thinking);
+
+    // Walk down from the ceiling to the floor, asking each time whether the
+    // whole conversation — prompt, thinking and answer — still fits. Halving
+    // rather than stepping keeps this to three probes; the estimate is
+    // conservative enough that a finer search would be false precision.
+    let mut answer = CEILING;
+    while answer > FLOOR {
+        let shape = entry.shape(fixed.saturating_add(answer), KvPrecision::F16);
+        if Requirement::estimate(machine, &shape).total() <= available_bytes {
+            break;
+        }
+        answer /= 2;
+    }
+    let answer = answer.max(FLOOR);
+
+    if answer < CEILING {
+        // Said out loud, because a shortened answer that stops mid-sentence is
+        // exactly what the user reported twice and could not explain.
+        tracing::info!(
+            prompt_tokens = prompt,
+            thinking_tokens = thinking,
+            answer_tokens = answer,
+            available_mb = available_bytes / 1_048_576,
+            "the answer budget was reduced to fit the memory that is free"
+        );
+    }
+    answer
 }
 
 /// A model held in a worker process.
@@ -1343,16 +1393,27 @@ mod tests {
             .finish(&mut marrow_model::envelope::RandomNonce)
     }
 
+    /// A machine with plenty free, so the budget is not memory-limited.
+    fn roomy() -> (Machine, u64) {
+        let m = Probe::run();
+        let free = m.total_memory_bytes;
+        (m, free)
+    }
+
+    fn qwen() -> marrow_model::Entry {
+        marrow_model::catalogue::builtin()
+            .into_iter()
+            .find(|e| e.id == "qwen3.5-4b-mlx-q4")
+            .expect("the primary model is in the catalogue")
+    }
+
     #[test]
     fn the_answer_budget_is_what_the_window_has_left_not_a_flat_number() {
         // The reported bug: a flat 1,024 cut ordinary answers off mid-sentence.
         // Measured at 859 tokens for a one-document summary, so the ceiling was
         // one long answer away at all times.
-        let entry = marrow_model::catalogue::builtin()
-            .into_iter()
-            .find(|e| e.id == "qwen3.5-4b-mlx-q4")
-            .unwrap();
-        let small = answer_budget(&entry, &envelope_of(400), false);
+        let (m, free) = roomy();
+        let small = answer_budget(&m, &qwen(), &envelope_of(400), false, free);
         assert!(
             small > 1_024,
             "a short prompt should leave room, got {small}"
@@ -1360,30 +1421,46 @@ mod tests {
         assert!(small <= 4_096, "and still be bounded, got {small}");
     }
 
+    /// **The reported truncation, as arithmetic.**
+    ///
+    /// 41 retrieved sources came to 29 KB of prompt. Subtracting that from a
+    /// flat 8,192 left 768, which the floor raised back to 1,024 — so a request
+    /// to generate an HTML page was answered with about 4,000 characters and
+    /// stopped mid-output. A prompt that large is ordinary on a real index, and
+    /// it must not be the thing that decides how long the answer may be.
     #[test]
-    fn a_long_prompt_shrinks_the_answer_but_never_below_a_usable_floor() {
-        // The window is shared. An enormous prompt must not leave an answer
-        // that cannot finish a paragraph — at that point the load was wasted.
-        let entry = marrow_model::catalogue::builtin()
-            .into_iter()
-            .find(|e| e.id == "qwen3.5-4b-mlx-q4")
-            .unwrap();
-        let huge = answer_budget(&entry, &envelope_of(200_000), false);
-        assert_eq!(huge, 1_024, "the floor holds");
+    fn a_large_prompt_does_not_starve_the_answer_when_the_memory_is_there() {
+        let (m, free) = roomy();
+        // 29 KB, the size the reported case actually sent.
+        let budget = answer_budget(&m, &qwen(), &envelope_of(29 * 1024), false, free);
+        assert!(
+            budget > 1_024,
+            "a 29 KB prompt collapsed the answer to the floor again, got {budget}"
+        );
     }
 
     #[test]
-    fn thorough_takes_its_thinking_out_of_the_same_window() {
-        // Otherwise the two budgets sum past the context and the model is cut
-        // off by the runtime instead of by us — which reports as a crash.
-        let entry = marrow_model::catalogue::builtin()
-            .into_iter()
-            .find(|e| e.id == "qwen3.5-4b-mlx-q4")
-            .unwrap();
+    fn a_machine_with_no_memory_free_still_gets_a_usable_floor() {
+        // At that point the request should have been refused at admission. A
+        // half-answer is the one outcome that is worse than a refusal, because
+        // it looks like an answer.
+        let (m, _) = roomy();
+        let starved = answer_budget(&m, &qwen(), &envelope_of(200_000), false, 0);
+        assert_eq!(starved, 1_024, "the floor holds");
+    }
+
+    #[test]
+    fn thorough_takes_its_thinking_out_of_the_same_budget() {
+        // Otherwise the two sum past what the machine can hold and the model is
+        // cut off by the runtime instead of by us — which reports as a crash.
+        let (m, _) = roomy();
         let e = envelope_of(4_000);
+        // Deliberately tight, so the thinking allowance is what decides.
+        let tight = Requirement::estimate(&m, &qwen().shape(6_000, KvPrecision::F16)).total();
         assert!(
-            answer_budget(&entry, &e, true) <= answer_budget(&entry, &e, false),
-            "thinking must come out of the same window"
+            answer_budget(&m, &qwen(), &e, true, tight)
+                <= answer_budget(&m, &qwen(), &e, false, tight),
+            "thinking must come out of the same budget"
         );
     }
 
