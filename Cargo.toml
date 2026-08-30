@@ -10,6 +10,8 @@ members = [
     "crates/query",
     "crates/hw",
     "crates/model",
+    "crates/tools",
+    "crates/net",
     "crates/mcp",
     "crates/desktop",
     "crates/cli",
@@ -32,6 +34,8 @@ marrow-ingest = { path = "crates/ingest" }
 marrow-query = { path = "crates/query" }
 marrow-hw    = { path = "crates/hw" }
 marrow-model = { path = "crates/model" }
+marrow-tools = { path = "crates/tools" }
+marrow-net   = { path = "crates/net" }
 marrow-mcp   = { path = "crates/mcp" }
 
 anyhow     = "1"
