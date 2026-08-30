@@ -1,0 +1,115 @@
+name: release
+
+# Tag-driven, and only tags. A release that can be triggered by a branch push is
+# a release that happens by accident.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    # Apple Silicon. The reference platform (D5), and the only one that works
+    # today — cloud-placeholder detection fails closed everywhere else, so a
+    # Linux or Windows build would run and index nothing. See the README.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      # The same gate as CI. A tag that has not passed the checks is not a
+      # release, it is a mistake with a version number.
+      - name: check
+        run: ./check.sh
+
+      - name: build the ui
+        working-directory: crates/desktop/ui
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: build the app and the cli
+        run: |
+          cargo build --release -p marrow-desktop -p marrow-cli
+
+      # `tauri build` does the bundling; the binaries above are what the CLI
+      # artifact ships. Unsigned deliberately — see the release notes.
+      - name: bundle
+        run: |
+          cargo install tauri-cli --version "^2" --locked || true
+          cargo tauri build --config crates/desktop/tauri.conf.json --no-bundle || true
+          cargo tauri build --config crates/desktop/tauri.conf.json
+
+      - name: collect
+        id: collect
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # The CLI, on its own. It is the half that needs no GPU, no model and
+          # no network, and plenty of people will only ever want this.
+          tar -czf "dist/marrow-cli-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz" \
+            -C target/release marrow
+          find target/release/bundle -name '*.dmg' -exec cp {} dist/ \; || true
+          find target/release/bundle -name '*.app' -maxdepth 3 -print0 \
+            | while IFS= read -r -d '' app; do
+                ditto -c -k --sequesterRsrc --keepParent "$app" \
+                  "dist/Marrow-${GITHUB_REF_NAME}-aarch64.app.zip"
+              done
+          ( cd dist && shasum -a 256 * > SHA256SUMS.txt )
+          ls -la dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          draft: false
+          prerelease: true
+          body: |
+            **Apple Silicon macOS only.** Windows and Linux do not work yet, and
+            the README says exactly why: cloud-placeholder detection is
+            implemented for macOS alone and fails closed elsewhere, so those
+            builds would run and index nothing. That is the safe direction, not
+            an oversight.
+
+            ### This build is not signed or notarised
+
+            macOS will refuse to open it on the first try. That is Gatekeeper
+            doing its job on an unsigned binary from the internet, and you
+            should be suspicious of anyone who tells you to ignore it.
+
+            ```sh
+            xattr -dr com.apple.quarantine /Applications/Marrow.app
+            ```
+
+            Read the command before you run it: it removes the quarantine flag
+            from that one bundle. If you would rather not, build from source —
+            `cargo tauri build` — which is the honest alternative and takes a
+            few minutes.
+
+            The CLI tarball has the same caveat and the same fix.
+
+            ### What works
+
+            Indexing, lexical and filename search, `--literal` exact scan,
+            filters, tables from CSV/Markdown/HTML/XLSX/DOCX, PDF text with
+            per-character boxes, text in images, an MCP server with ten tools,
+            and a desktop app that answers questions with citations.
+
+            Answers need a model: either a local one from the Models page, or
+            any OpenAI-compatible endpoint in Settings if this machine has no
+            GPU. **Search itself never needs a model, a GPU or a network.**
+
+            Verify what you downloaded against `SHA256SUMS.txt`.
