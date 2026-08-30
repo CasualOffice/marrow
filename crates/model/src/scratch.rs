@@ -253,8 +253,11 @@ mod tests {
         let t = temp();
         let indexed = t.path().join("Documents");
         fs::create_dir_all(&indexed).unwrap();
-        let e =
-            ModelWorkspace::open(indexed.join("marrow-models"), std::slice::from_ref(&indexed)).unwrap_err();
+        let e = ModelWorkspace::open(
+            indexed.join("marrow-models"),
+            std::slice::from_ref(&indexed),
+        )
+        .unwrap_err();
         assert_eq!(e.code(), Code::CfgInvalid);
         assert!(e.message().contains("cited back"), "{}", e.message());
     }

@@ -2191,8 +2191,10 @@ name = "marrow-desktop"
 version = "0.1.0"
 dependencies = [
  "marrow-core",
+ "marrow-hw",
  "marrow-index",
  "marrow-ingest",
+ "marrow-model",
  "marrow-scan",
  "marrow-store",
  "serde",

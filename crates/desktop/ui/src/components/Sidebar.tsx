@@ -25,6 +25,7 @@ import type { WorkspaceRow } from "../api";
 const NAV: ReadonlyArray<{ view: View; label: string; icon: IconName }> = [
   { view: "search", label: "Search", icon: "search" },
   { view: "files", label: "Files", icon: "file" },
+  { view: "models", label: "Models", icon: "ask" },
   { view: "status", label: "Status", icon: "activity" },
   { view: "settings", label: "Settings", icon: "settings" },
 ];

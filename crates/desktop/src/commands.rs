@@ -358,6 +358,9 @@ const COMMAND_NAMES: &[&str] = &[
     "open_path",
     "reveal_path",
     "list_files",
+    "models_overview",
+    "refresh_model_detection",
+    "set_ai_profile",
 ];
 
 #[cfg(test)]
@@ -381,7 +384,7 @@ mod tests {
     fn the_command_surface_is_small_and_read_only() {
         // Every name here is a hole in the WebView sandbox. M1 exposes no
         // mutation at all; when one arrives it needs a deliberate addition.
-        assert_eq!(COMMAND_NAMES.len(), 8);
+        assert_eq!(COMMAND_NAMES.len(), 11);
         for n in COMMAND_NAMES {
             assert!(
                 !n.contains("write") && !n.contains("delete") && !n.contains("exec"),
@@ -393,4 +396,53 @@ mod tests {
         // that guard is the reason it is allowed at all.
         assert!(COMMAND_NAMES.contains(&"open_path"));
     }
+}
+
+// ── models (Part 8) ───────────────────────────────────────────────────────
+
+/// Everything the Models page renders from.
+///
+/// One command rather than five, because the page's numbers must agree with
+/// each other: a free-memory figure fetched separately from the verdicts
+/// computed against it would drift within one paint.
+#[tauri::command]
+pub async fn models_overview(
+    hub: State<'_, Arc<crate::models::Hub>>,
+) -> Result<crate::models::ModelsSnapshot, UiError> {
+    let hub = Arc::clone(&hub);
+    blocking(move || Ok(hub.snapshot())).await
+}
+
+/// Re-run local runtime detection. The answer changes whenever the user starts
+/// or stops Ollama, which they will do with this page open.
+#[tauri::command]
+pub async fn refresh_model_detection(
+    hub: State<'_, Arc<crate::models::Hub>>,
+) -> Result<crate::models::ModelsSnapshot, UiError> {
+    let hub = Arc::clone(&hub);
+    blocking(move || {
+        hub.refresh_detection();
+        Ok(hub.snapshot())
+    })
+    .await
+}
+
+/// Choose the AI preference (§139.6).
+#[tauri::command]
+pub async fn set_ai_profile(
+    hub: State<'_, Arc<crate::models::Hub>>,
+    profile: String,
+) -> Result<crate::models::ModelsSnapshot, UiError> {
+    let hub = Arc::clone(&hub);
+    blocking(move || {
+        hub.set_profile(&profile).ok_or_else(|| {
+            marrow_core::Error::new(
+                marrow_core::Code::CfgInvalid,
+                "That is not one of the AI preferences. Choose Efficient, \
+                 Balanced, Larger local model or Cloud.",
+            )
+        })?;
+        Ok(hub.snapshot())
+    })
+    .await
 }

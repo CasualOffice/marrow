@@ -28,8 +28,8 @@ so this is a dependency rather than a detour.
 
 | S | Name | Status | Notes |
 |---|---|---|---|
-| S1 | Hardware probe + live sampler + sizing | `[x]` | `marrow-hw`. 37 tests |
-| S2 | Registry, catalogue, download, Ollama detection | `[~]` | Registry and catalogue done; **download and detection not started** |
+| S1 | Hardware probe + live sampler + sizing + Models page | `[x]` | `marrow-hw`, and the page reads it |
+| S2 | Registry, catalogue, download, Ollama detection | `[~]` | Registry, catalogue and detection done; **download blocked on real digests** |
 | S3 | Supervisor: states, admission, breaker, queue, scratch | `[x]` | `marrow-model`. 92 tests |
 | S4 | MLX runtime in a worker process, KV reuse, Fast/Thorough | `[ ]` | The first line of real inference |
 | S5 | Ask pipeline (§148), skeletons, streaming | `[ ]` | — |
@@ -193,14 +193,14 @@ nobody is asking.
 - [x] `Sampler` — live conditions under a 1 ms budget, ring buffer, staleness detectable
 - [x] `sizing` — weights · KV · runtime buffers · resident embedder · OS reserve, calibrated to the 3–4 GB budget and pinned by a test
 - [x] `profile` — Efficient / Balanced / Larger local / Cloud, defaulting by probe
-- [ ] Models page reading all of the above — **the S1 exit criterion, still open**
+- [x] Models page reading all of the above — machine, live memory, tiering, per-model verdict with the arithmetic
 
 ### S2 — registry `[~]`
 - [x] `Entry`, `Capabilities`, `Licence`, `Source`, `Format`
 - [x] Built-in catalogue: Qwen 3.5 4B · Nemotron Nano 4B · Granite 4 3B · Gemma 4B
 - [ ] **Pin the real SHA-256 for each entry.** Every catalogue row ships `sha256: None` today, so nothing is downloadable. This is deliberate — a guessed digest fails after a 3 GB pull and looks like a corrupt network — but it is the blocking item for the whole stage
 - [ ] Resumable download into `partial/`, verified before promotion to `weights/`
-- [ ] Ollama / LM Studio detection (R1 — zero bytes downloaded)
+- [x] Ollama / LM Studio detection (R1 — zero bytes downloaded), verified by talking to the server rather than looking for a binary
 
 ### S3 — supervisor `[x]`
 - [x] Lifecycle states with a reason on every transition (SUP-001/002/003)

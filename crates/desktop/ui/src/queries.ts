@@ -23,6 +23,7 @@ import {
   indexHealth,
   listFiles,
   listWorkspaces,
+  modelsOverview,
   readRegion,
   search,
   type FileDetail,
@@ -188,4 +189,24 @@ export function useSettledFlag(value: boolean, ms: number): boolean {
     return () => window.clearTimeout(timer.current);
   }, [value, ms]);
   return flag;
+}
+
+/**
+ * The Models page.
+ *
+ * Refetched on an interval because the numbers on it are *live*: available
+ * memory moves, and Ollama can start or stop while the page is open. A
+ * recommendation made at launch is wrong by the time it is acted on (LLM-019).
+ * Four seconds is twice the sampler's own interval — fast enough that the
+ * figure is never visibly stale, slow enough that the page is not the reason
+ * the machine is busy.
+ */
+export function useModels() {
+  return useQuery({
+    queryKey: ["models"],
+    queryFn: modelsOverview,
+    refetchInterval: 4_000,
+    staleTime: 2_000,
+    retry: false,
+  });
 }

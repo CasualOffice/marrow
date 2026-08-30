@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 mod commands;
+mod models;
 mod state;
 
 use std::sync::Arc;
@@ -50,8 +51,13 @@ fn main() {
         }
     };
 
+    // Probes the machine, detects any local runtime and starts the supervisor
+    // thread. Nothing is loaded — that is the point of LLM-047.
+    let hub = Arc::new(models::Hub::start());
+
     tauri::Builder::default()
         .manage(core)
+        .manage(hub)
         .invoke_handler(tauri::generate_handler![
             commands::search,
             commands::list_workspaces,
@@ -61,7 +67,19 @@ fn main() {
             commands::open_path,
             commands::reveal_path,
             commands::list_files,
+            commands::models_overview,
+            commands::refresh_model_detection,
+            commands::set_ai_profile,
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to start the Marrow window");
+        .build(tauri::generate_context!())
+        .expect("failed to start the Marrow window")
+        .run(|app, event| {
+            // Stop the supervisor thread on the way out. A relaunch that
+            // leaves the previous one sampling is how "Marrow uses 3% CPU
+            // doing nothing" happens.
+            if matches!(event, tauri::RunEvent::Exit) {
+                use tauri::Manager;
+                app.state::<Arc<models::Hub>>().shutdown();
+            }
+        });
 }

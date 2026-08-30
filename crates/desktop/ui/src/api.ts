@@ -278,3 +278,113 @@ export function listFiles(
   });
 }
 
+
+// ── models (Part 8) ───────────────────────────────────────────────────────
+
+/** One tier of the tiered design (§139.5): router, generator, embedder. */
+export interface RoleRow {
+  readonly workload: string;
+  readonly paramsB: number;
+  /** Whether it stays in memory between requests. */
+  readonly resident: boolean;
+  readonly why: string;
+}
+
+export interface ProfileRow {
+  readonly id: string;
+  readonly label: string;
+  readonly detail: string;
+  readonly generatorParamsB: number;
+  readonly selected: boolean;
+  readonly available: boolean;
+  /** With the arithmetic, never a bare greyed-out row (TIER-026). */
+  readonly unavailableReason: string | null;
+}
+
+export interface DetectedRow {
+  readonly runtime: string;
+  readonly port: number;
+  readonly modelCount: number;
+}
+
+/** The supervisor's lifecycle state, tagged (§142.2). */
+export type ModelState =
+  | { readonly state: "absent" }
+  | { readonly state: "installed" }
+  | { readonly state: "loading"; readonly stage: string }
+  | { readonly state: "ready" }
+  | { readonly state: "busy" }
+  | { readonly state: "unloading" }
+  | { readonly state: "suspended"; readonly reason: string };
+
+export interface ModelRow {
+  readonly id: string;
+  readonly displayName: string;
+  readonly family: string;
+  readonly paramsB: number;
+  readonly quantization: string;
+  readonly format: string;
+  readonly contextLimit: number;
+  readonly role: string;
+  readonly source: "catalogue" | "detected" | "user_supplied";
+  readonly detectedIn: string | null;
+  readonly installed: boolean;
+  readonly downloadable: boolean;
+  /**
+   * Why there is no download button, phrased for a human.
+   *
+   * Every catalogue row carries one today: no digest has been pinned, and a
+   * download that cannot be verified cannot be told apart from a substituted
+   * one. Rendering the button anyway would be the Settings bug again.
+   */
+  readonly blockedReason: string | null;
+  readonly licence: string;
+  readonly licenceUrl: string | null;
+  /** `null` is "not established" — neither yes nor no (LIC-004). */
+  readonly commercialUse: boolean | null;
+  readonly capabilities: readonly string[];
+  /** Why Fast/Thorough is disabled for this model (GEN-013). */
+  readonly reasoningUnavailable: string | null;
+  readonly fit: "comfortable" | "tight" | "too_large";
+  readonly fitReason: string;
+  /** weights · KV · runtime · embedder · reserve, already formatted. */
+  readonly breakdown: string;
+  readonly requiredBytes: number;
+  readonly state: ModelState;
+  readonly consecutiveFailures: number;
+  readonly suspendedReason: string | null;
+}
+
+export interface ModelsSnapshot {
+  readonly machine: string;
+  readonly tierHeadline: string;
+  readonly unifiedMemory: boolean;
+  readonly totalBytes: number;
+  /** From the live sampler, not the launch probe (LLM-019). */
+  readonly availableBytes: number;
+  readonly sustainedLoad: number;
+  readonly thermal: string;
+  /** True when the sampler has stopped reporting (HW-015). */
+  readonly sampleStale: boolean;
+  readonly residentBytes: number;
+  readonly detected: readonly DetectedRow[];
+  readonly detectionProblems: readonly string[];
+  readonly profiles: readonly ProfileRow[];
+  readonly router: RoleRow;
+  readonly generator: RoleRow;
+  readonly embedder: RoleRow;
+  readonly models: readonly ModelRow[];
+  readonly runtimeStatus: string;
+}
+
+export function modelsOverview(): Promise<ModelsSnapshot> {
+  return call<ModelsSnapshot>("models_overview", {});
+}
+
+export function refreshModelDetection(): Promise<ModelsSnapshot> {
+  return call<ModelsSnapshot>("refresh_model_detection", {});
+}
+
+export function setAiProfile(profile: string): Promise<ModelsSnapshot> {
+  return call<ModelsSnapshot>("set_ai_profile", { profile });
+}

@@ -20,6 +20,7 @@
 pub mod admission;
 pub mod breaker;
 pub mod catalogue;
+pub mod detect;
 pub mod kv;
 pub mod queue;
 pub mod registry;
@@ -29,6 +30,7 @@ pub mod supervisor;
 
 pub use admission::{admit, Decision, Overrides, Policy};
 pub use breaker::{Breaker, BreakerState};
+pub use detect::{Detected, Scan};
 pub use kv::{PrefixCache, PrefixKey, Scope};
 pub use queue::{Cancel, Depth, Queue};
 pub use registry::{Capabilities, Entry, Format, Licence, Registry, Source};

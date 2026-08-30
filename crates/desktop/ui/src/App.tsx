@@ -25,6 +25,7 @@ import { TitleBar } from "./components/TitleBar";
 import { Sidebar } from "./components/Sidebar";
 import { SearchView } from "./components/SearchView";
 import { FilesView } from "./components/FilesView";
+import { ModelsView } from "./components/ModelsView";
 import { StatusView } from "./components/StatusView";
 import { SettingsView } from "./components/SettingsView";
 import { QuickFind } from "./components/QuickFind";
@@ -52,6 +53,7 @@ const NO_HITS: readonly SearchHit[] = [];
 const TITLES: Record<View, string> = {
   search: "Marrow",
   files: "Files",
+  models: "Models",
   status: "Status",
   settings: "Settings",
 };
@@ -325,6 +327,7 @@ export function App() {
             />
           )}
           {view === "files" && <FilesView detailRef={detailRef} />}
+          {view === "models" && <ModelsView />}
           {view === "status" && <StatusView />}
           {view === "settings" && <SettingsView />}
         </div>

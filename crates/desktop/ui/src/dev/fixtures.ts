@@ -18,9 +18,214 @@ import type {
   IndexHealth,
   Region,
   SearchHit,
+  ModelRow,
+  ModelsSnapshot,
   SearchResponse,
   WorkspaceRow,
 } from "../api";
+
+
+/**
+ * Models. Shaped to exercise the three cases that must look different:
+ * installed and running, offerable but blocked on a missing digest, and too
+ * large for this machine. A fixture where every row looks the same hides
+ * exactly the bug this page exists to prevent.
+ */
+let devProfile = "balanced";
+
+const DEV_MODELS: readonly ModelRow[] = [
+  {
+    id: "ollama:qwen2.5:7b",
+    displayName: "qwen2.5:7b",
+    family: "qwen2",
+    paramsB: 7.6,
+    quantization: "Q4",
+    format: "gguf",
+    contextLimit: 8192,
+    role: "Already installed in Ollama.",
+    source: "detected",
+    detectedIn: "ollama",
+    installed: true,
+    downloadable: false,
+    blockedReason: null,
+    licence: "Set by whoever installed it",
+    licenceUrl: null,
+    commercialUse: null,
+    capabilities: ["structured output"],
+    reasoningUnavailable: "qwen2.5:7b answers directly.",
+    fit: "comfortable",
+    fitReason: "Needs about 8.5 GB, and 9.1 GB is free.",
+    breakdown:
+      "weights 4.6 GB · KV cache 780 MB · runtime 0 MB · embedding model 200 MB · OS reserve 2.5 GB",
+    requiredBytes: 8_500_000_000,
+    state: { state: "installed" },
+    consecutiveFailures: 0,
+    suspendedReason: null,
+  },
+  {
+    id: "qwen3.5-4b-mlx-q4",
+    displayName: "Qwen 3.5 4B",
+    family: "qwen",
+    paramsB: 4,
+    quantization: "Q4",
+    format: "mlx",
+    contextLimit: 32_768,
+    role: "Primary candidate. Routes the question and writes the answer.",
+    source: "catalogue",
+    detectedIn: null,
+    installed: false,
+    downloadable: false,
+    blockedReason:
+      "No verified digest for this model yet, so it cannot be downloaded. A download that cannot be checked cannot be told apart from a corrupted or substituted one.",
+    licence: "Apache-2.0",
+    licenceUrl: "https://www.apache.org/licenses/LICENSE-2.0",
+    commercialUse: true,
+    capabilities: ["tools", "structured output", "reasoning", "multilingual"],
+    reasoningUnavailable: null,
+    fit: "comfortable",
+    fitReason: "Needs about 6.3 GB, and 9.1 GB is free.",
+    breakdown:
+      "weights 2.6 GB · KV cache 590 MB · runtime 350 MB · embedding model 200 MB · OS reserve 2.5 GB",
+    requiredBytes: 6_300_000_000,
+    state: { state: "absent" },
+    consecutiveFailures: 0,
+    suspendedReason: null,
+  },
+  {
+    id: "granite-4-3b-mlx-q4",
+    displayName: "Granite 4 3B",
+    family: "granite",
+    paramsB: 3,
+    quantization: "Q4",
+    format: "mlx",
+    contextLimit: 32_768,
+    role: "Tool calling and structured output — the MCP-facing workload.",
+    source: "catalogue",
+    detectedIn: null,
+    installed: false,
+    downloadable: false,
+    blockedReason:
+      "No verified digest for this model yet, so it cannot be downloaded. A download that cannot be checked cannot be told apart from a corrupted or substituted one.",
+    licence: "Apache-2.0",
+    licenceUrl: "https://www.apache.org/licenses/LICENSE-2.0",
+    commercialUse: true,
+    capabilities: ["tools", "structured output"],
+    reasoningUnavailable: "Granite 4 3B answers directly.",
+    fit: "comfortable",
+    fitReason: "Needs about 5.5 GB, and 9.1 GB is free.",
+    breakdown:
+      "weights 2.0 GB · KV cache 511 MB · runtime 350 MB · embedding model 200 MB · OS reserve 2.5 GB",
+    requiredBytes: 5_500_000_000,
+    state: { state: "absent" },
+    consecutiveFailures: 0,
+    suspendedReason: null,
+  },
+  {
+    id: "llama-70b-mlx-q4",
+    displayName: "Llama 70B",
+    family: "llama",
+    paramsB: 70,
+    quantization: "Q4",
+    format: "mlx",
+    contextLimit: 8192,
+    role: "Listed so the arithmetic is visible, not hidden (LLM-016).",
+    source: "catalogue",
+    detectedIn: null,
+    installed: false,
+    downloadable: false,
+    blockedReason:
+      "Needs about 51.7 GB, and this machine has 17.2 GB in total. It cannot run here.",
+    licence: "Llama Community Licence",
+    licenceUrl: null,
+    commercialUse: null,
+    capabilities: ["tools", "structured output", "reasoning"],
+    reasoningUnavailable: null,
+    fit: "too_large",
+    fitReason:
+      "Needs about 51.7 GB, and this machine has 17.2 GB in total. It cannot run here.",
+    breakdown:
+      "weights 46.2 GB · KV cache 2.5 GB · runtime 350 MB · embedding model 200 MB · OS reserve 2.5 GB",
+    requiredBytes: 51_700_000_000,
+    state: { state: "absent" },
+    consecutiveFailures: 0,
+    suspendedReason: null,
+  },
+];
+
+function devModels(): ModelsSnapshot {
+  return {
+    machine: "17 GB unified · 10 cores · Mac16,12",
+    tierHeadline: "Comfortable up to about 8B at 4-bit.",
+    unifiedMemory: true,
+    totalBytes: 17_179_869_184,
+    availableBytes: 9_100_000_000,
+    sustainedLoad: 0.31,
+    thermal: "unknown",
+    sampleStale: false,
+    residentBytes: 0,
+    detected: [{ runtime: "Ollama", port: 11434, modelCount: 1 }],
+    detectionProblems: [],
+    profiles: [
+      {
+        id: "efficient",
+        label: "Efficient",
+        detail: "Lowest memory and battery use. About 2B, local.",
+        generatorParamsB: 2,
+        selected: devProfile === "efficient",
+        available: true,
+        unavailableReason: null,
+      },
+      {
+        id: "balanced",
+        label: "Balanced",
+        detail: "About 4B, local. Recommended.",
+        generatorParamsB: 4,
+        selected: devProfile === "balanced",
+        available: true,
+        unavailableReason: null,
+      },
+      {
+        id: "larger_local",
+        label: "Larger local model",
+        detail: "8B and above where it fits. More memory, slower to answer.",
+        generatorParamsB: 8,
+        selected: devProfile === "larger_local",
+        available: true,
+        unavailableReason: null,
+      },
+      {
+        id: "cloud",
+        label: "Cloud",
+        detail: "A frontier model over the network. Content leaves this device.",
+        generatorParamsB: 0,
+        selected: devProfile === "cloud",
+        available: true,
+        unavailableReason: null,
+      },
+    ],
+    router: {
+      workload: "routing",
+      paramsB: 1.5,
+      resident: true,
+      why: "Classification, query rewrite and NER. Runs once per file, so it must be cheap.",
+    },
+    generator: {
+      workload: "generation",
+      paramsB: 4,
+      resident: false,
+      why: "The quality knee for grounded answering. Loaded on demand, unloaded when idle.",
+    },
+    embedder: {
+      workload: "embedding",
+      paramsB: 0.1,
+      resident: true,
+      why: "Search is the product; the embedder does not go cold because generation did.",
+    },
+    models: DEV_MODELS,
+    runtimeStatus:
+      "No inference runtime is wired up yet, so nothing here can answer a question. This page reports what this machine could run and what is stopping each model, which is the part that has to be right before anything is downloaded.",
+  };
+}
 
 const DAY = 86_400_000;
 const now = Date.now();
@@ -301,6 +506,13 @@ export async function mockInvoke<T>(
       const first = Math.max(1, around - 4);
       const r: Region = { firstLine: first, lines: SOURCE, truncated: true };
       return r as T;
+    }
+    case "models_overview":
+    case "refresh_model_detection":
+      return devModels() as T;
+    case "set_ai_profile": {
+      devProfile = String((args as { profile?: unknown }).profile ?? "balanced");
+      return devModels() as T;
     }
     case "open_path":
     case "reveal_path":
