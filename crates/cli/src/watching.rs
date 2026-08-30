@@ -76,6 +76,7 @@ pub fn run(
     store: &marrow_store::Store,
     targets: Vec<Target>,
     cancel: &Cancel,
+    json: bool,
     style: Style,
     out: &mut impl Write,
 ) -> Result<()> {
@@ -98,13 +99,19 @@ pub fn run(
         // the render loop waits forever for threads that have already stopped.
         drop(tx);
 
-        render_loop(rx, cancel, style, out, targets.len())?;
+        render_loop(rx, cancel, json, style, out, targets.len())?;
 
         for h in handles {
             // A panicking watcher thread must not take the others with it, and
             // must not be silently lost either.
             if h.join().is_err() {
-                let _ = writeln!(out, "{}", style.err("a watcher thread panicked"));
+                let panicked = Report::Failed {
+                    // No name: the handle does not carry which target it was.
+                    // Saying so beats attributing the panic to the wrong root.
+                    name: String::new(),
+                    message: "a watcher thread panicked".to_string(),
+                };
+                let _ = render_one(&panicked, json, style, out);
             }
         }
         Ok(())
@@ -322,6 +329,7 @@ fn watch_one(
 fn render_loop(
     rx: std::sync::mpsc::Receiver<Report>,
     cancel: &Cancel,
+    json: bool,
     style: Style,
     out: &mut impl Write,
     expected: usize,
@@ -330,7 +338,7 @@ fn render_loop(
     loop {
         match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(r) => {
-                render_one(&r, style, out)?;
+                render_one(&r, json, style, out)?;
                 if matches!(r, Report::Stopped { .. }) {
                     stopped += 1;
                     if stopped == expected {
@@ -353,7 +361,78 @@ fn render_loop(
     Ok(())
 }
 
-fn render_one(r: &Report, style: Style, out: &mut impl Write) -> Result<()> {
+/// One event as one JSON object, for a `marrow watch --json` consumer.
+///
+/// A stream, not a summary: `watch` never finishes on its own, so a single
+/// closing object would arrive only when the user gives up, which is after the
+/// events they were waiting for. One object per line is what a reader can
+/// consume incrementally, and `at_ms` is what lets it order or age them —
+/// epoch milliseconds, like every other timestamp here.
+fn event(r: &Report) -> serde_json::Value {
+    let at_ms = marrow_core::Timestamp::now().as_millis();
+    let mut v = match r {
+        Report::Started { name, health } => serde_json::json!({
+            "event": "started",
+            "workspace": name,
+            "watcher": health.label(),
+            // WATCH-009: a degraded watcher is never silent, on this surface
+            // either. Always present, `null` when healthy, so a reader can
+            // branch on it without knowing which variants carry one.
+            "reason": health.reason(),
+            "sweep_interval_ms": marrow_scan::reconcile_interval(health).as_millis() as u64,
+        }),
+        Report::HealthChanged { name, health } => serde_json::json!({
+            "event": "health_changed",
+            "workspace": name,
+            "watcher": health.label(),
+            "reason": health.reason(),
+        }),
+        Report::Applied {
+            name,
+            files,
+            chunks,
+        } => serde_json::json!({
+            "event": "applied",
+            "workspace": name,
+            "files": files,
+            "chunks": chunks,
+        }),
+        Report::Swept {
+            name,
+            files,
+            reason,
+        } => serde_json::json!({
+            "event": "swept",
+            "workspace": name,
+            "files": files,
+            "reason": reason,
+        }),
+        Report::Failed { name, message } => serde_json::json!({
+            "event": "failed",
+            "workspace": name,
+            "message": message,
+        }),
+        Report::Stopped { name } => serde_json::json!({
+            "event": "stopped",
+            "workspace": name,
+        }),
+    };
+    if let Some(o) = v.as_object_mut() {
+        o.insert("schema".into(), "marrow.watch.event/1".into());
+        o.insert("at_ms".into(), at_ms.into());
+    }
+    v
+}
+
+fn render_one(r: &Report, json: bool, style: Style, out: &mut impl Write) -> Result<()> {
+    if json {
+        writeln!(out, "{}", event(r))?;
+        // Flushed per event for the same reason the human view is: a consumer
+        // reading this pipe is waiting on the event, and a buffered line is an
+        // event that has not happened yet as far as it can tell.
+        out.flush()?;
+        return Ok(());
+    }
     match r {
         Report::Started { name, health } => {
             writeln!(
@@ -431,4 +510,76 @@ fn render_one(r: &Report, style: Style, out: &mut impl Write) -> Result<()> {
     }
     out.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn json_of(r: &Report) -> serde_json::Value {
+        let mut buf = Vec::new();
+        render_one(r, true, Style::plain(), &mut buf).expect("rendering an event");
+        let line = String::from_utf8(buf).expect("events are utf-8");
+        serde_json::from_str(line.trim_end()).expect("one object per line")
+    }
+
+    #[test]
+    fn every_event_carries_its_schema_and_a_timestamp() {
+        let events = [
+            Report::Started {
+                name: "notes".into(),
+                health: Health::Live,
+            },
+            Report::HealthChanged {
+                name: "notes".into(),
+                health: Health::PollOnly("the volume does not support events"),
+            },
+            Report::Applied {
+                name: "notes".into(),
+                files: 3,
+                chunks: 12,
+            },
+            Report::Swept {
+                name: "notes".into(),
+                files: 1,
+                reason: "scheduled sweep",
+            },
+            Report::Failed {
+                name: "notes".into(),
+                message: "the folder is gone".into(),
+            },
+            Report::Stopped {
+                name: "notes".into(),
+            },
+        ];
+        for e in &events {
+            let v = json_of(e);
+            assert_eq!(v["schema"], "marrow.watch.event/1");
+            assert!(v["event"].is_string(), "{v}");
+            assert!(v["at_ms"].as_i64().is_some_and(|t| t > 0), "{v}");
+        }
+    }
+
+    #[test]
+    fn a_degraded_watcher_says_why_in_json_too() {
+        // WATCH-009 on this surface: a consumer that only reads the label
+        // would otherwise see `poll-only` with nothing to act on.
+        let v = json_of(&Report::HealthChanged {
+            name: "notes".into(),
+            health: Health::Degraded("the kernel queue overflowed"),
+        });
+        assert_eq!(v["watcher"], "degraded");
+        assert_eq!(v["reason"], "the kernel queue overflowed");
+    }
+
+    #[test]
+    fn a_healthy_watcher_reports_a_null_reason_rather_than_omitting_it() {
+        let v = json_of(&Report::Started {
+            name: "notes".into(),
+            health: Health::Live,
+        });
+        assert_eq!(v["watcher"], "live");
+        assert!(v["reason"].is_null());
+        assert!(v["sweep_interval_ms"].as_u64().is_some_and(|m| m > 0));
+    }
 }

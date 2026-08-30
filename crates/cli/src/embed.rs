@@ -25,10 +25,27 @@ use marrow_store::Store;
 use crate::render::{self, Style};
 use crate::waiting;
 
-pub fn run(store: &Store, data_dir: &Path, style: Style, out: &mut dyn Write) -> Result<()> {
+pub fn run(
+    store: &Store,
+    data_dir: &Path,
+    json: bool,
+    style: Style,
+    out: &mut dyn Write,
+) -> Result<()> {
     let remaining = backfill::remaining(store)?;
     if remaining == 0 {
-        writeln!(out, "{}", style.dim("Every chunk already has a vector."))?;
+        if json {
+            // The same object as a run that did work, with zeros in it. A
+            // caller parsing this should not have to handle "no output" as a
+            // fourth outcome alongside success, failure and cancellation.
+            writeln!(
+                out,
+                "{}",
+                summary(None, 0, &backfill::Outcome::default(), 0, 0)
+            )?;
+        } else {
+            writeln!(out, "{}", style.dim("Every chunk already has a vector."))?;
+        }
         return Ok(());
     }
 
@@ -66,15 +83,17 @@ pub fn run(store: &Store, data_dir: &Path, style: Style, out: &mut dyn Write) ->
         ));
     }
 
-    writeln!(
-        out,
-        "{}",
-        style.dim(&format!(
-            "{} chunks to embed, using {}.",
-            render::count(remaining),
-            entry.display_name
-        ))
-    )?;
+    if !json {
+        writeln!(
+            out,
+            "{}",
+            style.dim(&format!(
+                "{} chunks to embed, using {}.",
+                render::count(remaining),
+                entry.display_name
+            ))
+        )?;
+    }
 
     let embedder = Embedder::start(&runtime, &entry.id, &dir)?;
     let vectors = SqliteVectorIndex::open(store)?;
@@ -105,6 +124,25 @@ pub fn run(store: &Store, data_dir: &Path, style: Style, out: &mut dyn Write) ->
     let elapsed = started.elapsed();
     let outcome = outcome?;
 
+    // Read before anything is printed, because both renderers need it: the
+    // human one to say what is left, the machine one to report it.
+    let left = backfill::remaining(store)?;
+
+    if json {
+        writeln!(
+            out,
+            "{}",
+            summary(
+                Some(entry),
+                remaining,
+                &outcome,
+                left,
+                elapsed.as_millis() as u64
+            )
+        )?;
+        return Ok(());
+    }
+
     let rate = outcome.embedded as f64 / elapsed.as_secs_f64().max(f64::EPSILON);
     writeln!(
         out,
@@ -119,7 +157,6 @@ pub fn run(store: &Store, data_dir: &Path, style: Style, out: &mut dyn Write) ->
     // Both early exits say how much is left. "32 could not be embedded" on its
     // own reads as "the rest finished", and a failed batch **stops the run** —
     // so it would be claiming a complete index over a 3%-built one.
-    let left = backfill::remaining(store)?;
     let why = if outcome.cancelled {
         // What was embedded stays embedded, and saying so is what makes Ctrl-C
         // a reasonable thing to press.
@@ -143,6 +180,81 @@ pub fn run(store: &Store, data_dir: &Path, style: Style, out: &mut dyn Write) ->
         )?;
     }
     Ok(())
+}
+
+/// What the run did, in one object.
+///
+/// `remaining` is the field that matters and it is read from the store rather
+/// than subtracted: a run stops on the first failed batch, so `embedded` and
+/// `failed` together do not account for the rest, and a consumer that inferred
+/// completion from them would call a 3%-built index finished.
+fn summary(
+    model: Option<marrow_model::registry::Entry>,
+    before: u64,
+    outcome: &backfill::Outcome,
+    remaining: u64,
+    elapsed_ms: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema": "marrow.embed/1",
+        "model": model.as_ref().map(|e| e.display_name.clone()),
+        "model_id": model.as_ref().map(|e| e.id.clone()),
+        "chunks_before": before,
+        "embedded": outcome.embedded,
+        "failed": outcome.failed,
+        "cancelled": outcome.cancelled,
+        "remaining": remaining,
+        "elapsed_ms": elapsed_ms,
+    })
+}
+
+/// An embedder, if this machine can start one without asking anything of the
+/// user.
+///
+/// **Every absence is `None`, never an error.** Search must work with no LLM,
+/// no GPU and no network (hard rule 10), so the query-side caller treats a
+/// missing runtime or missing weights as "no semantic branch today" and answers
+/// lexically. `marrow embed` is the surface that explains what is missing,
+/// because that is the command whose entire purpose needs it — a `marrow
+/// search` that printed the same explanation would be noise on every search on
+/// a machine that has deliberately never installed a model.
+///
+/// `expect_model` short-circuits before the worker starts. Two models'
+/// embeddings are not comparable, so a query embedded by a different model than
+/// the stored vectors is not a worse branch, it is a meaningless one — and
+/// finding that out after paying a multi-second model load would make every
+/// search on a mismatched index slow as well as no better.
+pub(crate) fn try_open_embedder(
+    store: &Store,
+    data_dir: &Path,
+    expect_model: Option<&str>,
+) -> Option<Embedder> {
+    let runtime = Runtime::discover(data_dir, worker_script())?;
+    let workspace = ModelWorkspace::open(data_dir.join("models"), &indexed_roots(store).ok()?)
+        .map_err(
+            |e| tracing::debug!(error = %e, "no model workspace; skipping the semantic branch"),
+        )
+        .ok()?;
+    let entry = catalogue::builtin()
+        .into_iter()
+        .find(|e| e.capabilities.embedding)?;
+    if expect_model.is_some_and(|want| want != entry.id) {
+        tracing::debug!(
+            want = expect_model,
+            have = %entry.id,
+            "the stored vectors came from another model; skipping the semantic branch"
+        );
+        return None;
+    }
+    let dir = workspace.weights_dir(entry.manifest_digest.as_deref()?);
+    if !dir.is_dir() {
+        return None;
+    }
+    Embedder::start(&runtime, &entry.id, &dir)
+        .map_err(
+            |e| tracing::debug!(error = %e, "the embedder would not start; answering lexically"),
+        )
+        .ok()
 }
 
 /// Roots Marrow indexes, so the model workspace can refuse to sit inside one.
@@ -171,4 +283,36 @@ fn worker_script() -> PathBuf {
         .unwrap_or_else(|| {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../model/worker/mlx_worker.py")
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_run_with_nothing_to_do_still_emits_the_whole_object() {
+        // Otherwise "already complete" is a fourth outcome a parser has to
+        // handle as the absence of output.
+        let v = summary(None, 0, &backfill::Outcome::default(), 0, 0);
+        assert_eq!(v["schema"], "marrow.embed/1");
+        assert!(v["model"].is_null());
+        assert_eq!(v["embedded"], 0);
+        assert_eq!(v["remaining"], 0);
+        assert_eq!(v["cancelled"], false);
+    }
+
+    #[test]
+    fn a_stopped_run_reports_what_is_left_rather_than_implying_completion() {
+        let outcome = backfill::Outcome {
+            embedded: 64,
+            failed: 0,
+            cancelled: true,
+        };
+        let v = summary(None, 1_000, &outcome, 936, 4_200);
+        assert_eq!(v["chunks_before"], 1_000);
+        assert_eq!(v["embedded"], 64);
+        assert_eq!(v["remaining"], 936);
+        assert_eq!(v["cancelled"], true);
+        assert_eq!(v["elapsed_ms"], 4_200);
+    }
 }

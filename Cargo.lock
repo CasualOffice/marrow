@@ -2452,6 +2452,7 @@ dependencies = [
  "marrow-ingest",
  "marrow-mcp",
  "marrow-model",
+ "marrow-query",
  "marrow-scan",
  "marrow-store",
  "serde",

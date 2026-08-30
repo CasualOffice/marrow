@@ -8,18 +8,69 @@
 //! [UX §4]: ../../../docs/UX.md
 
 use std::io::Write;
+use std::path::Path;
 
 use marrow_core::{Origin, ProvenanceClass, Result, SourceSpan, Timestamp};
-use marrow_index::{MatchMode, Snippet, TextHit, TextIndex, TextQuery};
+use marrow_index::{Embedding, MatchMode, Snippet, SqliteVectorIndex, TextIndex, VectorIndex};
+use marrow_query::search::{BranchRank, Hit, SearchRequest, LEXICAL, SEMANTIC};
 use marrow_store::Store;
 
 use crate::render::{self, Style};
+
+/// The semantic branch's inputs, when this machine has them.
+///
+/// `None` is the ordinary state and never an error: no embedding model, no MLX
+/// runtime, or a backfill that has not run all mean the same thing here, and
+/// hard rule 10 says search answers with none of them. Nothing is printed —
+/// a warning on every search on a machine that deliberately has no model is
+/// noise, and the branches this search actually ran are reported in the result
+/// either way.
+///
+/// The vector count is checked **before** the model is loaded. Starting a
+/// worker takes seconds; spending them to embed a query that will be compared
+/// against nothing would make every search on a machine that has never run
+/// `marrow embed` slower for no result.
+pub fn semantic_branch(store: &Store, data_dir: &Path, query: &str) -> Option<Semantic> {
+    let started = std::time::Instant::now();
+    let vectors = SqliteVectorIndex::open(store)
+        .map_err(|e| tracing::debug!(error = %e, "no vector index; answering lexically"))
+        .ok()?;
+    if vectors.doc_count().ok()? == 0 {
+        return None;
+    }
+    let model = vectors.model_id().ok()?;
+    let embedder = crate::embed::try_open_embedder(store, data_dir, model.as_deref())?;
+    let embedding = embedder
+        .embed_one(query)
+        .map_err(
+            |e| tracing::debug!(error = %e, "the query could not be embedded; answering lexically"),
+        )
+        .ok()?;
+    Some(Semantic {
+        vectors,
+        embedding,
+        prepared_in: started.elapsed(),
+    })
+}
+
+/// The semantic branch, and what it cost to get it.
+///
+/// The cost travels with it because the fused search is milliseconds and
+/// loading the model is seconds: timing only the search would print `1.2 s` at
+/// the end of a command the user waited eight seconds for, which is the same
+/// class of untruth as counts with no freshness.
+pub struct Semantic {
+    vectors: SqliteVectorIndex,
+    embedding: Embedding,
+    prepared_in: std::time::Duration,
+}
 
 /// Render results, or a diagnosis when there are none.
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     store: &Store,
     index: &dyn TextIndex,
+    semantic: Option<&Semantic>,
     query: &str,
     limit: usize,
     roots: &[String],
@@ -44,8 +95,16 @@ pub fn run(
     }
 
     let started = std::time::Instant::now();
-    let q = TextQuery::new(query).mode(MatchMode::Terms).limit(limit);
-    let hits = index.search(&q)?;
+    // `marrow-query` rather than the index directly: fusion, the §113.3
+    // multipliers and the hydration a semantic-only hit needs all live there
+    // and are tested there. Calling the index alone is what made `marrow embed`
+    // change nothing that this surface showed.
+    let req = SearchRequest::new(query)
+        .mode(MatchMode::Terms)
+        .limit(limit);
+    let branch = semantic.map(|s| (&s.vectors as &dyn VectorIndex, &s.embedding));
+    let results = marrow_query::search::search_hybrid(store, index, branch, &req)?;
+    let hits = results.hits;
 
     // IDX-001: a file must be findable by its name. Content search alone cannot
     // do that — a file with no parseable content has no chunks and therefore no
@@ -55,15 +114,57 @@ pub fn run(
     // This branch belongs in `marrow-query` alongside the fusion machinery; it
     // lives here until the CLI is moved onto that crate.
     let by_name = path_matches(store, query, limit, &hits)?;
-    let elapsed = started.elapsed().as_millis();
+    // Everything the user waited for, model load included.
+    let setup = semantic.map(|s| s.prepared_in.as_millis()).unwrap_or(0);
+    let elapsed = started.elapsed().as_millis() + setup;
 
     if json {
-        return render_json(&hits, &by_name, query, elapsed, out);
+        return render_json(
+            &hits,
+            &by_name,
+            &results.branches,
+            setup,
+            query,
+            elapsed,
+            out,
+        );
     }
     if hits.is_empty() && by_name.is_empty() {
-        return render_nothing(query, elapsed, style, out);
+        // Cheap: a count on the vector table, no model started. The
+        // suggestion is only worth printing if there is something to search.
+        let semantic_available = SqliteVectorIndex::open(store)
+            .and_then(|v| v.doc_count())
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        return render_nothing(
+            query,
+            &results.branches,
+            semantic_available,
+            elapsed,
+            style,
+            out,
+        );
     }
-    render_hits(&hits, &by_name, roots, elapsed, style, out)
+    render_hits(
+        &hits,
+        &by_name,
+        &results.branches,
+        setup,
+        roots,
+        elapsed,
+        style,
+        out,
+    )
+}
+
+/// The branches that ran, as one word each.
+///
+/// Printed on every search, not only when both ran. A user who has spent two
+/// hours on `marrow embed` has no other way to tell whether it is being used,
+/// and the answer "it is not, because no model is installed on this machine"
+/// is one they can only act on if it is said.
+fn branch_line(branches: &[&'static str]) -> String {
+    branches.join(" + ")
 }
 
 /// A file matched by its path rather than its contents.
@@ -77,12 +178,7 @@ pub struct NameHit {
 }
 
 /// Files whose path contains the query, excluding ones already found by content.
-fn path_matches(
-    store: &Store,
-    query: &str,
-    limit: usize,
-    already: &[TextHit],
-) -> Result<Vec<NameHit>> {
+fn path_matches(store: &Store, query: &str, limit: usize, already: &[Hit]) -> Result<Vec<NameHit>> {
     let needle = query.trim();
     if needle.is_empty() {
         return Ok(Vec::new());
@@ -131,9 +227,12 @@ fn path_matches(
         .collect())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_hits(
-    hits: &[TextHit],
+    hits: &[Hit],
     by_name: &[NameHit],
+    branches: &[&'static str],
+    model_load_ms: u128,
     roots: &[String],
     elapsed: u128,
     style: Style,
@@ -142,7 +241,7 @@ fn render_hits(
     writeln!(out)?;
     for h in hits {
         let loc = location(&relative_to(&h.path, roots), &h.span);
-        let reason = match_reason(h);
+        let reason = match_reason(&h.branch_ranks);
         let age = age(h.modified);
 
         // Path first and alone. Right-aligned metadata stays out of the way of
@@ -213,10 +312,19 @@ fn render_hits(
         out,
         "{}",
         style.dim(&format!(
-            "{} result{} · {}{}",
+            "{} result{} · {} · {}{}{}",
             total,
             if total == 1 { "" } else { "s" },
             render::duration(elapsed),
+            branch_line(branches),
+            // Named separately because it is nearly all of the wall time and
+            // none of the search: without it the same query looks ten times
+            // slower than it is, and nobody could tell which half to blame.
+            if model_load_ms > 0 {
+                format!(" ({} loading the model)", render::duration(model_load_ms))
+            } else {
+                String::new()
+            },
             if by_name.is_empty() {
                 String::new()
             } else {
@@ -228,20 +336,47 @@ fn render_hits(
 }
 
 /// Zero results is a diagnosis, not a shrug ([UX §4]).
-fn render_nothing(query: &str, elapsed: u128, style: Style, out: &mut impl Write) -> Result<()> {
+fn render_nothing(
+    query: &str,
+    branches: &[&'static str],
+    semantic_available: bool,
+    elapsed: u128,
+    style: Style,
+    out: &mut impl Write,
+) -> Result<()> {
     writeln!(out)?;
     writeln!(out, "No matches for {}", style.bold(query))?;
+    // Which branches looked, not just how long it took. "Nothing matched" from
+    // one branch and from two are different findings, and only the second is a
+    // reason to stop looking.
     writeln!(
         out,
         "  {}",
-        style.dim(&format!("searched in {}", render::duration(elapsed)))
+        style.dim(&format!(
+            "searched {} in {}",
+            branch_line(branches),
+            render::duration(elapsed)
+        ))
     )?;
     writeln!(out)?;
     writeln!(out, "  {}", style.dim("try"))?;
+    // Single-quoted for the same reason the error above is: this is the one
+    // message whose entire purpose is patterns a shell eats — `});`, `$foo`,
+    // `*` — and an unquoted hint is a command that fails when pasted.
     writeln!(
         out,
-        "    marrow search --literal {query}   exact scan, ignores the index"
+        "    marrow search --literal '{query}'   exact scan, ignores the index"
     )?;
+    // Only when the semantic branch did not already run, and only when there is
+    // something for it to search. A suggestion that leads nowhere is the bug
+    // this codebase keeps reproducing, so this one is gated on vectors actually
+    // existing rather than on the feature existing.
+    if !branches.contains(&"semantic") && semantic_available {
+        writeln!(
+            out,
+            "    marrow search --semantic '{query}'   also match on meaning, not words"
+        )?;
+    }
     writeln!(
         out,
         "    marrow status                     what is and is not indexed"
@@ -249,9 +384,12 @@ fn render_nothing(query: &str, elapsed: u128, style: Style, out: &mut impl Write
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_json(
-    hits: &[TextHit],
+    hits: &[Hit],
     by_name: &[NameHit],
+    branches: &[&'static str],
+    model_load_ms: u128,
     query: &str,
     elapsed: u128,
     out: &mut impl Write,
@@ -263,8 +401,12 @@ fn render_json(
         .map(|(i, h)| {
             serde_json::json!({
                 "rank": i + 1,
-                "score": h.score,
-                "reasons": [match_reason(h)],
+                // The lexical branch's own score, unchanged: a semantic-only
+                // hit never had one, and `fused_score` beside it is the number
+                // the ranking was actually done on.
+                "score": h.hit.score,
+                "fused_score": h.fused_score,
+                "reasons": match_reasons(&h.branch_ranks),
                 "file_id": h.file_id.to_string(),
                 "chunk_id": h.chunk_id.to_string(),
                 "path": h.path,
@@ -294,8 +436,15 @@ fn render_json(
         serde_json::json!({
             "schema": "marrow.search/1",
             "by_name": named,
+            // What actually ran. A script that pipes this has no other way to
+            // tell a machine with a built semantic index from one without.
+            "branches": branches,
             "query": query,
+            // The whole command, and the part of it that was the model
+            // starting up. Zero whenever the semantic branch did not run, so
+            // the difference is the search itself either way.
             "elapsed_ms": elapsed,
+            "model_load_ms": model_load_ms,
             "total": hits.len(),
             "results": results,
         })
@@ -333,12 +482,32 @@ fn location(path: &str, span: &SourceSpan) -> String {
     }
 }
 
-/// Why this matched ([UX §2] principle 3).
+/// Why this matched ([UX §2] principle 3), from the branches that returned it.
 ///
-/// M1 has only the lexical branch, so this is honest rather than interesting;
-/// it becomes meaningful when the vector branch lands in M4.
-fn match_reason(_h: &TextHit) -> String {
-    "exact".to_string()
+/// Read off the fusion rather than assumed: a hit only the vector branch found
+/// is not an exact match and saying it is would be the precision loss this
+/// product exists to avoid. `exact` rather than `lexical` because it describes
+/// the match to the reader — the word is on the page — where the branch names
+/// describe the machinery.
+fn match_reasons(branches: &[BranchRank]) -> Vec<&'static str> {
+    let mut out = Vec::with_capacity(2);
+    if branches.iter().any(|b| b.branch == LEXICAL) {
+        out.push("exact");
+    }
+    if branches.iter().any(|b| b.branch == SEMANTIC) {
+        out.push("semantic");
+    }
+    // A hit that fused from no branch cannot happen; saying "exact" about one
+    // would be a claim, and this is the one column that must never overstate.
+    if out.is_empty() {
+        out.push("unknown");
+    }
+    out
+}
+
+/// The same thing as one column of text.
+fn match_reason(branches: &[BranchRank]) -> String {
+    match_reasons(branches).join("+")
 }
 
 /// Recency as a human judges it. `2026-06-14` makes you do arithmetic.
@@ -447,6 +616,75 @@ mod tests {
             matches: vec![],
         };
         assert_eq!(snippet_lines(&s, 80).len(), 2);
+    }
+
+    fn ranks(branches: &[&'static str]) -> Vec<BranchRank> {
+        branches
+            .iter()
+            .enumerate()
+            .map(|(i, b)| BranchRank {
+                branch: b,
+                rank: i + 1,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_hit_only_the_vector_branch_found_is_not_called_exact() {
+        // The badge is a claim about the evidence. Calling a semantic
+        // neighbour an exact match is the precision loss this product exists
+        // to avoid.
+        assert_eq!(match_reasons(&ranks(&[SEMANTIC])), vec!["semantic"]);
+        assert_eq!(match_reason(&ranks(&[SEMANTIC])), "semantic");
+    }
+
+    #[test]
+    fn a_hit_both_branches_found_says_so() {
+        assert_eq!(
+            match_reasons(&ranks(&[LEXICAL, SEMANTIC])),
+            vec!["exact", "semantic"]
+        );
+        assert_eq!(match_reason(&ranks(&[LEXICAL, SEMANTIC])), "exact+semantic");
+    }
+
+    #[test]
+    fn a_lexical_hit_reads_the_way_it_always_did() {
+        assert_eq!(match_reasons(&ranks(&[LEXICAL])), vec!["exact"]);
+    }
+
+    #[test]
+    fn the_branches_that_ran_are_named_even_when_there_is_one() {
+        assert_eq!(branch_line(&[LEXICAL]), "lexical");
+        assert_eq!(branch_line(&[LEXICAL, SEMANTIC]), "lexical + semantic");
+    }
+
+    #[test]
+    fn the_zero_results_hint_survives_being_pasted_into_a_shell() {
+        // The whole point of `--literal` is patterns the index cannot express,
+        // which are exactly the ones a shell would expand or swallow.
+        let mut buf = Vec::new();
+        render_nothing("});", &[LEXICAL], false, 3, Style::plain(), &mut buf).expect("rendering");
+        let text = String::from_utf8(buf).expect("output is utf-8");
+        assert!(
+            text.contains("marrow search --literal '});'"),
+            "the hint must quote the query: {text}"
+        );
+    }
+
+    #[test]
+    fn zero_results_says_which_branches_looked() {
+        let mut buf = Vec::new();
+        render_nothing(
+            "lease",
+            &[LEXICAL, SEMANTIC],
+            true,
+            3,
+            Style::plain(),
+            &mut buf,
+        )
+        .expect("rendering");
+        let text = String::from_utf8(buf).expect("output is utf-8");
+        assert!(text.contains("searched lexical + semantic"), "{text}");
     }
 
     #[test]

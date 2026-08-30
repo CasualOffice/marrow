@@ -116,6 +116,15 @@ enum Cmd {
         /// Match whole words only (with --literal)
         #[arg(short = 'w', long, requires = "literal")]
         whole_word: bool,
+        /// Also search by meaning, not only by words
+        ///
+        /// Off by default because it starts an embedding model, which costs
+        /// several seconds on every invocation, and a search you type is a
+        /// search you expect to answer immediately. When words are the wrong
+        /// tool — you remember what a document *said* but not what it called
+        /// it — this is what finds it.
+        #[arg(long, conflicts_with = "literal")]
+        semantic: bool,
     },
     /// Build semantic search over what is already indexed
     ///
@@ -257,6 +266,7 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
             regex,
             ignore_case,
             whole_word,
+            semantic,
         } => {
             let q = query.join(" ");
             if q.trim().is_empty() {
@@ -288,11 +298,22 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
                 );
             }
             let index = marrow_index::Fts5Index::open(&store)?;
-            // Absent unless this machine has an embedding model, an MLX
+            // **Opt-in, because it costs seconds.** Starting the embedder took
+            // a 40 ms search to 4.7 s on this machine, and a search you type is
+            // one you expect to answer before you have finished reading the
+            // prompt. Measured against what it buys: 239 of 79,186 files have
+            // vectors, so on this corpus the default would be paying five
+            // seconds for a branch that can speak about 0.3% of the index.
+            //
+            // Absent regardless unless there is an embedding model, an MLX
             // runtime and vectors from a backfill — hard rule 10 says search
-            // answers with none of those, so this is an enhancement that stays
-            // silent when it cannot happen.
-            let semantic = search::semantic_branch(&store, &data_dir()?, &q);
+            // answers with none of those, so it stays silent when it cannot
+            // happen rather than failing.
+            let semantic = if *semantic {
+                search::semantic_branch(&store, &data_dir()?, &q)
+            } else {
+                None
+            };
             search::run(
                 &store,
                 &index,
