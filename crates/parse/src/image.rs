@@ -479,7 +479,19 @@ mod backend {
             )));
         }
 
-        let mut lines = recognise(&image, input.budget)?;
+        // **Decided once, before either pass.** The budget's only real decision
+        // is whether to start recognising this image at all — see the note on
+        // `recognise`. Checking it again before the retry made the retry
+        // conditional on the *first* pass having been quick, and the first pass
+        // is slowest exactly when a cold Vision model loads, which is the first
+        // image of any run. So the fallback stopped running precisely when it
+        // was most needed: a transparent diagram encountered early, or on a
+        // busy machine, read as empty and fell through to metadata-only. Caught
+        // as an intermittent test failure under a parallel workspace run, which
+        // is the same contention a real corpus produces.
+        input.budget.check_time()?;
+
+        let mut lines = recognise(&image)?;
 
         // The transparency retry. See `ImageFormat::may_carry_alpha` — a
         // diagram exported on a transparent background is dark ink on Vision's
@@ -489,7 +501,7 @@ mod backend {
                 file = %input.probe.file_name,
                 "no text on the default backdrop; retrying composited on white"
             );
-            lines = recognise(&over_backdrop(&image, extent), input.budget)?;
+            lines = recognise(&over_backdrop(&image, extent))?;
         }
 
         debug!(
@@ -524,12 +536,14 @@ mod backend {
     }
 
     /// One recognition pass over one image.
-    fn recognise(image: &CIImage, budget: crate::budget::BudgetGuard) -> Result<Vec<Recognized>> {
-        // Checked here rather than only in the builder: `performRequests:` is
-        // one uninterruptible block, so a budget an earlier parser already spent
-        // has to stop this before it starts, not after.
-        budget.check_time()?;
-
+    /// One recognition pass. **Takes no budget**, deliberately.
+    ///
+    /// `performRequests:` is one uninterruptible block, so the only moment a
+    /// clock can decide anything is before the whole attempt — which the caller
+    /// does, once. Re-checking per pass made the transparency retry depend on
+    /// how long the first pass took, and the first pass is slowest exactly when
+    /// a cold model loads.
+    fn recognise(image: &CIImage) -> Result<Vec<Recognized>> {
         let request = VNRecognizeTextRequest::new();
         // Accurate rather than Fast. Fast is a per-character classifier meant
         // for live camera preview; on a screenshot of a stack trace it is not
