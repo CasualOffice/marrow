@@ -586,10 +586,17 @@ pub trait VectorIndex: Send + Sync {
     fn doc_count(&self) -> Result<u64>;
 
     /// The model these vectors came from.
-    ///
-    /// Vectors from two models are not comparable, so a change here invalidates
-    /// everything rather than mixing.
     fn model_id(&self) -> Result<Option<String>>;
+
+    /// Declare which model is producing vectors, discarding everything if it
+    /// changed. Returns whether anything was discarded.
+    ///
+    /// On the trait rather than the implementation because it is part of what
+    /// a vector index *promises*: two models' embeddings are not comparable —
+    /// not "less accurate together", not comparable — so any implementation
+    /// that let them mix would produce a search that is wrong in a way no test
+    /// on either model would catch.
+    fn set_model(&self, model_id: &str) -> Result<bool>;
 }
 
 #[cfg(test)]

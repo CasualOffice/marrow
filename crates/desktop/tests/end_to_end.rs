@@ -43,6 +43,14 @@ It is reviewed each January against the published index, with any increase
 capped at four per cent.
 ";
 
+/// Deliberately shares no words with the question that must find it.
+const PARAPHRASE: &str = "\
+# Unit 7B, rolling over
+
+The tenancy continues automatically at the conclusion of each successive term
+unless either side serves written notice within the stipulated window.
+";
+
 const HANDBOOK: &str = "\
 # Deliveries
 
@@ -186,8 +194,8 @@ fn the_second_turns_prompt_shares_its_preamble_with_the_first() {
     let core = Core::open(db).expect("core");
     let mut convo = marrow_desktop::models::Conversation::default();
 
-    let (first, _, _) =
-        ask::assemble(&core, "When does the lease renew?", &[], &mut convo).expect("assemble one");
+    let (first, _, _) = ask::assemble(&core, "When does the lease renew?", &[], &mut convo, None)
+        .expect("assemble one");
     let turns = ask::turns_from(&[
         ask::PriorTurn {
             role: "user".into(),
@@ -198,8 +206,8 @@ fn the_second_turns_prompt_shares_its_preamble_with_the_first() {
             text: "31 December 2031 [E1].".into(),
         },
     ]);
-    let (second, _, _) =
-        ask::assemble(&core, "And what is the rent?", &turns, &mut convo).expect("assemble two");
+    let (second, _, _) = ask::assemble(&core, "And what is the rent?", &turns, &mut convo, None)
+        .expect("assemble two");
 
     let shared = first
         .text
@@ -309,4 +317,103 @@ fn a_follow_up_reuses_the_prompt_and_keeps_the_thread() {
         prompt > 0,
         "the second turn must have accounted for its prompt"
     );
+}
+
+#[test]
+#[ignore = "needs the embedding model and about thirty seconds"]
+fn semantic_retrieval_finds_a_document_that_shares_no_words_with_the_question() {
+    // The whole point of M4, and the thing lexical search cannot do. The
+    // question says "renew"; the document says "continues automatically at the
+    // conclusion of each successive term". No shared content word.
+    let (corpus, _db_dir, db) = indexed_corpus();
+    std::fs::write(corpus.path().join("paraphrase.md"), PARAPHRASE).unwrap();
+
+    let core = Arc::new(Core::open(db).expect("core"));
+    let hub = Arc::new(Hub::start(data_dir().join("models"), &[]));
+
+    // Re-index so the new file is in.
+    reindex(&core, corpus.path());
+
+    let Some(embedder) = hub.embedder() else {
+        panic!(
+            "no embedder: {}",
+            hub.embedder_problem().unwrap_or_else(|| "unknown".into())
+        );
+    };
+    let progress = Arc::new(marrow_model::backfill::Progress::default());
+    let out = marrow_model::backfill::run(
+        core.store(),
+        core.vectors(),
+        &embedder,
+        &Cancel::new(),
+        &progress,
+    )
+    .expect("backfill");
+    eprintln!("embedded {} chunks", out.embedded);
+    assert!(out.embedded > 0, "nothing was embedded");
+
+    let question = "when does the lease renew?";
+
+    // Lexical alone: the paraphrase shares no content word with the question,
+    // so it cannot be found this way.
+    let lexical = core.retrieve(question, 10, None).expect("lexical");
+    eprintln!(
+        "lexical: {:?}",
+        lexical
+            .iter()
+            .map(|c| c.relative_path.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !lexical
+            .iter()
+            .any(|c| c.relative_path.contains("paraphrase")),
+        "the paraphrase should be unreachable lexically, or this proves nothing"
+    );
+
+    // With the semantic branch, it is.
+    let embedding = embedder.embed_one(question).expect("embed the question");
+    let hybrid = core
+        .retrieve(question, 10, Some(&embedding))
+        .expect("hybrid");
+    eprintln!(
+        "hybrid: {:?}",
+        hybrid
+            .iter()
+            .map(|c| c.relative_path.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        hybrid
+            .iter()
+            .any(|c| c.relative_path.contains("paraphrase")),
+        "semantic search did not find the paraphrase"
+    );
+}
+
+/// Index a corpus into an already-open core.
+fn reindex(core: &Core, corpus: &std::path::Path) {
+    let root = AuthorizedRoot::open(corpus).unwrap();
+    let conn = core.store().reader().unwrap();
+    let (ws, root_id): (String, String) = conn
+        .query_row(
+            "SELECT workspace_id, root_id FROM workspace_roots LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    drop(conn);
+    let index = marrow_index::Fts5Index::open(core.store()).unwrap();
+    ingest_root_with_index(
+        core.store(),
+        ws.parse().unwrap(),
+        root_id.parse().unwrap(),
+        &root,
+        &IngestPolicy::default(),
+        &Arc::new(Progress::new()),
+        &IngestCancel::new(),
+        Some(&index),
+    )
+    .unwrap();
+    core.store().flush().unwrap();
 }

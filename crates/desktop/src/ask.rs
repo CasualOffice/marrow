@@ -142,8 +142,12 @@ pub fn assemble(
     question: &str,
     history: &[Turn],
     convo: &mut Conversation,
+    embedding: Option<&marrow_index::Embedding>,
 ) -> Result<(Envelope, Vec<Citation>, Vec<Excluded>)> {
-    let fresh = core.retrieve(&retrieval_terms(question), MAX_CHUNKS)?;
+    // `retrieve` reduces the question for the lexical branch itself; the
+    // embedding is of the question as asked, because the words that carry no
+    // lexical weight still carry meaning.
+    let fresh = core.retrieve(question, MAX_CHUNKS, embedding)?;
     let chunks = carry_forward(&mut convo.sent, fresh);
 
     let mut builder = Builder::new(SYSTEM, question);
@@ -266,46 +270,6 @@ fn carry_forward(
 /// into a prompt nobody can afford.
 const MAX_CARRIED: usize = MAX_CHUNKS * 2;
 
-/// Words too common to help, and common enough to hurt.
-///
-/// BM25 already gives them almost no weight, so this is not about scoring —
-/// it is about the term cap: a long question full of "the" and "of" can hit
-/// the index's limit and be refused outright, and the words it drops for that
-/// are the ones that mattered.
-const STOPWORDS: &[&str] = &[
-    "a", "an", "the", "and", "or", "but", "if", "of", "in", "on", "at", "to", "for", "with", "is",
-    "are", "was", "were", "be", "been", "am", "do", "does", "did", "have", "has", "had", "what",
-    "when", "where", "who", "whom", "which", "why", "how", "that", "this", "these", "those", "it",
-    "its", "as", "by", "from", "my", "our", "me", "i", "you", "your", "can", "could", "would",
-    "should", "will", "shall", "may", "might", "about", "please", "tell",
-    // What is left of a contraction after the apostrophe splits it. "What's"
-    // becomes "what" and "s", and the "s" retrieves nothing but noise.
-    "s", "t", "d", "m", "ll", "re", "ve",
-];
-
-/// A question, reduced to the words worth retrieving on.
-///
-/// Not a router — that comes later and will rewrite the query properly
-/// (ASK-001). This is the floor beneath it, and the floor has to work on its
-/// own, because ASK-004 says a broken router degrades to the product that
-/// already worked.
-fn retrieval_terms(question: &str) -> String {
-    let kept: Vec<&str> = question
-        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
-        // `--` splits into a token of hyphens under this rule; a term with no
-        // letter or digit in it is punctuation, and the index refuses those.
-        .filter(|w| w.chars().any(|c| c.is_alphanumeric()))
-        .filter(|w| !STOPWORDS.contains(&w.to_ascii_lowercase().as_str()))
-        .collect();
-    // A question made entirely of stopwords is still a question. Searching for
-    // nothing would refuse; searching for the original at least tries.
-    if kept.is_empty() {
-        question.to_string()
-    } else {
-        kept.join(" ")
-    }
-}
-
 /// Run one question end to end, streaming to `emit`.
 #[allow(clippy::too_many_arguments)] // Each is a distinct input the window
                                      // has; a struct would move the list rather than shorten it.
@@ -326,7 +290,11 @@ pub fn run(
     // a shared one reuses about 80%.
     let mut convo = hub.session_for(conversation);
 
-    let assembled = assemble(core, question, history, &mut convo);
+    // Embedding the question is what turns the semantic branch on. `None`
+    // when no embedding model is installed or the backfill has not run, and
+    // that is the ordinary state rather than a failure.
+    let embedding = hub.embed_query(question);
+    let assembled = assemble(core, question, history, &mut convo, embedding.as_ref());
     hub.keep_session(conversation, convo);
 
     let (envelope, citations, excluded) = match assembled {
@@ -553,32 +521,6 @@ mod tests {
         assert_eq!(carried.len(), MAX_CARRIED);
         let out = carry_forward(&mut carried, vec![chunk("new.md:1", "y", true)]);
         assert_eq!(out.len(), 1, "the set was rebuilt from this turn");
-    }
-
-    #[test]
-    fn a_question_is_reduced_to_the_words_worth_retrieving_on() {
-        assert_eq!(
-            retrieval_terms("When does the lease renew and what is the rent?"),
-            "lease renew rent"
-        );
-        assert_eq!(retrieval_terms("Where is my invoice?"), "invoice");
-    }
-
-    #[test]
-    fn punctuation_and_case_do_not_survive_into_the_query() {
-        // The index refuses a query of pure punctuation, so a question ending
-        // in "?!" must not carry it through.
-        assert_eq!(
-            retrieval_terms("What's the rent -- exactly?!"),
-            "rent exactly"
-        );
-    }
-
-    #[test]
-    fn a_question_made_only_of_stopwords_still_searches_for_something() {
-        // Reducing it to nothing would turn a strange question into a refusal
-        // rather than an empty result, and those read very differently.
-        assert_eq!(retrieval_terms("what is it?"), "what is it?");
     }
 
     #[test]

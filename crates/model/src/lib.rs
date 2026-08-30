@@ -22,6 +22,7 @@
 #![warn(missing_debug_implementations)]
 
 pub mod admission;
+pub mod backfill;
 pub mod breaker;
 pub mod catalogue;
 pub mod detect;

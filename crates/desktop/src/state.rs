@@ -1,7 +1,7 @@
 //! Application state: an open store and index, shared by every command.
 
 use marrow_core::Result;
-use marrow_index::{Fts5Index, TextIndex, TextQuery};
+use marrow_index::{Fts5Index, TextIndex, TextQuery, VectorIndex};
 use marrow_store::Store;
 
 use crate::commands::{
@@ -12,6 +12,53 @@ use crate::commands::{
 pub struct Core {
     store: Store,
     index: Fts5Index,
+    vectors: marrow_index::SqliteVectorIndex,
+}
+
+/// Words too common to help, and common enough to hurt.
+///
+/// BM25 already gives them almost no weight, so this is not about scoring —
+/// it is about the term cap: a long question full of "the" and "of" can hit
+/// the index's limit and be refused outright, and the words it drops for that
+/// are the ones that mattered.
+const STOPWORDS: &[&str] = &[
+    "a", "an", "the", "and", "or", "but", "if", "of", "in", "on", "at", "to", "for", "with", "is",
+    "are", "was", "were", "be", "been", "am", "do", "does", "did", "have", "has", "had", "what",
+    "when", "where", "who", "whom", "which", "why", "how", "that", "this", "these", "those", "it",
+    "its", "as", "by", "from", "my", "our", "me", "i", "you", "your", "can", "could", "would",
+    "should", "will", "shall", "may", "might", "about", "please", "tell",
+    // What is left of a contraction after the apostrophe splits it. "What's"
+    // becomes "what" and "s", and the "s" retrieves nothing but noise.
+    "s", "t", "d", "m", "ll", "re", "ve",
+];
+
+/// A question, reduced to the words worth retrieving on.
+///
+/// Not a router — that comes later and will rewrite the query properly
+/// (ASK-001). This is the floor beneath it, and the floor has to work on its
+/// own, because ASK-004 says a broken router degrades to the product that
+/// already worked.
+///
+/// It lives here rather than in the caller because [`Core::retrieve`] is
+/// disjunctive: unreduced, "when does **the** lease renew?" matches every
+/// document that contains "the", which is all of them. A caller that forgot to
+/// reduce would get a result set that looks full and means nothing, and only
+/// one caller remembering is not a rule.
+pub fn retrieval_terms(question: &str) -> String {
+    let kept: Vec<&str> = question
+        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+        // `--` splits into a token of hyphens under this rule; a term with no
+        // letter or digit in it is punctuation, and the index refuses those.
+        .filter(|w| w.chars().any(|c| c.is_alphanumeric()))
+        .filter(|w| !STOPWORDS.contains(&w.to_ascii_lowercase().as_str()))
+        .collect();
+    // A question made entirely of stopwords is still a question. Searching for
+    // nothing would refuse; searching for the original at least tries.
+    if kept.is_empty() {
+        question.to_string()
+    } else {
+        kept.join(" ")
+    }
 }
 
 /// A chunk on its way into an evidence block.
@@ -48,9 +95,29 @@ impl Core {
     pub fn open(path: std::path::PathBuf) -> Result<Self> {
         // The composition root assembles the migration chain: `index` depends
         // on `store`, so store cannot reference it back without a cycle.
-        let store = Store::open_with_migrations(path, &[marrow_index::fts5::MIGRATION])?;
+        let store = Store::open_with_migrations(
+            path,
+            &[
+                marrow_index::fts5::MIGRATION,
+                marrow_index::vector::MIGRATION,
+            ],
+        )?;
         let index = Fts5Index::open(&store)?;
-        Ok(Self { store, index })
+        let vectors = marrow_index::SqliteVectorIndex::open(&store)?;
+        Ok(Self {
+            store,
+            index,
+            vectors,
+        })
+    }
+
+    /// The vector index, for the backfill and for `search_hybrid`.
+    pub fn vectors(&self) -> &marrow_index::SqliteVectorIndex {
+        &self.vectors
+    }
+
+    pub fn store(&self) -> &Store {
+        &self.store
     }
 
     /// Retrieve for a **question** rather than for a search box.
@@ -65,8 +132,46 @@ impl Core {
     /// router will do better — it rewrites the query — but this must work
     /// without it, because a broken router has to degrade to the product that
     /// already worked rather than to an error.
-    pub fn retrieve(&self, question: &str, limit: usize) -> Result<Vec<RetrievedChunk>> {
-        let trimmed = question.trim();
+    /// Re-order hits to match a fused ranking, fetching any the lexical branch
+    /// did not return.
+    ///
+    /// A semantic-only candidate has no `TextHit` behind it, and a `TextHit` is
+    /// what everything downstream renders and cites from. Without this the
+    /// vector branch could only re-rank what lexical already found, which is
+    /// not semantic search.
+    fn hydrate_in_order(
+        &self,
+        order: &[marrow_core::ChunkId],
+        lexical: &[marrow_index::TextHit],
+    ) -> Result<Vec<marrow_index::TextHit>> {
+        let conn = self.store.reader()?;
+        let mut out = Vec::with_capacity(order.len());
+        for id in order {
+            if let Some(h) = lexical.iter().find(|h| h.chunk_id == *id) {
+                out.push(h.clone());
+                continue;
+            }
+            match hydrate_chunk(&conn, *id)? {
+                Some(h) => out.push(h),
+                // A vector for a chunk the canonical store no longer has. The
+                // derived index is rebuildable, so this is a stale row — but it
+                // must not become a result nobody can open.
+                None => tracing::warn!(chunk = %id, "vector hit with no chunk; dropped"),
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn retrieve(
+        &self,
+        question: &str,
+        limit: usize,
+        embedding: Option<&marrow_index::Embedding>,
+    ) -> Result<Vec<RetrievedChunk>> {
+        // Reduced here, not by the caller: the lexical branch is disjunctive,
+        // so an unreduced question matches every document containing "the".
+        let reduced = retrieval_terms(question);
+        let trimmed = reduced.trim();
         if trimmed.is_empty() {
             return Ok(Vec::new());
         }
@@ -75,9 +180,46 @@ impl Core {
             .with_snippet(Self::evidence_snippet())
             .limit(limit.clamp(1, 50));
         let roots = self.roots()?;
-        Ok(self
-            .index
-            .search(&q)?
+
+        // The semantic branch when there is one, lexical alone when there is
+        // not. `None` is the ordinary state before a backfill has run, and it
+        // must not turn into an error (hard rule 10).
+        let lexical = self.index.search(&q)?;
+        let mut hits = lexical.clone();
+        if let Some(e) = embedding {
+            match self
+                .vectors
+                .search(&marrow_index::VectorQuery::new(e.clone()).limit(limit.clamp(1, 50)))
+            {
+                Ok(semantic) => {
+                    // Fused by rank, so neither branch's scores need
+                    // normalizing against the other's (§113.2).
+                    let branches = [
+                        marrow_query::search::Branch {
+                            name: marrow_query::search::LEXICAL,
+                            weight: marrow_query::search::LEXICAL_WEIGHT,
+                            ranked: lexical.iter().map(|h| h.chunk_id).collect(),
+                        },
+                        marrow_query::search::Branch {
+                            name: marrow_query::search::SEMANTIC,
+                            weight: marrow_query::search::SEMANTIC_WEIGHT,
+                            ranked: semantic.iter().map(|h| h.chunk_id).collect(),
+                        },
+                    ];
+                    let order: Vec<marrow_core::ChunkId> =
+                        marrow_query::search::rrf(&branches, marrow_query::search::RRF_K)
+                            .into_iter()
+                            .map(|c| c.chunk_id)
+                            .collect();
+                    hits = self.hydrate_in_order(&order, &lexical)?;
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "the semantic branch failed; answering lexically")
+                }
+            }
+        }
+
+        Ok(hits
             .iter()
             .map(|h| {
                 let relative = relative_to(&h.path, &roots);
@@ -498,5 +640,132 @@ impl Core {
         stmt.query_map([], |r| r.get(0))
             .and_then(|it| it.collect())
             .map_err(|e| marrow_store::map_sqlite(e, "reading roots"))
+    }
+}
+
+/// One chunk as a `TextHit`, for a candidate only the semantic branch found.
+///
+/// The snippet is the chunk's own opening rather than a match window: there is
+/// no matched term to centre on, and inventing highlight markers would claim a
+/// match that did not happen.
+fn hydrate_chunk(
+    conn: &marrow_store::ReadConn,
+    id: marrow_core::ChunkId,
+) -> Result<Option<marrow_index::TextHit>> {
+    const PREVIEW: usize = 1_400;
+    let row = conn
+        .query_row(
+            "SELECT c.text, COALESCE(c.context_prefix,''), c.provenance_class, c.version_id,
+                    v.path_at_observation, v.mtime_ms, v.file_id, f.workspace_id, f.origin
+               FROM chunks c
+               JOIN file_versions v ON v.version_id = c.version_id
+               JOIN files f ON f.file_id = v.file_id
+              WHERE c.chunk_id = ?1 AND c.status = 'ACTIVE' AND f.status = 'ACTIVE'",
+            [id.to_string()],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, String>(6)?,
+                    r.get::<_, String>(7)?,
+                    r.get::<_, String>(8)?,
+                ))
+            },
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            marrow_store::rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(marrow_store::map_sqlite(
+                other,
+                "hydrating a semantic result",
+            )),
+        })?;
+
+    let Some((text, title, provenance, version, path, mtime, file, ws, origin)) = row else {
+        return Ok(None);
+    };
+    let (Ok(version_id), Ok(file_id), Ok(workspace_id)) =
+        (version.parse(), file.parse(), ws.parse())
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(marrow_index::TextHit {
+        chunk_id: id,
+        file_id,
+        version_id,
+        workspace_id,
+        path,
+        title,
+        // Branch-local and never compared across branches (§113.2).
+        score: 0.0,
+        span: marrow_core::SourceSpan::Whole,
+        snippet: marrow_index::Snippet {
+            text: text.chars().take(PREVIEW).collect(),
+            // No matched term to point at. Claiming one would highlight a word
+            // the user never searched for.
+            matches: Vec::new(),
+        },
+        provenance: match provenance.as_str() {
+            "DEGRADED" => marrow_core::ProvenanceClass::Degraded,
+            "APPROXIMATE" => marrow_core::ProvenanceClass::Approximate,
+            "METADATA_ONLY" => marrow_core::ProvenanceClass::MetadataOnly,
+            _ => marrow_core::ProvenanceClass::Exact,
+        },
+        origin: if origin == "SELF" {
+            marrow_core::Origin::SelfWritten
+        } else {
+            marrow_core::Origin::User
+        },
+        modified: marrow_core::Timestamp::from_millis(mtime),
+    }))
+}
+
+#[cfg(test)]
+mod retrieval_tests {
+    use super::retrieval_terms;
+
+    #[test]
+    fn a_question_is_reduced_to_the_words_worth_retrieving_on() {
+        assert_eq!(
+            retrieval_terms("When does the lease renew and what is the rent?"),
+            "lease renew rent"
+        );
+        assert_eq!(retrieval_terms("Where is my invoice?"), "invoice");
+    }
+
+    #[test]
+    fn the_stopwords_are_dropped_because_the_query_is_disjunctive() {
+        // The bug this exists for: `retrieve` ORs its terms, so "the" alone
+        // matches every document in the index. Unreduced, a question returns a
+        // result set that looks full and means nothing.
+        let reduced = retrieval_terms("when does the lease renew?");
+        for stop in ["when", "does", "the"] {
+            assert!(
+                !reduced.split_whitespace().any(|w| w == stop),
+                "`{stop}` survived: {reduced}"
+            );
+        }
+    }
+
+    #[test]
+    fn punctuation_and_case_do_not_survive_into_the_query() {
+        // The index refuses a query of pure punctuation, so a question ending
+        // in "?!" must not carry it through.
+        assert_eq!(
+            retrieval_terms("What's the rent -- exactly?!"),
+            "rent exactly"
+        );
+    }
+
+    #[test]
+    fn a_question_made_only_of_stopwords_still_searches_for_something() {
+        // Reducing it to nothing would turn a strange question into a refusal
+        // rather than an empty result, and those read very differently.
+        assert_eq!(retrieval_terms("what is it?"), "what is it?");
     }
 }

@@ -25,6 +25,7 @@ tauri-build = { version = "2", features = [] }
 marrow-core.workspace = true
 marrow-store.workspace = true
 marrow-index.workspace = true
+marrow-query.workspace = true
 marrow-scan.workspace = true
 marrow-ingest.workspace = true
 marrow-hw.workspace = true

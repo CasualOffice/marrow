@@ -32,6 +32,7 @@ use marrow_model::request::Reasoning;
 use marrow_model::scratch::ModelWorkspace;
 use marrow_model::supervisor::{self, Command, Event, ModelState, Supervisor};
 use marrow_model::worker::{MlxProvider, Runtime, Worker};
+use marrow_model::Embedder;
 use serde::Serialize;
 
 /// How often the machine is sampled while the app is open.
@@ -123,6 +124,11 @@ pub struct ModelsSnapshot {
     /// True when the sampler has stopped reporting. The page says so rather
     /// than showing a stale number as though it were current (HW-015).
     pub sample_stale: bool,
+    /// How much of the index semantic search actually covers.
+    ///
+    /// Shown because the alternative is a user whose results are quietly worse
+    /// than they will be in ten minutes, with nothing saying why.
+    pub semantic: SemanticStatus,
     pub resident_bytes: u64,
     /// Why the model directory is unusable, if it is. Reported rather than
     /// worked around (SUP-011).
@@ -146,6 +152,22 @@ pub struct ModelsSnapshot {
     /// The commands that would create one. Named, because "MLX is not
     /// available" is a dead end and this is something the user can do.
     pub runtime_setup: Option<String>,
+}
+
+/// Whether semantic search is on, and how far along it is.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticStatus {
+    /// True once an embedder has actually loaded.
+    pub ready: bool,
+    /// Chunks with a vector, and chunks without.
+    pub embedded: u64,
+    pub remaining: u64,
+    pub failed: u64,
+    pub running: bool,
+    /// Why it is unavailable. `None` when it is fine.
+    pub problem: Option<String>,
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -201,6 +223,14 @@ pub struct Hub {
     loaded: Mutex<Option<Loaded>>,
     /// Answers in flight, so Escape reaches the right one.
     asks: Mutex<BTreeMap<String, Cancel>>,
+    /// The embedder, resident once loaded.
+    embedder: Mutex<Option<std::sync::Arc<Embedder>>>,
+    /// Why it could not be loaded, said once.
+    embedder_problem: Mutex<Option<String>>,
+    /// How far the backfill has got, shared with the thread doing it.
+    backfill: Arc<marrow_model::backfill::Progress>,
+    /// Present while one is running.
+    backfill_cancel: Arc<Mutex<Option<Cancel>>>,
     /// One conversation's accumulated state: the delimiter, and the evidence
     /// already sent. Held here rather than in the window because both exist to
     /// make the prompt cache hit, and the window has no business knowing that.
@@ -308,6 +338,10 @@ impl Hub {
             cancels: Mutex::new(BTreeMap::new()),
             loaded: Mutex::new(None),
             asks: Mutex::new(BTreeMap::new()),
+            embedder: Mutex::new(None),
+            embedder_problem: Mutex::new(None),
+            backfill: Arc::new(marrow_model::backfill::Progress::default()),
+            backfill_cancel: Arc::new(Mutex::new(None)),
             sessions: Mutex::new(BTreeMap::new()),
             commands: ctx,
             _supervisor: handle,
@@ -610,6 +644,32 @@ impl Hub {
         )
     }
 
+    /// Whether semantic search is on, and how far along it is.
+    ///
+    /// Deliberately does **not** load the embedder to find out — a page
+    /// refreshing every four seconds would otherwise pull 200 MB into memory
+    /// the first time someone opened it.
+    pub fn semantic_status(&self) -> SemanticStatus {
+        let (embedded, remaining, failed) = self.backfill.snapshot();
+        SemanticStatus {
+            ready: self.embedder.lock().map(|e| e.is_some()).unwrap_or(false),
+            embedded,
+            remaining,
+            failed,
+            running: self
+                .backfill_cancel
+                .lock()
+                .map(|c| c.is_some())
+                .unwrap_or(false),
+            problem: self.embedder_problem(),
+            model: self.registry.lock().ok().and_then(|r| {
+                r.iter()
+                    .find(|e| e.capabilities.embedding)
+                    .map(|e| e.id.clone())
+            }),
+        }
+    }
+
     /// What the loaded model is costing right now (LLM-053).
     ///
     /// Reads the two locks in sequence, never nested: `loaded` is taken by
@@ -681,6 +741,190 @@ impl Hub {
         }
     }
 
+    /// Embed a question, if there is an embedder.
+    ///
+    /// Returns `None` rather than an error when there is no embedding model,
+    /// no runtime, or the model will not load: search has to work without it
+    /// (hard rule 10), so its absence is a missing branch and not a failure.
+    /// The reason is logged once by `embedder()`.
+    pub fn embed_query(&self, question: &str) -> Option<marrow_index::Embedding> {
+        let e = self.embedder()?;
+        match e.embed_one(question) {
+            Ok(v) => Some(v),
+            Err(err) => {
+                tracing::warn!(error = %err, "could not embed the question");
+                None
+            }
+        }
+    }
+
+    /// The resident embedder, loading it on first use.
+    ///
+    /// Resident, unlike the generator: it runs once per query and once per
+    /// chunk, so its residency is earned by call volume. Evicting it between
+    /// questions would pay a load for every search, and search is the product.
+    pub fn embedder(&self) -> Option<std::sync::Arc<Embedder>> {
+        if let Ok(slot) = self.embedder.lock() {
+            if let Some(e) = slot.as_ref() {
+                return Some(std::sync::Arc::clone(e));
+            }
+        }
+        let started = self.start_embedder();
+        match started {
+            Ok(e) => {
+                if let Ok(mut slot) = self.embedder.lock() {
+                    *slot = Some(std::sync::Arc::clone(&e));
+                }
+                Some(e)
+            }
+            Err(err) => {
+                // Once. A warning per keystroke would be the loudest thing in
+                // the log and would say the same thing every time.
+                if let Ok(mut said) = self.embedder_problem.lock() {
+                    if said.is_none() {
+                        tracing::info!(reason = %err.message(), "semantic search is unavailable");
+                        *said = Some(err.message().to_string());
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    /// Why semantic search is unavailable, if it is. Shown rather than left to
+    /// be inferred from results that are slightly worse than expected.
+    pub fn embedder_problem(&self) -> Option<String> {
+        self.embedder_problem.lock().ok().and_then(|p| p.clone())
+    }
+
+    fn start_embedder(&self) -> marrow_core::Result<std::sync::Arc<Embedder>> {
+        let runtime = self.runtime.clone().ok_or_else(|| {
+            marrow_core::Error::new(
+                marrow_core::Code::CfgInvalid,
+                Runtime::setup_hint(&self.data_dir),
+            )
+        })?;
+        let workspace = self.workspace.clone().ok_or_else(|| {
+            marrow_core::Error::new(
+                marrow_core::Code::CfgInvalid,
+                "The model directory is unavailable, so the embedding model cannot be loaded.",
+            )
+        })?;
+        let entry = self
+            .registry
+            .lock()
+            .ok()
+            .and_then(|r| r.iter().find(|e| e.capabilities.embedding).cloned())
+            .ok_or_else(|| {
+                marrow_core::Error::new(
+                    marrow_core::Code::ModNotInstalled,
+                    "No embedding model is in the catalogue.",
+                )
+            })?;
+        let digest = entry.manifest_digest.as_deref().ok_or_else(|| {
+            marrow_core::Error::new(
+                marrow_core::Code::ModNotInstalled,
+                format!("{} has no local weights.", entry.display_name),
+            )
+        })?;
+        let dir = workspace.weights_dir(digest);
+        if !dir.is_dir() {
+            return Err(marrow_core::Error::new(
+                marrow_core::Code::ModNotInstalled,
+                format!(
+                    "{} is not downloaded yet, so semantic search is off. \
+                     Download it from the Models page — it is about 210 MB.",
+                    entry.display_name
+                ),
+            ));
+        }
+        Embedder::start(&runtime, &entry.id, &dir).map(std::sync::Arc::new)
+    }
+
+    /// Embed every chunk that has no vector yet.
+    ///
+    /// Runs on its own thread and reports through `backfill`, so a page that
+    /// refetches keeps showing the same figures rather than a value that
+    /// appears and vanishes. Idempotent and resumable: it re-asks the store
+    /// each batch, so an interrupted run loses at most one batch.
+    pub fn start_backfill(
+        &self,
+        core: std::sync::Arc<crate::state::Core>,
+    ) -> marrow_core::Result<()> {
+        let Some(embedder) = self.embedder() else {
+            return Err(marrow_core::Error::new(
+                marrow_core::Code::ModNotInstalled,
+                self.embedder_problem().unwrap_or_else(|| {
+                    "No embedding model is available, so semantic search cannot be \
+                     built. Search still works without it."
+                        .into()
+                }),
+            ));
+        };
+        {
+            let mut running = self.backfill_cancel.lock().map_err(|_| poisoned())?;
+            if running.is_some() {
+                return Err(marrow_core::Error::new(
+                    marrow_core::Code::ModQueueFull,
+                    "A backfill is already running.",
+                ));
+            }
+            *running = Some(Cancel::new());
+        }
+        let cancel = self
+            .backfill_cancel
+            .lock()
+            .ok()
+            .and_then(|c| c.clone())
+            .unwrap_or_default();
+        let progress = Arc::clone(&self.backfill);
+        let done = Arc::clone(&self.backfill_cancel_slot());
+
+        std::thread::Builder::new()
+            .name("marrow-backfill".into())
+            .spawn(move || {
+                let out = marrow_model::backfill::run(
+                    core.store(),
+                    core.vectors(),
+                    &embedder,
+                    &cancel,
+                    &progress,
+                );
+                match out {
+                    Ok(o) => tracing::info!(
+                        embedded = o.embedded,
+                        failed = o.failed,
+                        cancelled = o.cancelled,
+                        "backfill finished"
+                    ),
+                    Err(e) => tracing::warn!(error = %e, "backfill failed"),
+                }
+                if let Ok(mut slot) = done.lock() {
+                    *slot = None;
+                }
+            })
+            .map_err(|e| {
+                marrow_core::Error::new(
+                    marrow_core::Code::IntInvariantViolated,
+                    "Could not start the backfill thread.",
+                )
+                .with_source(e)
+            })?;
+        Ok(())
+    }
+
+    fn backfill_cancel_slot(&self) -> Arc<Mutex<Option<Cancel>>> {
+        Arc::clone(&self.backfill_cancel)
+    }
+
+    /// Stop a backfill. What is embedded stays embedded.
+    pub fn stop_backfill(&self) -> bool {
+        match self.backfill_cancel.lock() {
+            Ok(c) => c.as_ref().map(|c| c.cancel()).is_some(),
+            Err(_) => false,
+        }
+    }
+
     /// Release the loaded model. LLM-049: weights, cache and buffers.
     pub fn release_model(&self) {
         if let Ok(mut slot) = self.loaded.lock() {
@@ -748,6 +992,7 @@ impl Hub {
             thermal: format!("{:?}", conditions.latest.thermal).to_lowercase(),
             sample_stale: conditions.stale,
             resident_bytes: self.resident_bytes(),
+            semantic: self.semantic_status(),
             models_dir_problem: self.workspace_problem.clone(),
             detected: scan
                 .detected

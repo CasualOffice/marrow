@@ -138,19 +138,31 @@ impl Store {
     /// knowledge belongs; `store` stays unaware of `index`, and `index` stays a
     /// swappable implementation of a port.
     ///
-    /// Ordering is the caller's responsibility: versions must be contiguous and
-    /// ascending across the whole composed chain.
+    /// The composed chain is **sorted and checked here**, not by the caller.
+    ///
+    /// It used to be the caller's job, and that was fine while this crate's own
+    /// list was `[1]` and every extra came after it. It stopped being fine the
+    /// moment the store added a migration *after* one another crate had
+    /// claimed: `[1, 3] + [2]` composes to `[1, 3, 2]`, which applies 3, then
+    /// skips 2 as already-applied, and leaves a database missing tables it
+    /// reports as present. Sorting is one line; remembering to sort at four
+    /// call sites is a bug waiting for the fifth.
     pub fn open_with_migrations(
         path: impl AsRef<Path>,
         extra: &[migrate::Migration],
     ) -> Result<Self> {
-        let mut chain: Vec<migrate::Migration> = migrate::MIGRATIONS.to_vec();
-        chain.extend_from_slice(extra);
+        let chain = compose(extra)?;
         Self::open_with_chain(
             Location::File(path.as_ref().to_path_buf()),
             WriterConfig::default(),
             &chain,
         )
+    }
+
+    /// An in-memory store with extra migrations, for tests.
+    pub fn open_in_memory_with_migrations(extra: &[migrate::Migration]) -> Result<Self> {
+        let chain = compose(extra)?;
+        Self::open_with_chain(Location::memory(), WriterConfig::default(), &chain)
     }
 
     /// An in-memory store. Readers still work; nothing survives the process.
@@ -349,6 +361,84 @@ pub fn map_sqlite(e: rusqlite::Error, message: &str) -> Error {
 }
 
 #[cfg(test)]
+mod compose_tests {
+    use super::*;
+
+    const CLASH: migrate::Migration = migrate::Migration {
+        version: 1,
+        name: "clash",
+        up: "SELECT 1;",
+    };
+    const GAP: migrate::Migration = migrate::Migration {
+        version: 9,
+        name: "gap",
+        up: "SELECT 1;",
+    };
+
+    /// Stand-ins for the two versions `marrow-index` owns, so this crate can
+    /// test composition without depending on it.
+    const INDEX_TWO: migrate::Migration = migrate::Migration {
+        version: 2,
+        name: "index_two",
+        up: "SELECT 1;",
+    };
+    const INDEX_FOUR: migrate::Migration = migrate::Migration {
+        version: 4,
+        name: "index_four",
+        up: "SELECT 1;",
+    };
+
+    #[test]
+    fn a_later_store_migration_does_not_reorder_an_earlier_extension() {
+        // `[1, 3] + [2]` composes to `[1, 3, 2]` unsorted, which applies 3,
+        // skips 2 as already-applied, and leaves a database missing tables it
+        // reports as present. This is the case that broke.
+        let chain = compose(&[INDEX_TWO, INDEX_FOUR]).unwrap();
+        let versions: Vec<i64> = chain.iter().map(|m| m.version).collect();
+        assert_eq!(versions, vec![1, 2, 3, 4]);
+        assert_eq!(chain[1].name, "index_two", "the extension keeps its place");
+    }
+
+    #[test]
+    fn two_migrations_claiming_one_version_is_refused_not_resolved() {
+        // Whichever one loses would silently never run, and which one loses
+        // would depend on argument order.
+        let e = compose(&[INDEX_TWO, INDEX_FOUR, CLASH]).unwrap_err();
+        assert_eq!(e.code(), marrow_core::Code::DbMigrationFailed);
+        assert!(
+            e.message().contains("silently never run"),
+            "{}",
+            e.message()
+        );
+    }
+
+    #[test]
+    fn a_gap_in_the_chain_is_refused() {
+        let e = compose(&[INDEX_TWO, INDEX_FOUR, GAP]).unwrap_err();
+        assert_eq!(e.code(), marrow_core::Code::DbMigrationFailed);
+        assert!(e.message().contains("gap"), "{}", e.message());
+    }
+
+    #[test]
+    fn composing_without_the_index_migrations_says_which_number_is_missing() {
+        // This crate owns 1 and 3; `marrow-index` owns 2 and 4. Composing with
+        // nothing added is not "the store on its own", it is a chain with a
+        // hole in it, and the message has to say so rather than let the caller
+        // discover it as a missing table.
+        let e = compose(&[]).unwrap_err();
+        assert_eq!(e.code(), marrow_core::Code::DbMigrationFailed);
+        assert!(e.message().contains("marrow-index"), "{}", e.message());
+        assert!(
+            e.context()
+                .unwrap_or_default()
+                .contains("is version 1 and the next is 3"),
+            "the context must name the gap: {:?}",
+            e.context()
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -376,4 +466,47 @@ mod tests {
         assert_eq!(mapped.code(), Code::IntInvariantViolated);
         assert!(mapped.context().is_some(), "SQLite detail is kept for logs");
     }
+}
+
+/// This crate's migrations plus the caller's, sorted and checked.
+///
+/// A duplicate version is refused rather than resolved: two crates claiming the
+/// same number means one of them will silently never run, and which one depends
+/// on argument order.
+fn compose(extra: &[migrate::Migration]) -> Result<Vec<migrate::Migration>> {
+    let mut chain: Vec<migrate::Migration> = migrate::MIGRATIONS.to_vec();
+    chain.extend_from_slice(extra);
+    chain.sort_by_key(|m| m.version);
+    for pair in chain.windows(2) {
+        if pair[0].version == pair[1].version {
+            return Err(marrow_core::Error::new(
+                marrow_core::Code::DbMigrationFailed,
+                "Two schema migrations claim the same version, so one of them would \
+                 silently never run. This is a build error, not something a user \
+                 can fix.",
+            )
+            .with_context(format!(
+                "version {} is claimed by both `{}` and `{}`",
+                pair[0].version, pair[0].name, pair[1].name
+            )));
+        }
+        if pair[1].version != pair[0].version + 1 {
+            // Almost always a missing crate rather than a numbering mistake:
+            // this crate owns versions 1 and 3, and `marrow-index` owns 2 and
+            // 4, so composing without the index migrations leaves exactly this
+            // hole. Saying which number is missing turns "the database will
+            // not open" into "you did not pass the index migrations".
+            return Err(marrow_core::Error::new(
+                marrow_core::Code::DbMigrationFailed,
+                "The schema migration chain has a gap in it. A crate that owns one \
+                 of the missing versions was probably not passed in — the index \
+                 migrations live in `marrow-index`.",
+            )
+            .with_context(format!(
+                "`{}` is version {} and the next is {}",
+                pair[0].name, pair[0].version, pair[1].version
+            )));
+        }
+    }
+    Ok(chain)
 }

@@ -368,6 +368,8 @@ const COMMAND_NAMES: &[&str] = &[
     "cancel_ask",
     "release_model",
     "forget_conversation",
+    "start_semantic_backfill",
+    "stop_semantic_backfill",
 ];
 
 #[cfg(test)]
@@ -391,7 +393,7 @@ mod tests {
     fn the_command_surface_is_small_and_read_only() {
         // Every name here is a hole in the WebView sandbox. M1 exposes no
         // mutation at all; when one arrives it needs a deliberate addition.
-        assert_eq!(COMMAND_NAMES.len(), 18);
+        assert_eq!(COMMAND_NAMES.len(), 20);
         for n in COMMAND_NAMES {
             assert!(
                 !n.contains("write") && !n.contains("delete") && !n.contains("exec"),
@@ -578,4 +580,35 @@ pub async fn forget_conversation(
 ) -> Result<(), UiError> {
     hub.forget_session(&conversation);
     Ok(())
+}
+
+/// Build semantic search over everything already indexed.
+///
+/// Returns immediately; the work runs on its own thread and its progress
+/// arrives through `models_overview`.
+#[tauri::command]
+pub async fn start_semantic_backfill(
+    core: State<'_, Arc<Core>>,
+    hub: State<'_, Arc<crate::models::Hub>>,
+) -> Result<crate::models::ModelsSnapshot, UiError> {
+    let core = Arc::clone(&core);
+    let hub = Arc::clone(&hub);
+    blocking(move || {
+        hub.start_backfill(core)?;
+        Ok(hub.snapshot())
+    })
+    .await
+}
+
+/// Stop it. What is already embedded stays embedded.
+#[tauri::command]
+pub async fn stop_semantic_backfill(
+    hub: State<'_, Arc<crate::models::Hub>>,
+) -> Result<crate::models::ModelsSnapshot, UiError> {
+    let hub = Arc::clone(&hub);
+    blocking(move || {
+        hub.stop_backfill();
+        Ok(hub.snapshot())
+    })
+    .await
 }

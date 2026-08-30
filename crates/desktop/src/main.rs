@@ -85,6 +85,8 @@ fn main() {
             commands::cancel_ask,
             commands::release_model,
             commands::forget_conversation,
+            commands::start_semantic_backfill,
+            commands::stop_semantic_backfill,
         ])
         .build(tauri::generate_context!())
         .expect("failed to start the Marrow window")

@@ -93,13 +93,7 @@ impl SqliteVectorIndex {
         })
     }
 
-    /// Record which model produced the vectors, and refuse to mix.
-    ///
-    /// Two models' embeddings are not comparable — not "less accurate
-    /// together", *not comparable* — so a change wipes rather than appends.
-    /// Silently mixing them produces a search that is wrong in a way no test
-    /// on either model would catch.
-    pub fn set_model(&self, model_id: &str) -> Result<bool> {
+    fn set_model_inner(&self, model_id: &str) -> Result<bool> {
         let current = self.model_id()?;
         if current.as_deref() == Some(model_id) {
             return Ok(false);
@@ -318,6 +312,10 @@ impl VectorIndex for SqliteVectorIndex {
         })
         .map(|n| n as u64)
         .map_err(|e| marrow_store::map_sqlite(e, "counting embeddings"))
+    }
+
+    fn set_model(&self, model_id: &str) -> Result<bool> {
+        self.set_model_inner(model_id)
     }
 
     fn model_id(&self) -> Result<Option<String>> {
