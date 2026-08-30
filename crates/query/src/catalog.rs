@@ -36,7 +36,33 @@ pub struct WorkspaceStats {
     /// mostly indexed.
     pub cloud_only: i64,
     /// Recorded but with no chunks: findable by name, not by content.
+    ///
+    /// The total, kept because it is a real fact and surfaces already report
+    /// it. On its own it is **not** a health signal, which is what this number
+    /// was being used as: it counted a folder of photos and a folder of
+    /// corrupt PDFs identically, so 42,581 photos raised a warning triangle
+    /// that no action could ever clear. The three fields below say which is
+    /// which, and they sum to this one.
     pub unindexed: i64,
+    /// Nothing to index, and that is the answer, not a failure.
+    ///
+    /// A parse ran and produced no searchable text. On any real corpus this is
+    /// the T5 terminal outcome `METADATA_ONLY` — a photo, a font, a binary,
+    /// which stays discoverable by name and date (Part 3 §63). An empty file
+    /// that parsed `OK` and yielded no chunks lands here too; it is equally
+    /// "there was nothing to search", and equally not something to fix.
+    pub no_parser: i64,
+    /// A parser ran and did not get the whole file: `FAILED`, `PARTIAL` or
+    /// `LOW_YIELD`. The only one of the three that is worth an alarm, because
+    /// it is the only one where the text exists and Marrow does not have it.
+    pub parse_failed: i64,
+    /// No parse was ever attempted for the current version.
+    ///
+    /// Not yet reached rather than given up on: an ingest run killed part-way
+    /// through leaves exactly this (invariant #7 exists because that is the
+    /// normal case), as does a file whose bytes were never opened. A sweep
+    /// clears it, so it is actionable in a way `no_parser` is not.
+    pub not_processed: i64,
 }
 
 impl WorkspaceStats {
@@ -44,8 +70,13 @@ impl WorkspaceStats {
     ///
     /// Defined here rather than in each surface, so the sidebar and MCP cannot
     /// disagree about what "healthy" means.
+    ///
+    /// `no_parser` is deliberately absent. A folder of photos is a healthy
+    /// workspace — "a file with no parser stays discoverable via metadata; not
+    /// a failure" — and a warning nobody can act on is a warning everybody
+    /// learns to ignore, including the one that mattered.
     pub fn is_degraded(&self) -> bool {
-        self.files == 0 || self.unindexed > 0 || self.cloud_only > 0
+        self.files == 0 || self.parse_failed > 0 || self.not_processed > 0 || self.cloud_only > 0
     }
 }
 
@@ -107,13 +138,34 @@ pub fn workspace_stats(conn: &ReadConn) -> Result<Vec<WorkspaceStats>> {
                          ON v5.file_id=f5.file_id AND v5.status='CURRENT'
                       WHERE f5.workspace_id=w.workspace_id AND f5.status='ACTIVE'
                         AND NOT EXISTS (SELECT 1 FROM chunks c5
-                                         WHERE c5.version_id=v5.version_id))
+                                         WHERE c5.version_id=v5.version_id)),
+                    (SELECT count(*) FROM files f6
+                       JOIN file_versions v6
+                         ON v6.file_id=f6.file_id AND v6.status='CURRENT'
+                      WHERE f6.workspace_id=w.workspace_id AND f6.status='ACTIVE'
+                        AND NOT EXISTS (SELECT 1 FROM chunks c6
+                                         WHERE c6.version_id=v6.version_id)
+                        AND EXISTS (SELECT 1 FROM parse_results p6
+                                     WHERE p6.version_id=v6.version_id
+                                       AND p6.outcome IN
+                                           ('FAILED','PARTIAL','LOW_YIELD'))),
+                    (SELECT count(*) FROM files f7
+                       JOIN file_versions v7
+                         ON v7.file_id=f7.file_id AND v7.status='CURRENT'
+                      WHERE f7.workspace_id=w.workspace_id AND f7.status='ACTIVE'
+                        AND NOT EXISTS (SELECT 1 FROM chunks c7
+                                         WHERE c7.version_id=v7.version_id)
+                        AND NOT EXISTS (SELECT 1 FROM parse_results p7
+                                         WHERE p7.version_id=v7.version_id))
                FROM workspaces w
           LEFT JOIN workspace_roots r ON r.workspace_id=w.workspace_id
               WHERE w.status='ACTIVE' ORDER BY w.name",
         )
         .map_err(|e| map_sqlite(e, "listing workspaces"))?;
     stmt.query_map([], |r| {
+        let unindexed: i64 = r.get(6)?;
+        let parse_failed: i64 = r.get(7)?;
+        let not_processed: i64 = r.get(8)?;
         Ok(WorkspaceStats {
             name: r.get(0)?,
             path: r.get(1)?,
@@ -121,7 +173,14 @@ pub fn workspace_stats(conn: &ReadConn) -> Result<Vec<WorkspaceStats>> {
             chunks: r.get(3)?,
             content_bytes: r.get(4)?,
             cloud_only: r.get(5)?,
-            unindexed: r.get(6)?,
+            unindexed,
+            // The complement rather than a fourth `count(*)`: the three buckets
+            // have to sum to the total or the card shows a number nobody can
+            // account for, and subtraction is the only way to guarantee that
+            // for an outcome the CHECK constraint gains later.
+            no_parser: unindexed - parse_failed - not_processed,
+            parse_failed,
+            not_processed,
         })
     })
     .and_then(|it| it.collect())
@@ -297,6 +356,77 @@ mod tests {
         (dir, store)
     }
 
+    /// Add one more chunkless file, carrying the parse outcome the router would
+    /// have recorded for it — or none at all, for a file no ingest run has
+    /// reached yet.
+    ///
+    /// Chunkless on purpose: every one of these counts towards `unindexed`, and
+    /// the whole question these tests exist to pin is *which kind* of unindexed
+    /// each one is.
+    fn add_file(store: &Store, name: &str, outcome: Option<&str>) {
+        let conn = store.reader().unwrap();
+        let ws: WorkspaceId = conn
+            .query_row("SELECT workspace_id FROM workspaces LIMIT 1", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .unwrap()
+            .parse()
+            .unwrap();
+        let root: RootId = conn
+            .query_row("SELECT root_id FROM workspace_roots LIMIT 1", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .unwrap()
+            .parse()
+            .unwrap();
+        drop(conn);
+
+        let path = format!("/tmp/notes/{name}");
+        let file = marrow_core::FileId::new();
+        let f = NewFile {
+            file_id: file,
+            workspace_id: ws,
+            root_id: root,
+            current_path: Some(path.clone()),
+            fs_identity: Some(name.to_string()),
+            tier_state: TierState::Resident,
+            origin: Origin::User,
+            origin_txn_id: None,
+            external_source_url: None,
+            status: FileStatus::Active,
+            at: Timestamp::now(),
+        };
+        let v = NewVersion::new(file, &path, 10, ContentHash::of(name.as_bytes()));
+        let parse = outcome.map(|o| marrow_store::read::NewParse {
+            version_id: v.version_id,
+            parser_id: "test".into(),
+            parser_version: "1".into(),
+            parser_tier: if o == "METADATA_ONLY" { "T5" } else { "T1" }.into(),
+            provenance_class: if o == "METADATA_ONLY" {
+                "METADATA_ONLY"
+            } else {
+                "EXACT"
+            }
+            .into(),
+            outcome: o.to_string(),
+            char_yield: None,
+            page_count: None,
+            warnings: None,
+            parsed_at: Timestamp::now(),
+        });
+        store
+            .writer()
+            .submit(move |c| {
+                marrow_store::read::insert_file_with_version(c, &f, &v)?;
+                match &parse {
+                    Some(p) => marrow_store::read::record_parse(c, p),
+                    None => Ok(()),
+                }
+            })
+            .unwrap();
+        store.flush().unwrap();
+    }
+
     #[test]
     fn one_statement_answers_for_every_surface() {
         // The whole point. The sidebar and MCP report the same fact about the
@@ -331,7 +461,87 @@ mod tests {
         assert_eq!(w.files, 1);
         assert_eq!(w.chunks, 0);
         assert_eq!(w.unindexed, 1);
-        assert!(w.is_degraded(), "a wholly unindexed workspace is degraded");
+        // No parse result at all: nothing has looked at this file's bytes yet.
+        assert_eq!(w.not_processed, 1);
+        assert!(w.is_degraded(), "a file nothing has parsed yet is degraded");
+    }
+
+    #[test]
+    fn a_folder_of_photos_is_healthy_not_degraded() {
+        // The bug: `unindexed` counted "has no parser" and "the parse failed"
+        // as one number, so 42,581 photos raised a warning triangle over a
+        // workspace where nothing was wrong and no action could clear it. A
+        // file with no parser stays discoverable via metadata (T5) — expected,
+        // not a failure.
+        let (_d, s) = fixture();
+        for i in 0..3 {
+            add_file(&s, &format!("photo{i}.heic"), Some("METADATA_ONLY"));
+        }
+        let conn = s.reader().unwrap();
+        let w = &workspace_stats(&conn).unwrap()[0];
+        assert_eq!(w.no_parser, 3);
+        assert_eq!(w.parse_failed, 0);
+        // The one file from the fixture has no parse result of its own, so it
+        // is what keeps this workspace degraded; the photos do not.
+        assert_eq!(w.not_processed, 1);
+
+        // And the verdict itself: a workspace whose only unindexed files have
+        // no parser is healthy. This is the assertion the status page renders.
+        let photos = WorkspaceStats {
+            files: 3,
+            unindexed: 3,
+            no_parser: 3,
+            ..WorkspaceStats::default()
+        };
+        assert!(
+            !photos.is_degraded(),
+            "files with no parser must not read as broken: {photos:?}"
+        );
+    }
+
+    #[test]
+    fn a_failed_parse_is_the_one_that_is_actually_wrong() {
+        // The distinction the whole split exists for. These are the files whose
+        // text exists on disk and is not in the index — the only bucket where
+        // there is something to do about it.
+        let (_d, s) = fixture();
+        add_file(&s, "scan.pdf", Some("FAILED"));
+        add_file(&s, "half.docx", Some("PARTIAL"));
+        add_file(&s, "thin.pdf", Some("LOW_YIELD"));
+        add_file(&s, "photo.heic", Some("METADATA_ONLY"));
+
+        let conn = s.reader().unwrap();
+        let w = &workspace_stats(&conn).unwrap()[0];
+        assert_eq!(w.parse_failed, 3, "FAILED, PARTIAL and LOW_YIELD");
+        assert_eq!(w.no_parser, 1);
+        assert!(w.is_degraded());
+    }
+
+    #[test]
+    fn the_three_buckets_account_for_every_unindexed_file() {
+        // A card that shows three numbers which do not add up to the fourth is
+        // a card the reader cannot trust — and the missing file is exactly the
+        // one they would have wanted to know about. Subtraction is what makes
+        // this hold for an outcome the schema gains later.
+        let (_d, s) = fixture();
+        add_file(&s, "photo.heic", Some("METADATA_ONLY"));
+        add_file(&s, "scan.pdf", Some("FAILED"));
+        add_file(&s, "empty.txt", Some("OK"));
+        add_file(&s, "queued.md", None);
+
+        let conn = s.reader().unwrap();
+        let w = &workspace_stats(&conn).unwrap()[0];
+        assert_eq!(w.unindexed, 5, "the fixture file plus four");
+        assert_eq!(
+            w.no_parser + w.parse_failed + w.not_processed,
+            w.unindexed,
+            "{w:?}"
+        );
+        // An `OK` parse that produced no chunks is an empty file, not a
+        // failure: there was nothing to search, which is `no_parser`'s meaning.
+        assert_eq!(w.no_parser, 2);
+        assert_eq!(w.parse_failed, 1);
+        assert_eq!(w.not_processed, 2);
     }
 
     #[test]

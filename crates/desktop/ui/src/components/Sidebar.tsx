@@ -41,14 +41,20 @@ interface Degradation {
 /**
  * What is wrong with this workspace, from the fields the command returns.
  *
- * Nothing here is inferred. `unindexed > 0` means files were recorded from
- * metadata alone; `cloudOnly > 0` means contents were deliberately not read
- * (TIER-008). Both are degraded states and both are shown as counts, because a
- * warning without a magnitude cannot be triaged.
+ * Nothing here is inferred, and **`unindexed` is deliberately not one of these
+ * states**. It counts every file with no searchable text, and on a real corpus
+ * most of those are photos and binaries with no parser — which the spec calls
+ * expected, not a failure. Warning about them made a folder of holiday photos
+ * render as broken, and a warning that fires on the ordinary case is one people
+ * learn to ignore. What is actually wrong is a parse that failed and a file no
+ * ingest has reached; `cloudOnly > 0` means contents were deliberately not read
+ * (TIER-008). Each is shown as a count, because a warning without a magnitude
+ * cannot be triaged.
  */
 function workspaceState(w: WorkspaceRow): Degradation {
   const issues: string[] = [];
-  if (w.unindexed > 0) issues.push(`${count(w.unindexed)} unindexed`);
+  if (w.parseFailed > 0) issues.push(`${count(w.parseFailed)} could not be read`);
+  if (w.notProcessed > 0) issues.push(`${count(w.notProcessed)} not read yet`);
   if (w.cloudOnly > 0) issues.push(`${count(w.cloudOnly)} cloud-only`);
   if (w.files === 0) {
     return { degraded: true, word: "nothing indexed", issues };

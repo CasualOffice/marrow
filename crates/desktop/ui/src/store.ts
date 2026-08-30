@@ -14,6 +14,54 @@ export type View = "search" | "ask" | "files" | "models" | "status" | "settings"
 export type Pane = "sidebar" | "results" | "detail";
 
 /**
+ * A generated page or diagram, while it is open in the side panel.
+ *
+ * This is the one piece of window state whose two ends have no common ancestor
+ * worth threading a prop through: the thing is produced deep inside a streamed
+ * answer, inside a scroller, inside the Ask view, and it is *shown* by a panel
+ * that is a sibling of that whole view. Everything between them would be
+ * carrying a prop it has no opinion about.
+ */
+export type ArtifactKind = "html" | "mermaid";
+
+/** Rendered as the thing it is, or as the source it was written as. */
+export type ArtifactMode = "preview" | "source";
+
+export interface Artifact {
+  /**
+   * The identity of the block that produced it — stable for as long as that
+   * answer is on screen, and unique across answers. Opening a second artifact
+   * replaces the first rather than stacking, so this is what tells the panel
+   * whether an update belongs to what it is showing.
+   */
+  readonly key: string;
+  readonly kind: ArtifactKind;
+  readonly title: string;
+  readonly source: string;
+  /** True while the answer writing it is still streaming. */
+  readonly streaming: boolean;
+}
+
+/*
+ * Panel geometry.
+ *
+ * `MIN` is the narrowest a generated page is worth looking at; below it the
+ * panel is costing the conversation more than it returns. `CONVERSATION_MIN` is
+ * the floor the answer column may not be pushed under — about 56 characters,
+ * against the 62 of `--prose-measure` — because a panel that wins every pixel
+ * has covered the thing it was opened to explain.
+ *
+ * Their sum is the width at which side-by-side stops being possible at all, and
+ * the panel takes the sheet over instead. `ArtifactPanel.module.css` states that
+ * same number as a container query; the two are commented at each other because
+ * CSS cannot read a constant.
+ */
+export const ARTIFACT_W_MIN = 320;
+export const ARTIFACT_W_MAX = 760;
+export const ARTIFACT_W_DEFAULT = 460;
+export const CONVERSATION_W_MIN = 420;
+
+/**
  * The selection anchor — GUI §5.2, the single most important interaction rule.
  *
  * Selection is stored as the *identity* of a result (`fileId` + `line`), never
@@ -72,6 +120,17 @@ interface UiState {
   quickFindQuery: string;
   shortcutsOpen: boolean;
 
+  /** The generated page or diagram on show beside the conversation. */
+  artifact: Artifact | null;
+  artifactMode: ArtifactMode;
+  /**
+   * The panel's width in pixels. Session-only and deliberately not persisted:
+   * it is a reaction to the window as it is right now, and restoring last
+   * week's 700px into a window that has since been made small is a worse
+   * opening state than the default.
+   */
+  artifactWidth: number;
+
   /** Transient footer message. Also mirrored into the live region. */
   notice: { text: string; id: number } | null;
   /** Announced to screen readers: result counts and state changes (GUI §8). */
@@ -90,6 +149,13 @@ interface UiState {
   closeQuickFind: () => void;
   setQuickFindQuery: (q: string) => void;
   setShortcutsOpen: (open: boolean) => void;
+
+  openArtifact: (a: Artifact) => void;
+  /** Follow a still-streaming artifact, but only the one already on show. */
+  refreshArtifact: (a: Artifact) => void;
+  closeArtifact: () => void;
+  setArtifactMode: (m: ArtifactMode) => void;
+  setArtifactWidth: (px: number) => void;
 
   notify: (text: string) => void;
   announce: (text: string) => void;
@@ -111,6 +177,9 @@ export const useUi = create<UiState>((set, get) => ({
   quickFindOpen: false,
   quickFindQuery: "",
   shortcutsOpen: false,
+  artifact: null,
+  artifactMode: "preview",
+  artifactWidth: ARTIFACT_W_DEFAULT,
   notice: null,
   announcement: "",
 

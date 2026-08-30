@@ -98,6 +98,52 @@
   margin-top: 2px;
 }
 
+/* Which files have no searchable text, and why.
+   One sentence and three parts rather than a fourth big statistic: the total on
+   its own was being read as a fault count, and three quarters of it is photos.
+   Sized down from .stats deliberately — this is a breakdown of a number, not a
+   number of its own rank. */
+.breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2) var(--sp-5);
+  padding: 0 var(--sp-8) var(--sp-5);
+  font-size: var(--fs-sm);
+  color: var(--fg3);
+}
+
+.breakdownLead {
+  color: var(--fg2);
+}
+
+.breakdownTotal {
+  color: var(--fg);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The dot separators are decorative; every part carries its own words. */
+.breakdownParts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+}
+
+.part {
+  white-space: nowrap;
+}
+
+.part:not(:last-child)::after {
+  content: " ·";
+  color: var(--fg3);
+}
+
+.partValue {
+  color: var(--fg2);
+  font-variant-numeric: tabular-nums;
+}
+
 /* The three facts nothing can answer. Kept together and labelled, so an em
    dash here reads as "no command for this" and not as "loading". */
 .unknown {

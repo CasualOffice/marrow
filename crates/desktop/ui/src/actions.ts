@@ -4,7 +4,7 @@
  * keyboard equivalent" — enforced by there being nothing else to call).
  */
 
-import { asUiError, openPath, revealPath } from "./api";
+import { asUiError, openPath, reindex, revealPath } from "./api";
 import type { Anchor } from "./store";
 import { useUi } from "./store";
 
@@ -75,12 +75,37 @@ export async function revealInFileManager(
 }
 
 /**
+ * Sweep every granted folder against the disk (`reindex`).
+ *
+ * Here rather than in the view because two controls need it — the empty
+ * workspace and the freshness banner — and a button that reports one thing in
+ * one place and something else in the other is two bugs waiting.
+ *
+ * It resolves when the folders have been *asked*, not when they are done: a
+ * pass over 78,000 files takes minutes. So the notice says what was started,
+ * never that anything finished.
+ */
+export async function runIndex(): Promise<void> {
+  const { notify } = useUi.getState();
+  try {
+    const n = await reindex();
+    notify(
+      n === 1
+        ? "Checking your folder against the disk. The counts update as it goes."
+        : `Checking ${n} folders against the disk. The counts update as they go.`,
+    );
+  } catch (e) {
+    notify(asUiError(e).message);
+  }
+}
+
+/**
  * Things the desktop shell still cannot do.
  *
- * `open_path` and `reveal_path` used to be on this list and are not any more —
- * they exist, they are wired to `⌘↵` and `⇧↵`, and the notices that used to
- * apologise for them are gone. What is left is genuinely absent from
- * `commands.rs`, which exposes eight read-only commands and no mutation at all.
+ * `open_path`, `reveal_path` and `reindex` used to be on this list and are not
+ * any more — they exist, they are wired to `⌘↵`, `⇧↵` and "Run an index", and
+ * the notices that used to apologise for them are gone. What is left is
+ * genuinely absent from `commands.rs`.
  *
  * These are still bound to their controls rather than hidden, because a
  * shortcut that silently does nothing is worse than one that says why, and each
@@ -95,8 +120,6 @@ export const MISSING: Record<string, string> = {
     'Changing what a workspace indexes needs a desktop command that does not exist yet ("workspace_set_policy").',
   retry:
     'Retrying failed parses needs a desktop command that does not exist yet ("job_retry").',
-  reindex:
-    'Starting an index run needs a desktop command that does not exist yet ("index_run").',
 };
 
 export function unavailable(what: keyof typeof MISSING | string): void {

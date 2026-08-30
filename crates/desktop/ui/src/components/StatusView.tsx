@@ -1,8 +1,8 @@
 /**
  * Status — index health, per workspace and in total.
  *
- * `list_workspaces` returns `chunks`, `contentBytes`, `cloudOnly` and
- * `unindexed` *per workspace* now, so the four stats that used to render as
+ * `list_workspaces` returns `chunks`, `contentBytes`, `cloudOnly` and the
+ * unindexed breakdown *per workspace* now, so the stats that used to render as
  * `—` are real numbers. The em dash is reserved for what the backend genuinely
  * cannot answer — watcher state, when the workspace was last indexed, when it
  * was last reconciled — and each of those says what would have to exist for it
@@ -12,9 +12,20 @@
  * (UX principle 5). The corollary this view has to honour: a dash where a
  * number is available reads as a broken page.
  *
- * GUI §11 — every degraded state visible without navigating. `unindexed > 0`
- * and `cloudOnly > 0` are degraded states, so both raise the card's tone here
- * and both appear on the workspace's own row in the sidebar.
+ * **This page used to alarm about normal behaviour.** `unindexed` — files with
+ * no chunks — was rendered as one number under a warning triangle reading
+ * "their contents were never read", and on the author's index that was 42,581
+ * photos, fonts and binaries with no parser. Zero parses had actually failed. A
+ * file with no parser stays discoverable via metadata (T5) and is not a
+ * failure, so a warning that can never be cleared trains the eye to skip the
+ * one that can.
+ *
+ * The numbers did not change; what they claim did. Every count is still on
+ * screen — `noParser + parseFailed + notProcessed` sums to `unindexed` — and
+ * only the last two raise the card's tone.
+ *
+ * GUI §11 — every degraded state visible without navigating, so whatever tones
+ * a card here also appears on that workspace's row in the sidebar.
  */
 
 import { useCallback, useState } from "react";
@@ -26,7 +37,7 @@ import { StateBadge, type StateTone } from "./Badges";
 import { ErrorNotice } from "./ErrorNotice";
 import { Icon } from "./Icon";
 import { useIndexHealth, useWorkspaces } from "../queries";
-import { unavailable } from "../actions";
+import { runIndex, unavailable } from "../actions";
 import { addWorkspace, asUiError } from "../api";
 import { useUi } from "../store";
 import { useQueryClient } from "@tanstack/react-query";
@@ -37,9 +48,16 @@ interface Verdict {
   word: string;
 }
 
+/**
+ * The card's headline state.
+ *
+ * `noParser` is deliberately not here: a folder of photos is a healthy
+ * workspace, and saying otherwise is the bug this page had.
+ */
 function verdict(w: WorkspaceRow): Verdict {
   if (w.files === 0) return { tone: "warn", word: "nothing indexed" };
-  if (w.unindexed > 0) return { tone: "warn", word: "partly indexed" };
+  if (w.parseFailed > 0) return { tone: "warn", word: "parse failures" };
+  if (w.notProcessed > 0) return { tone: "warn", word: "partly read" };
   if (w.cloudOnly > 0) return { tone: "warn", word: "partly on disk" };
   return { tone: "ok", word: "live" };
 }
@@ -131,22 +149,19 @@ export function StatusView() {
                 <StateBadge tone={v.tone}>{v.word}</StateBadge>
               </header>
 
-              {/* Five real numbers, per workspace. Not one of them is a dash. */}
+              {/* Real numbers, per workspace. Not one of them is a dash. */}
               <div className={styles.stats}>
                 <Stat k="files" v={count(w.files)} />
                 <Stat k="chunks" v={count(w.chunks)} />
                 <Stat k="content" v={bytes(w.contentBytes)} />
-                <Stat
-                  k="unindexed"
-                  v={count(w.unindexed)}
-                  tone={w.unindexed > 0 ? "warn" : undefined}
-                />
                 <Stat
                   k="cloud-only"
                   v={count(w.cloudOnly)}
                   tone={w.cloudOnly > 0 ? "warn" : undefined}
                 />
               </div>
+
+              <Unindexed w={w} />
 
               {/* What the backend cannot answer, said once, in words. */}
               <div className={styles.unknown}>
@@ -169,7 +184,10 @@ export function StatusView() {
                 </span>
               </div>
 
-              {(w.files === 0 || w.unindexed > 0 || w.cloudOnly > 0) && (
+              {(w.files === 0 ||
+                w.parseFailed > 0 ||
+                w.notProcessed > 0 ||
+                w.cloudOnly > 0) && (
                 <div className={styles.issues}>
                   {w.files === 0 && (
                     <Issue
@@ -179,20 +197,36 @@ export function StatusView() {
                       actions={[
                         {
                           label: "Run an index",
-                          onClick: () => unavailable("reindex"),
+                          onClick: () => void runIndex(),
                         },
                       ]}
                     />
                   )}
-                  {w.unindexed > 0 && (
+                  {/* The only bucket where the text exists and Marrow does not
+                      have it. `noParser` gets no issue at all — there is
+                      nothing to fix about a photograph. */}
+                  {w.parseFailed > 0 && (
                     <Issue
                       tone="warn"
-                      title={`${count(w.unindexed)} files are recorded from metadata alone`}
-                      detail="They are findable by name and date. Their contents were never read, so no search of their text can match them."
+                      title={`${count(w.parseFailed)} files could not be read in full`}
+                      detail="A parser ran on these and came away with nothing searchable — corrupt, truncated, or a scan with no text layer. Unlike a file with no parser, the text is there and Marrow does not have it."
                       actions={[
                         {
                           label: "Retry parsing",
                           onClick: () => unavailable("retry"),
+                        },
+                      ]}
+                    />
+                  )}
+                  {w.notProcessed > 0 && (
+                    <Issue
+                      tone="warn"
+                      title={`${count(w.notProcessed)} files have not been read yet`}
+                      detail="Nothing has opened their contents — an index run has not reached them, or was interrupted before it did. They are findable by name meanwhile."
+                      actions={[
+                        {
+                          label: "Run an index",
+                          onClick: () => void runIndex(),
                         },
                       ]}
                     />
@@ -279,8 +313,78 @@ function Freshness({ h }: { h: IndexHealth }) {
           ? "Nothing here reflects what is on your disk yet. A scan would populate it."
           : "Anything added, changed or deleted since then is not in the index, and a search cannot mention what it does not know about. The app watches while it is open; this usually means a folder became unwatchable."
       }
-      actions={[{ label: "Run an index", onClick: () => unavailable("reindex") }]}
+      actions={[{ label: "Run an index", onClick: () => void runIndex() }]}
     />
+  );
+}
+
+/**
+ * Which files have no searchable text, and why — the line this page got wrong.
+ *
+ * All four numbers, always, including the zeroes: a bucket that disappears when
+ * empty makes "none of those" indistinguishable from "we stopped counting", and
+ * "0 could not be read" is the most reassuring number on the card. Only the two
+ * that a person can do something about are tinted.
+ *
+ * The parts sum to the total by construction in `catalog.rs`, so a reader can
+ * check the arithmetic on screen and find it holds.
+ */
+function Unindexed({ w }: { w: WorkspaceRow }) {
+  return (
+    <div className={styles.breakdown}>
+      <span className={styles.breakdownLead}>
+        <span className={cx("mono", styles.breakdownTotal)}>
+          {count(w.unindexed)}
+        </span>{" "}
+        of {count(w.files)} files have no searchable text
+      </span>
+      <span className={styles.breakdownParts}>
+        <Part
+          n={w.noParser}
+          label="no parser"
+          title="Photos, fonts, archives, binaries — nothing to extract text from. They stay findable by name, date and folder, which is what they are indexed for. Not a fault."
+        />
+        <Part
+          n={w.parseFailed}
+          label="could not be read"
+          tone="warn"
+          title="A parser ran and came away with nothing. This is the one worth acting on: the text exists and Marrow does not have it."
+        />
+        <Part
+          n={w.notProcessed}
+          label="not read yet"
+          tone="warn"
+          title="No parse has been attempted on these yet. An index run reaches them."
+        />
+      </span>
+    </div>
+  );
+}
+
+function Part({
+  n,
+  label,
+  title,
+  tone,
+}: {
+  n: number;
+  label: string;
+  title: string;
+  tone?: "warn" | undefined;
+}) {
+  return (
+    <span className={styles.part} title={title}>
+      <span
+        className={cx(
+          "mono",
+          styles.partValue,
+          tone === "warn" && n > 0 && styles.statWarn,
+        )}
+      >
+        {count(n)}
+      </span>{" "}
+      {label}
+    </span>
   );
 }
 

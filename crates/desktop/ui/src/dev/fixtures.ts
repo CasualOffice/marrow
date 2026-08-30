@@ -451,11 +451,20 @@ function hits(query: string): SearchHit[] {
 }
 
 /*
- * Three workspaces, each degraded differently, because the sidebar and Status
- * have to make all three legible at once (GUI §11):
- *   melp      healthy, but with cloud-only files it never read
- *   pictures  a third of it recorded from metadata alone
+ * Four workspaces, each in a different state, because the sidebar and Status
+ * have to make them all legible at once (GUI §11):
+ *   melp      a few files a parser could not finish — the actionable one
+ *   pictures  a third of it has no parser, and that is *fine*
+ *   drafts    read but not yet parsed, plus cloud-only files it never opened
  *   icloud    registered and completely empty
+ *
+ * `pictures` is the fixture the split exists for: 1,207 files with no
+ * searchable text, none of it wrong, and the card must render healthy. Before
+ * the split it was the same warning triangle as `melp`.
+ *
+ * In every row `noParser + parseFailed + notProcessed === unindexed`, as it is
+ * in `catalog.rs`. A fixture where the parts do not add up would hide exactly
+ * the bug the arithmetic is there to prevent.
  */
 const WORKSPACES: WorkspaceRow[] = [
   {
@@ -466,6 +475,9 @@ const WORKSPACES: WorkspaceRow[] = [
     contentBytes: 1_180_000_000,
     cloudOnly: 0,
     unindexed: 34,
+    noParser: 26,
+    parseFailed: 8,
+    notProcessed: 0,
   },
   {
     name: "pictures",
@@ -473,8 +485,23 @@ const WORKSPACES: WorkspaceRow[] = [
     files: 3478,
     chunks: 11_895,
     contentBytes: 214_000_000,
-    cloudOnly: 412,
+    cloudOnly: 0,
     unindexed: 1207,
+    noParser: 1207,
+    parseFailed: 0,
+    notProcessed: 0,
+  },
+  {
+    name: "drafts",
+    path: "/Users/dev/Drafts",
+    files: 2140,
+    chunks: 6_400,
+    contentBytes: 88_000_000,
+    cloudOnly: 412,
+    unindexed: 619,
+    noParser: 90,
+    parseFailed: 0,
+    notProcessed: 529,
   },
   {
     name: "icloud",
@@ -484,13 +511,19 @@ const WORKSPACES: WorkspaceRow[] = [
     contentBytes: 0,
     cloudOnly: 0,
     unindexed: 0,
+    noParser: 0,
+    parseFailed: 0,
+    notProcessed: 0,
   },
 ];
 
+// The totals are the sum of the workspaces above, because the footer and the
+// cards are the same fact about the same index and a fixture where they
+// disagree is a fixture that hides the day they really do.
 const HEALTH: IndexHealth = {
-  files: 12_913,
-  chunks: 60_105,
-  contentBytes: 1_394_000_000,
+  files: 15_053,
+  chunks: 66_505,
+  contentBytes: 1_482_000_000,
   cloudOnly: 412,
   schemaVersion: 7,
   // Stale on purpose: the state worth looking at in dev is the one the banner
@@ -655,6 +688,11 @@ export async function mockInvoke<T>(
     case "reveal_path":
       // Nothing to open in a browser; the command exists and succeeds.
       return undefined as T;
+    case "reindex":
+      // The count of folders asked, which is what the notice reads back. The
+      // sweep is Rust and there is none in a browser, so the numbers on the
+      // page stay put — the button's own feedback is the thing under test.
+      return WORKSPACES.length as T;
     default:
       throw { code: "UI_UNEXPECTED", message: `No fixture for "${cmd}".` };
   }
