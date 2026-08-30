@@ -19,4 +19,31 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      # **Before any cargo command touches the desktop crate.**
+      # `tauri::generate_context!()` reads `frontendDist` — `./ui/dist` — at
+      # *compile* time and panics in the proc macro if it is not there. That
+      # directory is build output, so it is gitignored, so a clean checkout does
+      # not have it: `marrow-desktop` has never once compiled in CI, and the
+      # only reason `check.sh` was green on a developer machine is that the
+      # folder was already sitting on that disk from a previous build.
+      #
+      # `release.yml` has always built the UI first, which is why the release
+      # path was fine and this one was not. Same steps, same order.
+      #
+      # `pnpm build` is `tsc --noEmit && vite build`, so this also type-checks
+      # the front end — a thing CI was never doing either.
+      - name: build the ui
+        working-directory: crates/desktop/ui
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
       - run: ./check.sh
