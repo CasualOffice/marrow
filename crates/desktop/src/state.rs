@@ -341,6 +341,63 @@ impl Core {
         })
     }
 
+    /// Register a folder as an authorized root.
+    ///
+    /// Canonicalizes first, because a root that is not canonical defeats every
+    /// containment check that depends on it (invariant #5). Refuses a folder
+    /// that is already granted, or that overlaps one — nesting two roots means
+    /// every file underneath is stored twice under two identities, and path is
+    /// never identity (invariant #2).
+    pub fn grant(&self, path: &std::path::Path) -> Result<marrow_core::RootId> {
+        let root = marrow_scan::AuthorizedRoot::open(path)?;
+        let canonical = root.path().to_path_buf();
+
+        for existing in marrow_query::catalog::roots(&self.store.reader()?)? {
+            let existing = std::path::Path::new(&existing);
+            if existing == canonical {
+                return Err(marrow_core::Error::new(
+                    marrow_core::Code::ActAlreadyExists,
+                    format!("{} is already indexed.", canonical.display()),
+                ));
+            }
+            if canonical.starts_with(existing) || existing.starts_with(&canonical) {
+                return Err(marrow_core::Error::new(
+                    marrow_core::Code::CfgInvalid,
+                    format!(
+                        "{} overlaps {}, which is already indexed. Indexing one inside \
+                         the other would store every file underneath twice, under two \
+                         identities. Pick a folder outside it.",
+                        canonical.display(),
+                        existing.display()
+                    ),
+                ));
+            }
+        }
+
+        let name = canonical
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "workspace".to_string());
+        let now = marrow_core::Timestamp::now();
+        let workspace_id = self.store.upsert_workspace(marrow_store::NewWorkspace {
+            workspace_id: marrow_core::WorkspaceId::new(),
+            name,
+            at: now,
+        })?;
+        let root_id = self.store.upsert_root(marrow_store::NewRoot {
+            root_id: marrow_core::RootId::new(),
+            workspace_id,
+            canonical_path: canonical.to_string_lossy().into_owned(),
+            volume_identity: None,
+            grant_token: None,
+            storage_kind: marrow_store::StorageKind::Local,
+            cloud_provider: None,
+            at: now,
+        })?;
+        self.store.flush()?;
+        Ok(root_id)
+    }
+
     pub fn workspaces(&self) -> Result<Vec<WorkspaceRow>> {
         // One statement, in `marrow-query`. This and MCP's listing were two
         // separately-maintained queries answering the same question about the

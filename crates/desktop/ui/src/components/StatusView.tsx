@@ -17,6 +17,8 @@
  * and both appear on the workspace's own row in the sidebar.
  */
 
+import { useCallback, useState } from "react";
+
 import styles from "./StatusView.module.css";
 import { cx } from "../lib/cx";
 import { bytes, count, DASH, tilde } from "../lib/format";
@@ -25,7 +27,9 @@ import { ErrorNotice } from "./ErrorNotice";
 import { Icon } from "./Icon";
 import { useIndexHealth, useWorkspaces } from "../queries";
 import { unavailable } from "../actions";
+import { addWorkspace, asUiError } from "../api";
 import { useUi } from "../store";
+import { useQueryClient } from "@tanstack/react-query";
 import type { IndexHealth, WorkspaceRow } from "../api";
 
 interface Verdict {
@@ -68,6 +72,25 @@ export function StatusView() {
   const rows = workspaces.data ?? [];
   const h = health.data;
   const notify = useUi((s) => s.notify);
+  const client = useQueryClient();
+  const [adding, setAdding] = useState(false);
+
+  // The picker is native and runs in Rust, so this awaits a real modal. A
+  // cancel resolves `null`, which is a decision and not a failure.
+  const add = useCallback(async () => {
+    setAdding(true);
+    try {
+      const next = await addWorkspace();
+      if (next) {
+        client.setQueryData(["workspaces"], next);
+        notify("Indexing it now. It becomes searchable as it goes.");
+      }
+    } catch (e) {
+      notify(asUiError(e).message);
+    } finally {
+      setAdding(false);
+    }
+  }, [client, notify]);
 
   return (
     <div className={styles.view}>
@@ -76,6 +99,18 @@ export function StatusView() {
           <ErrorNotice error={workspaces.error} action={null} />
         )}
         {health.isError && <ErrorNotice error={health.error} action={null} />}
+
+        <div className={styles.actions}>
+          <button
+            type="button"
+            className={styles.add}
+            onClick={() => void add()}
+            disabled={adding}
+          >
+            <Icon name="folder" size={13} />
+            {adding ? "Choosing…" : "Add a folder"}
+          </button>
+        </div>
 
         {/* Above the counts, because it decides whether they mean anything. */}
         {h?.mayBeStale && <Freshness h={h} />}
@@ -186,9 +221,13 @@ export function StatusView() {
         })}
 
         {!workspaces.isError && rows.length === 0 && (
-          <p className={styles.none}>
-            No workspaces are registered, so there is nothing to report.
-          </p>
+          <div className={styles.none}>
+            <p>Marrow has not been given a folder yet.</p>
+            <p className={styles.noneWhy}>
+              It only ever reads folders you grant it, and it reads them on this
+              machine — nothing is uploaded anywhere.
+            </p>
+          </div>
         )}
       </div>
 

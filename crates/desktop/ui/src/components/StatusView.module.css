@@ -244,3 +244,42 @@
   font-size: var(--fs-xs);
   color: var(--fg3);
 }
+
+/* ── granting a folder ──────────────────────────────────────────────── */
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+/* The one action on this page that changes anything, so it looks like one.
+   Everything else here reports. */
+.add {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--raised);
+  color: var(--fg);
+  font-size: var(--fs-row);
+  cursor: pointer;
+  transition: background 120ms var(--ease);
+}
+
+.add:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.add:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.noneWhy {
+  color: var(--fg2);
+  font-size: var(--fs-row);
+  margin-top: var(--sp-2);
+}

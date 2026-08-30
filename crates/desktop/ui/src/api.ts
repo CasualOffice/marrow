@@ -174,6 +174,17 @@ export interface IndexHealth {
   readonly mayBeStale: boolean;
 }
 
+/**
+ * Grant Marrow a folder. Opens a native picker; the WebView never sees a path
+ * it did not receive back from this call.
+ *
+ * Resolves `null` when the picker was cancelled — not an error, and not a
+ * reason to show one.
+ */
+export function addWorkspace(): Promise<readonly WorkspaceRow[] | null> {
+  return call<readonly WorkspaceRow[] | null>("add_workspace", {});
+}
+
 export function indexHealth(): Promise<IndexHealth> {
   return call<IndexHealth>("index_health");
 }

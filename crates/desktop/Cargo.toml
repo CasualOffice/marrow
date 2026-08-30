@@ -31,6 +31,10 @@ marrow-ingest.workspace = true
 marrow-hw.workspace = true
 marrow-model.workspace = true
 tauri = { version = "2", features = [] }
+# The folder picker runs in **Rust**, not in the WebView. Granting the window a
+# dialog/filesystem capability would undo SEC-012 — the point of that rule is
+# that the WebView has no filesystem affordance at all, only named commands.
+rfd = "0.15"
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

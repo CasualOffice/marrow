@@ -329,7 +329,19 @@ export function App() {
             />
           )}
           {view === "files" && <FilesView detailRef={detailRef} />}
-          {view === "ask" && <AskView />}
+
+          {/*
+            **Ask stays mounted.** Every other view is a report and can be
+            rebuilt from a query; a conversation cannot. Unmounting it threw
+            away the whole thread on a tab switch — and worse, a generation in
+            flight kept running with nothing left to receive its tokens, so the
+            answer was lost even though the model produced it. Hidden rather
+            than unmounted, so switching to Status and back is a navigation
+            rather than a data loss.
+          */}
+          <div hidden={view !== "ask"} className={styles.keepAlive}>
+            <AskView />
+          </div>
           {view === "models" && <ModelsView />}
           {view === "status" && <StatusView />}
           {view === "settings" && <SettingsView />}

@@ -39,9 +39,9 @@ const THEMES: ReadonlyArray<{ id: ThemeChoice; label: string }> = [
  */
 const CANNOT: ReadonlyArray<{ what: string; why: string; cmd: string }> = [
   {
-    what: "Add or remove a workspace",
-    why: "Which folders Marrow may read is decided outside this window. The command surface is read-only, so there is nothing here that could grant or revoke a folder.",
-    cmd: "workspace_add / workspace_remove",
+    what: "Remove a workspace",
+    why: "Adding one works — the Status page has a button. Removing is different: it has to decide what happens to everything indexed under it, and a wrong answer there deletes work rather than a folder reference.",
+    cmd: "workspace_remove",
   },
   {
     what: "Start or schedule an index run",

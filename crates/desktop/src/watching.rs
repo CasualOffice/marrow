@@ -50,7 +50,8 @@ struct RootState {
 #[derive(Debug)]
 pub struct Watchers {
     cancel: Cancel,
-    roots: Vec<(String, Arc<RootState>)>,
+    /// Grows when a folder is granted while the app is running.
+    roots: Mutex<Vec<(String, Arc<RootState>)>>,
     threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
 }
 
@@ -86,14 +87,18 @@ impl Watchers {
 
         Ok(Self {
             cancel,
-            roots,
+            roots: Mutex::new(roots),
             threads: Mutex::new(threads),
         })
     }
 
     /// What every root is doing, for `index_health` and the sidebar.
     pub fn status(&self) -> Vec<RootStatus> {
-        self.roots
+        let roots = match self.roots.lock() {
+            Ok(r) => r.clone(),
+            Err(_) => return Vec::new(),
+        };
+        roots
             .iter()
             .map(|(name, s)| {
                 let (health, reason) = s
@@ -118,6 +123,43 @@ impl Watchers {
         self.status()
             .iter()
             .any(|r| r.health == "live" || r.health == "degraded")
+    }
+
+    /// Begin watching a root added after startup.
+    ///
+    /// The alternative is restarting every watcher, which drops the FSEvents
+    /// streams for folders that were fine — a newly granted folder must not
+    /// cost the others a gap in coverage.
+    pub fn watch_also(&self, core: Arc<Core>, root_id: RootId) -> Result<()> {
+        let Some(t) = targets(core.store())?
+            .into_iter()
+            .find(|t| t.root_id == root_id)
+        else {
+            return Err(marrow_core::Error::invariant(
+                "asked to watch a root that is not in the store",
+            ));
+        };
+        let state = Arc::new(RootState {
+            health: Mutex::new(("starting".into(), None)),
+            ..RootState::default()
+        });
+        if let Ok(mut roots) = self.roots.lock() {
+            roots.push((t.name.clone(), Arc::clone(&state)));
+        }
+        let cancel = self.cancel.clone();
+        let handle = std::thread::Builder::new()
+            .name(format!("marrow-watch-{}", t.name))
+            .spawn(move || watch_one(&core, &t, &state, &cancel))
+            .map_err(|e| {
+                marrow_core::Error::new(
+                    marrow_core::Code::CfgInvalid,
+                    format!("Could not start a watcher for the new folder: {e}"),
+                )
+            })?;
+        if let Ok(mut hs) = self.threads.lock() {
+            hs.push(handle);
+        }
+        Ok(())
     }
 
     pub fn stop(&self) {

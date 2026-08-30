@@ -123,6 +123,47 @@ pub async fn list_workspaces(core: State<'_, Arc<Core>>) -> Res<Vec<WorkspaceRow
     blocking(move || core.workspaces()).await
 }
 
+/// Grant Marrow a folder, from the app.
+///
+/// **The app could not do this at all.** `marrow workspace add` existed and the
+/// window had no equivalent, so the product whose whole premise is "point it at
+/// your folders" needed a terminal to point it at the first one. The Settings
+/// page listed the command name as a thing that was missing.
+///
+/// The picker runs **here, in Rust**, not in the WebView. Granting the window a
+/// dialog or filesystem capability would undo SEC-012, whose whole point is
+/// that the WebView has no filesystem affordance — only named commands. What
+/// crosses the boundary is one folder the user chose in a native panel.
+///
+/// Returns `None` when the user cancelled, which is not an error.
+#[tauri::command]
+pub async fn add_workspace(
+    core: State<'_, Arc<Core>>,
+    watchers: State<'_, Option<Arc<crate::watching::Watchers>>>,
+) -> Result<Option<Vec<WorkspaceRow>>, UiError> {
+    let Some(picked) = rfd::AsyncFileDialog::new()
+        .set_title("Choose a folder for Marrow to index")
+        .pick_folder()
+        .await
+    else {
+        return Ok(None);
+    };
+    let core = Arc::clone(&core);
+    let watchers = watchers.inner().clone();
+    let path = picked.path().to_path_buf();
+    blocking(move || {
+        let root_id = core.grant(&path)?;
+        // Watch it before indexing, because the sweep a watcher runs on start
+        // *is* the initial index. One code path rather than two that can
+        // disagree about what a newly granted folder gets.
+        if let Some(w) = watchers {
+            w.watch_also(Arc::clone(&core), root_id)?;
+        }
+        core.workspaces().map(Some)
+    })
+    .await
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexHealth {
@@ -388,6 +429,7 @@ pub async fn list_files(
 const COMMAND_NAMES: &[&str] = &[
     "search",
     "list_workspaces",
+    "add_workspace",
     "index_health",
     "file_detail",
     "read_region",
@@ -530,7 +572,7 @@ mod tests {
     fn the_command_surface_is_small_and_read_only() {
         // Every name here is a hole in the WebView sandbox. M1 exposes no
         // mutation at all; when one arrives it needs a deliberate addition.
-        assert_eq!(COMMAND_NAMES.len(), 20);
+        assert_eq!(COMMAND_NAMES.len(), 21);
         for n in COMMAND_NAMES {
             assert!(
                 !n.contains("write") && !n.contains("delete") && !n.contains("exec"),
