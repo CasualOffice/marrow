@@ -31,16 +31,22 @@ jobs:
         with:
           version: 9
 
-      # The same gate as CI. A tag that has not passed the checks is not a
-      # release, it is a mistake with a version number.
-      - name: check
-        run: ./check.sh
-
+      # **Before the check, not after it.** `tauri::generate_context!()` reads
+      # `frontendDist` — `./ui/dist` — at compile time, and that directory is
+      # gitignored build output, so a clean checkout does not have it and
+      # `cargo clippy --workspace --all-targets` cannot compile `marrow-desktop`
+      # without it. This step used to sit *below* the check, so the release
+      # would have died at `./check.sh` exactly the way every CI run did.
       - name: build the ui
         working-directory: crates/desktop/ui
         run: |
           pnpm install --frozen-lockfile
           pnpm build
+
+      # The same gate as CI. A tag that has not passed the checks is not a
+      # release, it is a mistake with a version number.
+      - name: check
+        run: ./check.sh
 
       - name: build the app and the cli
         run: |
