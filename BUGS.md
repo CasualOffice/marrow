@@ -335,3 +335,38 @@ is comments — a real 5,957-line stylesheet in this corpus has 145 comment
 openers, about 2% — and the text parser already finds them and cites them to an
 exact line. No question has been logged that plain text failed to answer for
 CSS, and the rule is not to add a parser until a real file demands one.
+
+
+---
+
+## Adversarial review of the session (2026-08-31)
+
+Nine agents, four independent lenses over ~90 commits, every finding then handed
+to an agent whose job was to **refute** it. 12 candidates, **10 survived**. All
+four acted on; two were critical and both were in reconciliation code written
+the day before.
+
+| # | sev | What | Fixed |
+|---|---|---|---|
+| A1 | **critical** | A walker error — an unopenable directory, a metadata error, a refused symlink escape — was only `debug!`-logged and bumped on a progress counter that is never read back into the outcome. So the bulk-delete guard, whose own comment says a *failed* run must not conclude anything, saw `failures.is_empty()` and ran. Every file under an unreadable directory was soft-deleted while sitting on the disk, reported as `removed: N, failed: 0` — indistinguishable from a healthy reconciliation of a folder the user emptied. | `2696599` |
+| A2 | **critical** | Nothing ever set `files.status` back to `ACTIVE`, so every delete was permanent including a wrong one. A file moved out of a watched folder and back stayed DELETED for ever: the next walk finds it by filesystem identity, restores its path, sees the hash unchanged and reports it *unchanged*, while search and every read tool filter on ACTIVE. No error, no warning, no counter that moves. | `2696599` |
+| A3 | high | `chunks.status` has a `SUPERSEDED` value nothing has ever written, so every chunk count included text no search could return — 274,519 counted against 59,197 reachable, a 4.6× over-report on every surface. | `fc3d9bb` |
+| A4 | high | `marrow embed` derived its work from the same predicate, offering a two-hour job of which four fifths would embed unreachable text, while `marrow status` suggested running it. The coverage figure divided by the inflated denominator and read 1.26% where the truth is 4%. | `fc3d9bb` |
+
+### What the review did that a single reviewer would not
+
+The refutation stage **improved** A1 rather than merely confirming it: it
+narrowed the claim (an unreadable *file* was always caught — hashing records the
+failure; the hole is walker errors specifically), killed the reviewer's own
+worked example as wrong (an absent mount point yields a successful *empty* walk,
+so that case goes through the documented rule rather than this bug), and
+supplied a better one that needs no combination to be bad. It also found an
+existing test in `walk.rs` proving the mechanism, which neither the reviewer nor
+I had connected.
+
+### The structural lesson
+
+Both criticals were unprotected because the existing test covered **one arm of a
+two-arm condition**. `a_cancelled_sweep_never_concludes_that_the_files_it_missed_are_gone`
+pins the `cancelled` half of `!cancelled && failures.is_empty()` — and reads, to
+anyone scanning the list, like coverage of the guard.
