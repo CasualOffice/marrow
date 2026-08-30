@@ -151,7 +151,7 @@
   padding: 0 var(--ctl-pad-sm);
   border: 0;
   border-radius: var(--r-ctrl);
-  background: var(--el1);
+  background: var(--sheet);
   color: var(--fg2);
   font: inherit;
   font-size: var(--fs-ctl);
@@ -183,8 +183,8 @@
   padding: var(--sp-5) var(--sp-6);
   border: 0;
   border-radius: var(--r-surf);
-  box-shadow: var(--hairline);
-  background: var(--el1);
+  box-shadow: var(--el1);
+  background: var(--sheet);
   color: inherit;
   font: inherit;
   text-align: left;
@@ -217,7 +217,7 @@
 .recommended {
   padding: 1px 6px;
   border-radius: var(--r-pill);
-  background: var(--el2);
+  background: var(--sunken);
   color: var(--fg3);
   font-size: var(--fs-micro);
   font-weight: 400;
@@ -336,8 +336,10 @@
   gap: var(--sp-3);
   padding: var(--sp-5) var(--sp-6);
   border-radius: var(--r-surf);
-  box-shadow: var(--hairline);
-  background: var(--el1);
+  /* Shadow-as-border, and `--el1` *is* the shadow — it was being used as a
+     background here, which the browser discarded silently. */
+  box-shadow: var(--el1);
+  background: var(--sheet);
 }
 
 /* Shown, not hidden — but visibly not available (LLM-016). */
@@ -429,7 +431,7 @@
 .tagDetected {
   padding: 1px 7px;
   border-radius: var(--r-pill);
-  background: var(--el2);
+  background: var(--sunken);
   color: var(--fg2);
   font-size: var(--fs-micro);
 }
@@ -491,7 +493,7 @@
 
 .skel {
   border-radius: var(--r-ctrl);
-  background: var(--el2);
+  background: var(--sunken);
 }
 
 @media (prefers-reduced-motion: no-preference) {

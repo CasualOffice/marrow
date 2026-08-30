@@ -36,7 +36,7 @@ pub use admission::{admit, Decision, Overrides, Policy};
 pub use breaker::{Breaker, BreakerState};
 pub use detect::{Detected, Scan};
 pub use download::{download, Https, Progress, Stage};
-pub use envelope::{Envelope, Evidence, Fact, Trust};
+pub use envelope::{Envelope, Evidence, Fact, Role, Session, Trust, Turn};
 pub use kv::{PrefixCache, PrefixKey, Scope};
 pub use provider::{Boundary, Completion, GenerationProvider, StopReason, Token, Usage};
 pub use queue::{Cancel, Depth, Queue};

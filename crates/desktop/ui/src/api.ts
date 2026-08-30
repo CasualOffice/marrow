@@ -433,3 +433,94 @@ export function cancelModelDownload(modelId: string): Promise<ModelsSnapshot> {
 export function dismissModelDownload(modelId: string): Promise<ModelsSnapshot> {
   return call<ModelsSnapshot>("dismiss_model_download", { modelId });
 }
+
+// ── ask (Part 8 §148) ─────────────────────────────────────────────────────
+
+export interface Citation {
+  readonly id: string;
+  readonly path: string;
+  readonly relativePath: string;
+  readonly location: string;
+  readonly line: number | null;
+  readonly excerpt: string;
+  readonly provenance: string;
+}
+
+export interface ExcludedSource {
+  readonly relativePath: string;
+  readonly reason: string;
+}
+
+export type AskEvent =
+  | {
+      readonly kind: "sources";
+      readonly hits: readonly Citation[];
+      readonly excluded: readonly ExcludedSource[];
+      /** UX-013: what left the device, even when the answer is local. */
+      readonly bytes: number;
+      readonly distinctSources: number;
+      /** UX-012: stated for every generation. */
+      readonly boundary: string;
+      readonly model: string;
+    }
+  | { readonly kind: "token"; readonly text: string }
+  | { readonly kind: "thinking"; readonly text: string }
+  | {
+      readonly kind: "done";
+      readonly promptTokens: number;
+      readonly outputTokens: number;
+      readonly thinkingTokens: number;
+      readonly cachedPrefixTokens: number;
+      readonly stopReason: string;
+      readonly elapsedMs: number;
+    }
+  | { readonly kind: "failed"; readonly code: string; readonly message: string };
+
+/**
+ * Ask, streaming.
+ *
+ * A `Channel` rather than a promise of a string: an answer that arrives all at
+ * once is a spinner with extra steps, and SKEL-004 requires content to replace
+ * the skeleton as it comes.
+ */
+export interface PriorTurn {
+  readonly role: "user" | "assistant";
+  readonly text: string;
+}
+
+export async function ask(
+  args: {
+    conversation: string;
+    question: string;
+    history: readonly PriorTurn[];
+    thorough: boolean;
+  },
+  onEvent: (e: AskEvent) => void,
+): Promise<string> {
+  if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
+    const { mockAsk } = await import("./dev/fixtures");
+    return mockAsk(args.question, args.thorough, onEvent, args.history.length);
+  }
+  const { Channel, invoke } = await import("@tauri-apps/api/core");
+  const channel = new Channel<AskEvent>();
+  channel.onmessage = onEvent;
+  return invoke<string>("ask", {
+    conversation: args.conversation,
+    question: args.question,
+    history: args.history,
+    thorough: args.thorough,
+    onEvent: channel,
+  });
+}
+
+export function forgetConversation(conversation: string): Promise<void> {
+  return call<void>("forget_conversation", { conversation });
+}
+
+export function cancelAsk(id: string): Promise<boolean> {
+  return call<boolean>("cancel_ask", { id });
+}
+
+export function releaseModel(): Promise<ModelsSnapshot> {
+  return call<ModelsSnapshot>("release_model", {});
+}

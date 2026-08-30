@@ -1,0 +1,413 @@
+.view {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--sheet);
+}
+
+.scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-10) var(--sp-12) var(--sp-8);
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── the thread ─────────────────────────────────────────────────────── */
+
+.thread {
+  margin: 0 auto;
+  padding: 0;
+  list-style: none;
+  width: 100%;
+  max-width: var(--prose-measure);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-10);
+}
+
+.turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+/* The question, set apart without being a bubble — this is a document, not a
+   chat app, and the answer is the thing being read. */
+.question {
+  margin: 0;
+  padding-left: var(--sp-5);
+  box-shadow: inset 2px 0 0 var(--accent);
+  font-family: var(--tight);
+  font-size: var(--fs-title);
+  font-weight: 500;
+  letter-spacing: var(--ls-tight);
+  line-height: var(--lh-tight);
+}
+
+.empty {
+  margin: auto;
+  max-width: 34ch;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.emptyHead {
+  margin: 0;
+  font-family: var(--tight);
+  font-size: var(--fs-head);
+  font-weight: 500;
+  letter-spacing: var(--ls-tight);
+}
+
+.emptyBody {
+  margin: 0;
+  color: var(--fg2);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-body);
+}
+
+/* ── per-turn footer ────────────────────────────────────────────────── */
+
+.footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+}
+
+.ghost {
+  height: var(--ctl-h-sm);
+  padding: 0 var(--ctl-pad-sm);
+  border: 0;
+  border-radius: var(--r-ctrl);
+  background: none;
+  color: var(--fg3);
+  font: inherit;
+  font-size: var(--fs-ctl);
+  cursor: pointer;
+}
+
+.ghost:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+/* ── the question ───────────────────────────────────────────────────── */
+
+.composer {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  width: 100%;
+  max-width: calc(var(--prose-measure) + var(--sp-12) * 2);
+  margin: 0 auto;
+  padding: var(--sp-5) var(--sp-12) var(--sp-8);
+  background: var(--sheet);
+}
+
+.field {
+  width: 100%;
+  max-height: 40vh;
+  padding: var(--sp-5) var(--sp-6);
+  border: 0;
+  border-radius: var(--r-surf);
+  background: var(--sheet);
+  box-shadow: var(--el2);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  resize: vertical;
+}
+
+.field:focus-visible {
+  outline: var(--focus-ring-w) solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.field::placeholder {
+  color: var(--fg3);
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+}
+
+/* GEN-012: the trade is visible before the request is sent. */
+.modes {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r-ctrl);
+  background: var(--sunken);
+}
+
+.mode {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: var(--sp-2) var(--sp-5);
+  border: 0;
+  border-radius: var(--r-ctrl);
+  background: none;
+  color: var(--fg2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.modeOn {
+  background: var(--sheet);
+  color: var(--fg);
+  box-shadow: var(--hairline);
+}
+
+.mode:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.modeName {
+  font-size: var(--fs-ctl);
+  font-weight: 500;
+}
+
+.modeWhy {
+  font-size: var(--fs-micro);
+  color: var(--fg3);
+}
+
+.grow {
+  flex-grow: 1;
+}
+
+/* UX-012: where the work happens, on every generation. */
+.boundary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--fg3);
+  font-size: var(--fs-micro);
+  font-family: var(--mono);
+}
+
+.send,
+.stop {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: var(--ctl-h);
+  padding: 0 var(--ctl-pad);
+  border: 0;
+  border-radius: var(--r-ctrl);
+  font: inherit;
+  font-size: var(--fs-ctl);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.send {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.send:disabled {
+  background: var(--sheet);
+  color: var(--fg3);
+  cursor: default;
+}
+
+.stop {
+  background: var(--sheet);
+  color: var(--fg);
+}
+
+/* ── sources ────────────────────────────────────────────────────────── */
+
+.sources {
+  font-size: var(--fs-sm);
+}
+
+.sources summary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-4);
+  color: var(--fg2);
+  cursor: pointer;
+}
+
+.sourceList {
+  margin: var(--sp-4) 0 0;
+}
+
+/* A source that was found and not used. Visible before the list is opened. */
+.sourcesExcluded {
+  padding: 0 6px;
+  border-radius: var(--r-pill);
+  background: var(--tint-warn-soft);
+  color: var(--warn-text);
+  font-size: var(--fs-micro);
+}
+
+.sourcesBytes {
+  color: var(--fg3);
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  font-weight: 400;
+}
+
+.sourceList {
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.source {
+  display: flex;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-5);
+  border-radius: var(--r-ctrl);
+  background: var(--sunken);
+  scroll-margin: var(--sp-10);
+}
+
+.source:target {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.sourceId {
+  flex: none;
+  padding: 0 5px;
+  height: fit-content;
+  border-radius: var(--r-chip);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+}
+
+.sourceBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sourcePath {
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  color: var(--fg2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourceExcerpt {
+  font-size: var(--fs-xs);
+  color: var(--fg2);
+  line-height: var(--lh-body);
+}
+
+/* Silence would look like these were never found. */
+.excluded {
+  margin: 0;
+  padding-left: var(--sp-6);
+  color: var(--fg3);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-body);
+}
+
+/* ── reasoning ──────────────────────────────────────────────────────── */
+
+.thinking {
+  max-width: var(--prose-measure);
+  padding: var(--sp-4) var(--sp-5);
+  border-radius: var(--r-surf);
+  background: var(--sunken);
+  font-size: var(--fs-xs);
+}
+
+.thinking summary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-4);
+  color: var(--fg2);
+  cursor: pointer;
+}
+
+.thinkingNote {
+  color: var(--fg3);
+  font-size: var(--fs-micro);
+}
+
+.thinkingText {
+  margin: var(--sp-4) 0 0;
+  color: var(--fg2);
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-body);
+  white-space: pre-wrap;
+}
+
+/* ── outcome ────────────────────────────────────────────────────────── */
+
+.usage {
+  margin: 0;
+  max-width: var(--prose-measure);
+  color: var(--fg3);
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+}
+
+/* An answer cut short must be labelled, not presented as complete. */
+.truncated {
+  color: var(--warn-text);
+}
+
+.failure {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-4);
+  max-width: var(--prose-measure);
+  padding: var(--sp-5) var(--sp-6);
+  border-radius: var(--r-surf);
+  background: var(--tint-warn-soft);
+  color: var(--warn-text);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-body);
+}
+
+.failure svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.failureText {
+  margin: 0;
+}
+
+.linkBtn {
+  margin-top: var(--sp-3);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  text-decoration: underline;
+}

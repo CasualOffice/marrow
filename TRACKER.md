@@ -31,10 +31,12 @@ so this is a dependency rather than a detour.
 | S1 | Hardware probe + live sampler + sizing + Models page | `[x]` | `marrow-hw`, and the page reads it |
 | S2 | Registry, catalogue, download, Ollama detection | `[x]` | Pinned against real manifests; a 212 MB download verified end to end |
 | S3 | Supervisor: states, admission, breaker, queue, scratch | `[x]` | `marrow-model`. 92 tests |
-| S4 | MLX runtime in a worker process, KV reuse, Fast/Thorough | `[ ]` | The first line of real inference |
-| S5 | Ask pipeline (§148), skeletons, streaming | `[ ]` | — |
-| S5b | Eval harness across the shortlist (§149) | `[ ]` | — |
+| S4 | MLX runtime in a worker process, KV reuse, Fast/Thorough | `[x]` | Real answers; 81% prefix reuse on a follow-up |
+| S5 | Ask pipeline (§148), streaming, Markdown/Mermaid/HTML | `[x]` | A conversation, not a one-shot box |
+| S5b | Eval harness across the shortlist (§149) | `[ ]` | Two measurements taken; no harness yet |
 | S6 | Cloud providers behind the same trait | `[ ]` | — |
+| S7 | MCP creation tools (file, mermaid, html) | `[ ]` | Gated on the adversarial corpus (M5) |
+| S8 | MCP fetch and research | `[ ]` | Needs an egress policy first |
 
 ---
 
@@ -213,12 +215,37 @@ nobody is asking.
 - [x] KV prefix cache accounting: exact-prefix, scope-fenced, LRU under a footprint-derived cap
 - [x] Supervisor thread with sampler-paced wakeups and a flushing shutdown
 
-### S4 — first runtime `[ ]`
-- [ ] `GenerationProvider` trait
-- [ ] MLX behind it, availability verified by loading (LLM-036)
-- [ ] Worker process with rlimits; OOM kills the worker, never the index
-- [ ] KV reuse wired to the real cache
-- [ ] Fast / Thorough on the wire
+### S4 — first runtime `[x]`
+- [x] `GenerationProvider` trait, one shape for local and cloud
+- [x] MLX in a worker process over JSON Lines; an OOM kills the worker, not the index
+- [x] The context envelope (§114) — per-session delimiter, collision regeneration, untrusted never last
+- [x] KV prefix reuse: 604-token prompt, 487 cached on a follow-up
+- [x] Fast / Thorough wired to the model's own reasoning flag and billed apart
+- [ ] rlimits on the worker (memory cap, CPU share) — only the wall clock is enforced today
+
+### S5 — the ask surface `[x]`
+- [x] Streaming to the window over a Tauri channel, token by token
+- [x] A conversation: turns kept, history sent back, per-turn sources and reasoning
+- [x] Markdown rendered and sanitised; `mermaid` fences drawn; `html` fences run in a sandboxed frame with no same-origin access
+- [x] Citations clickable, self-written sources listed as excluded, egress disclosed
+- [ ] Skeletons on the *search* path (SKEL-001..008) — only the Ask path streams
+
+### S7 — creation tools `[ ]`
+**Gated.** CLAUDE.md: the adversarial corpus must be green before any write
+tool ships, and it does not exist yet. Everything written must be marked
+`origin = SELF` so it can never be cited back (invariant #9), canonicalized at
+operation time (#5), and stale-checked immediately before the write (#6).
+- [ ] The adversarial corpus itself
+- [ ] `create_file` / `create_diagram` / `create_page` over MCP
+
+### S8 — fetch and research `[ ]`
+**Needs a policy before code.** Fetched content is `external = true` and
+`UNTRUSTED_CONTENT`; the request itself is egress and must be disclosed
+(UX-013). Loopback and private ranges refused by default, or the tool is an
+SSRF primitive pointed at the user's own network.
+- [ ] The egress policy, written down
+- [ ] `fetch_url` with the policy enforced
+- [ ] Multi-step research on top of it
 
 ---
 

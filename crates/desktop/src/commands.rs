@@ -364,6 +364,10 @@ const COMMAND_NAMES: &[&str] = &[
     "download_model",
     "cancel_model_download",
     "dismiss_model_download",
+    "ask",
+    "cancel_ask",
+    "release_model",
+    "forget_conversation",
 ];
 
 #[cfg(test)]
@@ -387,7 +391,7 @@ mod tests {
     fn the_command_surface_is_small_and_read_only() {
         // Every name here is a hole in the WebView sandbox. M1 exposes no
         // mutation at all; when one arrives it needs a deliberate addition.
-        assert_eq!(COMMAND_NAMES.len(), 14);
+        assert_eq!(COMMAND_NAMES.len(), 18);
         for n in COMMAND_NAMES {
             assert!(
                 !n.contains("write") && !n.contains("delete") && !n.contains("exec"),
@@ -493,4 +497,85 @@ pub async fn dismiss_model_download(
         Ok(hub.snapshot())
     })
     .await
+}
+
+// ── ask (Part 8 §148) ─────────────────────────────────────────────────────
+
+/// Ask a question and stream the answer.
+///
+/// Takes a `Channel` rather than returning a string: SKEL-004 says streaming
+/// replaces skeleton rows as content arrives, and a command that returns only
+/// when the model is finished cannot do that.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // Each of these is a distinct input the
+                                     // window has; folding them into one struct would only move the list.
+pub async fn ask(
+    core: State<'_, Arc<Core>>,
+    hub: State<'_, Arc<crate::models::Hub>>,
+    conversation: String,
+    question: String,
+    history: Vec<crate::ask::PriorTurn>,
+    thorough: bool,
+    on_event: tauri::ipc::Channel<crate::ask::AskEvent>,
+) -> Result<String, UiError> {
+    let core = Arc::clone(&core);
+    let hub = Arc::clone(&hub);
+    let cancel = marrow_model::queue::Cancel::new();
+    let token = hub.register_ask(cancel.clone());
+    let handle = token.clone();
+    blocking(move || {
+        let turns = crate::ask::turns_from(&history);
+        crate::ask::run(
+            &core,
+            &hub,
+            &conversation,
+            &question,
+            &turns,
+            thorough,
+            &cancel,
+            &mut |e| {
+                // A closed channel means the window went away mid-answer. Stop
+                // generating rather than talking to nobody.
+                if on_event.send(e).is_err() {
+                    cancel.cancel();
+                }
+            },
+        );
+        hub.finish_ask(&handle);
+        Ok(handle)
+    })
+    .await
+}
+
+/// Stop the answer in progress. UX §10: within 500 ms.
+#[tauri::command]
+pub async fn cancel_ask(
+    hub: State<'_, Arc<crate::models::Hub>>,
+    id: String,
+) -> Result<bool, UiError> {
+    Ok(hub.cancel_ask(&id))
+}
+
+/// Release the loaded model now rather than waiting out the idle timer.
+#[tauri::command]
+pub async fn release_model(
+    hub: State<'_, Arc<crate::models::Hub>>,
+) -> Result<crate::models::ModelsSnapshot, UiError> {
+    let hub = Arc::clone(&hub);
+    blocking(move || {
+        hub.release_model();
+        Ok(hub.snapshot())
+    })
+    .await
+}
+
+/// Drop a conversation's session. Called when the thread is cleared, so a
+/// delimiter is not held for a conversation nobody will return to.
+#[tauri::command]
+pub async fn forget_conversation(
+    hub: State<'_, Arc<crate::models::Hub>>,
+    conversation: String,
+) -> Result<(), UiError> {
+    hub.forget_session(&conversation);
+    Ok(())
 }

@@ -10,7 +10,7 @@ import { create } from "zustand";
 import type { SearchHit } from "./api";
 import { applyTheme, loadTheme, saveTheme, type ThemeChoice } from "./theme";
 
-export type View = "search" | "files" | "models" | "status" | "settings";
+export type View = "search" | "ask" | "files" | "models" | "status" | "settings";
 export type Pane = "sidebar" | "results" | "detail";
 
 /**

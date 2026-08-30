@@ -13,6 +13,8 @@
  */
 
 import type {
+  AskEvent,
+  Citation,
   FileDetail,
   FileRow,
   IndexHealth,
@@ -624,6 +626,12 @@ export async function mockInvoke<T>(
       devProfile = String((args as { profile?: unknown }).profile ?? "balanced");
       return devModels() as T;
     }
+    case "cancel_ask":
+      return true as T;
+    case "forget_conversation":
+      return undefined as T;
+    case "release_model":
+      return devModels() as T;
     case "open_path":
     case "reveal_path":
       // Nothing to open in a browser; the command exists and succeeds.
@@ -631,4 +639,126 @@ export async function mockInvoke<T>(
     default:
       throw { code: "UI_UNEXPECTED", message: `No fixture for "${cmd}".` };
   }
+}
+
+/**
+ * A scripted answer, so the streaming path, the Markdown renderer, the
+ * diagram and the sandboxed preview are all exercised in `pnpm dev` without a
+ * model. The delay is real: a stream that arrives instantly hides every layout
+ * problem that only appears while text is growing.
+ */
+export async function mockAsk(
+  question: string,
+  thorough: boolean,
+  onEvent: (e: AskEvent) => void,
+  priorTurns = 0,
+): Promise<string> {
+  const sources: Citation[] = [
+    {
+      id: "E1",
+      path: "/Users/you/melp/services/vault/README.md",
+      relativePath: "services/vault/README.md",
+      location: "services/vault/README.md:14",
+      line: 14,
+      excerpt:
+        "Enclave stores documents encrypted at rest; the vault service holds the keys and never the plaintext.",
+      provenance: "exact",
+    },
+    {
+      id: "E2",
+      path: "/Users/you/melp/services/vault/src/auth/token.rs",
+      relativePath: "services/vault/src/auth/token.rs",
+      location: "services/vault/src/auth/token.rs:88",
+      line: 88,
+      excerpt:
+        "Tokens are rotated every fifteen minutes; a refresh that arrives after the window is rejected rather than extended.",
+      provenance: "exact",
+    },
+  ];
+
+  onEvent({
+    kind: "sources",
+    hits: sources,
+    excluded: [
+      {
+        relativePath: "notes/summary-generated.md",
+        reason: "written by Marrow itself, so it cannot support a claim",
+      },
+    ],
+    bytes: 4820,
+    distinctSources: 2,
+    boundary: "local",
+    model: "Qwen 3.5 4B",
+  });
+
+  if (thorough) {
+    for (const t of [
+      "The question is about how the vault handles keys. ",
+      "E1 says the plaintext never reaches the vault service. ",
+      "E2 is about token rotation, which is adjacent but not the same thing. ",
+      "I should answer from E1 and mention E2 only as context.",
+    ]) {
+      await sleep(90);
+      onEvent({ kind: "thinking", text: t });
+    }
+  }
+
+  const answer = `The vault holds **keys**, never plaintext [E1].
+
+Documents are encrypted at rest before they reach it, so a compromise of the
+vault service yields key material and nothing readable on its own.
+
+| Component | Holds | Rotates |
+| --- | --- | --- |
+| vault | keys | every 15 min [E2] |
+| store | ciphertext | never |
+
+\`\`\`mermaid
+flowchart LR
+  A[Document] -->|encrypt| B[Ciphertext]
+  B --> C[(Store)]
+  A -.key.-> D[Vault]
+  D -->|rotate 15m| D
+\`\`\`
+
+A refresh arriving after the window is rejected rather than extended [E2].
+
+\`\`\`html
+<div style="font:14px system-ui;padding:12px">
+  <b>Key rotation</b><br>
+  <span id="t">15:00</span> until the next rotation
+  <script>
+    let s = 900;
+    setInterval(() => {
+      s = s > 0 ? s - 1 : 900;
+      document.getElementById('t').textContent =
+        String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+    }, 1000);
+  </script>
+</div>
+\`\`\`
+`;
+
+  for (const word of answer.split(/(?<=\s)/)) {
+    await sleep(12);
+    onEvent({ kind: "token", text: word });
+  }
+
+  onEvent({
+    kind: "done",
+    promptTokens: 604 + priorTurns * 90,
+    outputTokens: 168,
+    thinkingTokens: thorough ? 406 : 0,
+    // A follow-up reuses the whole preamble; the first turn has nothing to
+    // reuse. Modelled here so the footer is exercised both ways.
+    cachedPrefixTokens: priorTurns === 0 ? 0 : 487 + (priorTurns - 1) * 90,
+    stopReason: "stop",
+    elapsedMs: thorough ? 5200 : 2100,
+  });
+  void question;
+  return "dev-ask";
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((r) => setTimeout(r, ms));
 }

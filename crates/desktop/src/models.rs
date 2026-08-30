@@ -24,11 +24,14 @@ use marrow_hw::{
 };
 use marrow_model::detect::{self, Scan};
 use marrow_model::download::{self, Https, Progress, Stage};
+use marrow_model::envelope::{Envelope, Session};
+use marrow_model::provider::{Completion, GenerateRequest, GenerationProvider, Token};
 use marrow_model::queue::Cancel;
 use marrow_model::registry::Registry;
+use marrow_model::request::Reasoning;
 use marrow_model::scratch::ModelWorkspace;
 use marrow_model::supervisor::{self, Command, Event, ModelState, Supervisor};
-use marrow_model::worker::Runtime;
+use marrow_model::worker::{MlxProvider, Runtime, Worker};
 use serde::Serialize;
 
 /// How often the machine is sampled while the app is open.
@@ -192,6 +195,16 @@ pub struct Hub {
     /// refetches every four seconds keeps showing the bar.
     downloads: Arc<Mutex<BTreeMap<String, Progress>>>,
     cancels: Mutex<BTreeMap<String, Cancel>>,
+    /// The loaded model, if any. One at a time: this machine has room for one
+    /// 4B and the things around it, and juggling two would spend the budget
+    /// the whole tiering exists to protect (§139.5).
+    loaded: Mutex<Option<Loaded>>,
+    /// Answers in flight, so Escape reaches the right one.
+    asks: Mutex<BTreeMap<String, Cancel>>,
+    /// One envelope session per conversation. Held here rather than in the
+    /// window because it is what makes the prompt cache hit, and the window
+    /// has no business knowing that.
+    sessions: Mutex<BTreeMap<String, Session>>,
     commands: Sender<Command>,
     _supervisor: JoinHandle<()>,
     _events: JoinHandle<()>,
@@ -293,6 +306,9 @@ impl Hub {
             workspace_problem,
             downloads: Arc::new(Mutex::new(BTreeMap::new())),
             cancels: Mutex::new(BTreeMap::new()),
+            loaded: Mutex::new(None),
+            asks: Mutex::new(BTreeMap::new()),
+            sessions: Mutex::new(BTreeMap::new()),
             commands: ctx,
             _supervisor: handle,
             _events: events,
@@ -457,6 +473,207 @@ impl Hub {
         Some(p)
     }
 
+    /// Which installed model should write answers.
+    ///
+    /// The largest installed generative model that still fits, because within
+    /// the profile's budget a larger model is better at the one job this is
+    /// for. Embedders are excluded — they do not answer — and so is anything
+    /// the current conditions would refuse anyway.
+    pub fn generator(&self) -> Option<String> {
+        self.sampler.tick();
+        let available = self
+            .sampler
+            .conditions(SAMPLE_INTERVAL * 4)
+            .min_available_bytes;
+        let registry = self.registry.lock().ok()?;
+        let mut candidates: Vec<(f64, String)> = registry
+            .iter()
+            .filter(|e| e.installed && !e.capabilities.embedding)
+            .filter(|e| {
+                assess(
+                    &self.machine,
+                    &e.shape(e.default_context, KvPrecision::F16),
+                    available,
+                )
+                .offerable()
+            })
+            .map(|e| (e.params_b, e.id.clone()))
+            .collect();
+        candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.into_iter().next().map(|(_, id)| id)
+    }
+
+    /// Generate an answer, loading the model on first use (LLM-024).
+    ///
+    /// Launch never waits on 4 GB of weights; the first question does, and it
+    /// says so through the `Loading` state while it happens.
+    pub fn generate(
+        &self,
+        model_id: &str,
+        envelope: &Envelope,
+        thorough: bool,
+        cancel: &Cancel,
+        on_token: &mut dyn FnMut(Token),
+    ) -> marrow_core::Result<Completion> {
+        let entry = self
+            .registry
+            .lock()
+            .ok()
+            .and_then(|r| r.get(model_id).cloned())
+            .ok_or_else(|| {
+                marrow_core::Error::new(
+                    marrow_core::Code::ModNotInstalled,
+                    format!("No model called {model_id}."),
+                )
+            })?;
+        if entry.capabilities.reasoning || !thorough {
+            // Fine either way.
+        } else {
+            // GEN-013: refused with the reason, never silently downgraded.
+            return Err(marrow_core::Error::new(
+                marrow_core::Code::ModUnsupportedCapability,
+                entry
+                    .reasoning_unavailable_because()
+                    .unwrap_or_else(|| "This model answers directly.".into()),
+            ));
+        }
+
+        let mut slot = self.loaded.lock().map_err(|_| poisoned())?;
+        if slot.as_ref().map(|l| l.model_id.as_str()) != Some(model_id) {
+            // Swapping models means the old one's weights and cache go first;
+            // holding both would be exactly the memory spike admission exists
+            // to prevent.
+            *slot = None;
+            let runtime = self.runtime.clone().ok_or_else(|| {
+                marrow_core::Error::new(
+                    marrow_core::Code::CfgInvalid,
+                    Runtime::setup_hint(&self.data_dir),
+                )
+            })?;
+            let workspace = self.workspace.clone().ok_or_else(|| {
+                marrow_core::Error::new(
+                    marrow_core::Code::CfgInvalid,
+                    self.workspace_problem
+                        .clone()
+                        .unwrap_or_else(|| "The model directory is unavailable.".into()),
+                )
+            })?;
+            let digest = entry.manifest_digest.as_deref().ok_or_else(|| {
+                marrow_core::Error::new(
+                    marrow_core::Code::ModNotInstalled,
+                    format!("{} has no local weights to load.", entry.display_name),
+                )
+            })?;
+            let dir = workspace.weights_dir(digest);
+            if !dir.is_dir() {
+                return Err(marrow_core::Error::new(
+                    marrow_core::Code::ModNotInstalled,
+                    format!("{} is not downloaded yet.", entry.display_name),
+                ));
+            }
+            let mut worker = Worker::start(&runtime)?;
+            worker.load(model_id, &dir)?;
+            *slot = Some(Loaded {
+                model_id: model_id.to_string(),
+                provider: MlxProvider::new(worker, model_id, entry.display_name.clone()),
+            });
+        }
+
+        let provider = &slot.as_ref().expect("just loaded").provider;
+        provider.generate(
+            GenerateRequest {
+                model_id,
+                envelope,
+                reasoning: if thorough {
+                    Reasoning::THOROUGH
+                } else {
+                    Reasoning::Off
+                },
+                max_output_tokens: 1024,
+                cancel,
+            },
+            on_token,
+        )
+    }
+
+    /// What the loaded model is costing right now (LLM-053).
+    ///
+    /// Reads the two locks in sequence, never nested: `loaded` is taken by
+    /// `generate` for the whole duration of a request, and holding `registry`
+    /// across it would make a snapshot wait on an answer.
+    fn resident_bytes(&self) -> u64 {
+        let id = match self.loaded.lock() {
+            Ok(slot) => slot.as_ref().map(|l| l.model_id.clone()),
+            Err(_) => None,
+        };
+        let Some(id) = id else { return 0 };
+        self.registry
+            .lock()
+            .ok()
+            .and_then(|r| r.get(&id).and_then(|e| e.weights_bytes))
+            .unwrap_or(0)
+    }
+
+    /// The delimiter session for a conversation, creating one on first use.
+    ///
+    /// Taken out and handed back rather than borrowed, so a long generation
+    /// never holds the map locked.
+    pub fn session_for(&self, conversation: &str) -> Session {
+        self.sessions
+            .lock()
+            .ok()
+            .and_then(|mut m| m.remove(conversation))
+            .unwrap_or_default()
+    }
+
+    pub fn keep_session(&self, conversation: &str, session: Session) {
+        if let Ok(mut m) = self.sessions.lock() {
+            // A conversation nobody returns to would otherwise keep a
+            // delimiter forever. Sixteen is more threads than anyone has open.
+            if m.len() >= 16 {
+                let oldest = m.keys().next().cloned();
+                if let Some(k) = oldest {
+                    m.remove(&k);
+                }
+            }
+            m.insert(conversation.to_string(), session);
+        }
+    }
+
+    /// Forget a conversation's session. Called when the thread is cleared.
+    pub fn forget_session(&self, conversation: &str) {
+        let _ = self.sessions.lock().map(|mut m| m.remove(conversation));
+    }
+
+    /// Track an answer in progress so it can be cancelled by id.
+    pub fn register_ask(&self, cancel: Cancel) -> String {
+        let id = marrow_core::RequestId::new().to_string();
+        if let Ok(mut m) = self.asks.lock() {
+            m.insert(id.clone(), cancel);
+        }
+        id
+    }
+
+    pub fn finish_ask(&self, id: &str) {
+        let _ = self.asks.lock().map(|mut m| m.remove(id));
+    }
+
+    /// UX §10: felt within 500 ms. The worker polls its cancel on a 100 ms
+    /// slice, so this lands well inside that.
+    pub fn cancel_ask(&self, id: &str) -> bool {
+        match self.asks.lock() {
+            Ok(m) => m.get(id).map(|c| c.cancel()).is_some(),
+            Err(_) => false,
+        }
+    }
+
+    /// Release the loaded model. LLM-049: weights, cache and buffers.
+    pub fn release_model(&self) {
+        if let Ok(mut slot) = self.loaded.lock() {
+            *slot = None;
+        }
+    }
+
     pub fn snapshot(&self) -> ModelsSnapshot {
         self.sampler.tick();
         let conditions = self.sampler.conditions(SAMPLE_INTERVAL * 4);
@@ -516,7 +733,7 @@ impl Hub {
             sustained_load: conditions.sustained_load,
             thermal: format!("{:?}", conditions.latest.thermal).to_lowercase(),
             sample_stale: conditions.stale,
-            resident_bytes: 0,
+            resident_bytes: self.resident_bytes(),
             models_dir_problem: self.workspace_problem.clone(),
             detected: scan
                 .detected
@@ -585,6 +802,13 @@ const RUNTIME_READY: &str = "MLX is available on this machine. A model that is \
 const RUNTIME_MISSING: &str = "No inference runtime is installed, so nothing here \
      can answer a question yet. Models can still be downloaded, and search works \
      without one.";
+
+/// A model held in a worker process.
+#[derive(Debug)]
+struct Loaded {
+    model_id: String,
+    provider: MlxProvider,
+}
 
 /// Where the worker script lives beside the binary.
 ///

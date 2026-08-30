@@ -11,6 +11,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![forbid(unsafe_code)]
 
+mod ask;
 mod commands;
 mod models;
 mod state;
@@ -85,6 +86,10 @@ fn main() {
             commands::download_model,
             commands::cancel_model_download,
             commands::dismiss_model_download,
+            commands::ask,
+            commands::cancel_ask,
+            commands::release_model,
+            commands::forget_conversation,
         ])
         .build(tauri::generate_context!())
         .expect("failed to start the Marrow window")

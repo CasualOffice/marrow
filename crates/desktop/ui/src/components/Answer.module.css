@@ -1,0 +1,260 @@
+/* A streamed answer. Nothing here executes the model's output in this page. */
+
+.answer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  max-width: var(--prose-measure);
+}
+
+/* ── prose ──────────────────────────────────────────────────────────── */
+
+.prose {
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  color: var(--fg);
+}
+
+.prose > :first-child { margin-top: 0; }
+.prose > :last-child { margin-bottom: 0; }
+
+.prose p,
+.prose ul,
+.prose ol,
+.prose blockquote,
+.prose table {
+  margin: 0 0 var(--sp-5);
+}
+
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
+  margin: var(--sp-7) 0 var(--sp-3);
+  font-family: var(--tight);
+  font-weight: 500;
+  letter-spacing: var(--ls-tight);
+}
+
+.prose h1 { font-size: var(--fs-head); }
+.prose h2 { font-size: var(--fs-title); }
+.prose h3 { font-size: var(--fs-body); }
+
+.prose ul,
+.prose ol {
+  padding-left: var(--sp-7);
+}
+
+.prose li { margin-bottom: var(--sp-2); }
+
+.prose blockquote {
+  padding-left: var(--sp-5);
+  box-shadow: inset 2px 0 0 var(--line-strong);
+  color: var(--fg2);
+}
+
+.prose code {
+  padding: 1px 5px;
+  border-radius: var(--r-chip);
+  background: var(--sunken);
+  font-family: var(--mono);
+  font-size: 0.92em;
+}
+
+.prose pre {
+  margin: 0 0 var(--sp-5);
+  padding: var(--sp-5);
+  border-radius: var(--r-surf);
+  background: var(--sunken);
+  overflow-x: auto;
+}
+
+.prose pre code {
+  padding: 0;
+  background: none;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-body);
+}
+
+/* Tables scroll inside themselves; the page never scrolls sideways. */
+.prose table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+
+.prose th,
+.prose td {
+  padding: var(--sp-3) var(--sp-5);
+  text-align: left;
+  box-shadow: inset 0 -1px 0 var(--line);
+}
+
+.prose th {
+  font-weight: 500;
+  color: var(--fg2);
+}
+
+.prose a {
+  color: var(--accent-text);
+}
+
+/* A citation is navigation inside the app, not a link out. */
+.prose :global(.cite) {
+  padding: 0 4px;
+  border-radius: var(--r-chip);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-family: var(--mono);
+  font-size: 0.85em;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.prose :global(.cite):hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* ── diagrams ───────────────────────────────────────────────────────── */
+
+.diagram {
+  margin: 0;
+  padding: var(--sp-6);
+  border-radius: var(--r-surf);
+  background: var(--sunken);
+  overflow-x: auto;
+}
+
+.diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.diagramPending {
+  min-height: 120px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .diagramPending {
+    animation: diagramPulse 1.4s var(--ease) infinite;
+  }
+}
+
+@keyframes diagramPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* A diagram that will not draw shows its source rather than vanishing. */
+.diagramFailed {
+  margin: 0;
+  padding: var(--sp-5);
+  border-radius: var(--r-surf);
+  background: var(--tint-warn-soft);
+  font-size: var(--fs-xs);
+}
+
+.diagramFailed figcaption {
+  margin-bottom: var(--sp-3);
+  color: var(--warn-text);
+}
+
+.diagramFailed pre {
+  margin: 0;
+  font-family: var(--mono);
+  overflow-x: auto;
+}
+
+.diagramWhy {
+  margin: var(--sp-3) 0 0;
+  color: var(--fg3);
+  font-family: var(--mono);
+}
+
+/* ── generated pages ────────────────────────────────────────────────── */
+
+.preview {
+  margin: 0;
+  border-radius: var(--r-surf);
+  box-shadow: var(--hairline);
+  overflow: hidden;
+}
+
+.previewHead {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-5);
+  background: var(--sheet);
+  box-shadow: var(--el1);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+
+/* The isolation, stated. A preview that does not say what it can reach is a
+   preview the user has to guess about. */
+.previewNote {
+  flex: 1;
+  color: var(--fg3);
+  font-weight: 400;
+}
+
+.previewToggle {
+  height: var(--ctl-h-sm);
+  padding: 0 var(--ctl-pad-sm);
+  border: 0;
+  border-radius: var(--r-ctrl);
+  background: var(--sunken);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--fs-ctl);
+  cursor: pointer;
+}
+
+.previewToggle:hover {
+  background: var(--hover);
+}
+
+.previewFrame {
+  display: block;
+  width: 100%;
+  height: 260px;
+  border: 0;
+  background: #fff;
+}
+
+.previewSource {
+  margin: 0;
+  max-height: 260px;
+  padding: var(--sp-5);
+  background: var(--sunken);
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-body);
+  overflow: auto;
+}
+
+/* ── streaming ──────────────────────────────────────────────────────── */
+
+.caret {
+  display: inline-block;
+  width: 7px;
+  height: 1.1em;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  border-radius: 1px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .caret {
+    animation: blink 1s steps(2, start) infinite;
+  }
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}

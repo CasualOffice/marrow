@@ -59,6 +59,20 @@ export function ms(n: number): string {
   return n < 1 ? "<1 ms" : `${count(n)} ms`;
 }
 
+/**
+ * A duration a person waited for.
+ *
+ * Distinct from `ms`, which reports how fast something was: `415 µs` is a
+ * boast about search, and `5,200 ms` is an unreadable way to say five seconds.
+ */
+export function duration(msValue: number): string {
+  if (msValue < 1000) return `${Math.round(msValue)} ms`;
+  const secs = msValue / 1000;
+  if (secs < 60) return `${secs.toFixed(secs < 10 ? 1 : 0)}s`;
+  const mins = Math.floor(secs / 60);
+  return `${mins}m ${Math.round(secs - mins * 60)}s`;
+}
+
 /** `dir/` of a workspace-relative path, or "" at the root. */
 export function dirOf(relativePath: string): string {
   const i = relativePath.lastIndexOf("/");
