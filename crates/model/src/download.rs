@@ -212,14 +212,23 @@ pub fn download(
     if let Some(parent) = final_dir.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::rename(&staging, &final_dir).map_err(|e| {
-        Error::new(
+    if let Err(e) = fs::rename(&staging, &final_dir) {
+        // Someone else finished the same model between the check at the top of
+        // this function and now — two windows the app can be in, or two
+        // callers. The destination is content-addressed, so if it exists it
+        // holds the same verified bytes and there is nothing to do but tidy up.
+        if final_dir.is_dir() {
+            let _ = fs::remove_dir_all(&staging);
+            report(progress(entry, Stage::Ready, total, total, started));
+            return Ok(final_dir);
+        }
+        return Err(Error::new(
             Code::ModIntegrityFailed,
             "The download finished but could not be moved into place. \
              It will be retried from where it stopped.",
         )
-        .with_source(e)
-    })?;
+        .with_source(e));
+    }
 
     report(progress(entry, Stage::Ready, total, total, started));
     Ok(final_dir)
@@ -531,6 +540,45 @@ mod tests {
             !w.is_installed(&digest),
             "a cancelled download must not read as installed"
         );
+    }
+
+    #[test]
+    fn two_downloads_of_the_same_model_do_not_race_on_promotion() {
+        // A real failure, found by two tests fetching the same model at once:
+        // the destination is checked at the top of `download` and renamed onto
+        // at the bottom, and another caller can finish in between. Because the
+        // directory is content-addressed, the loser has nothing to do but
+        // tidy up — it must not report a failure for a model that is present
+        // and verified.
+        let (_t, w) = workspace();
+        let e = entry_for(&[("model.safetensors", A)]);
+        let digest = e.manifest_digest.clone().unwrap();
+
+        // First one lands.
+        download(
+            &e,
+            &w,
+            &Fake::new(&[("model.safetensors", A)]),
+            &Cancel::new(),
+            &mut |_| {},
+        )
+        .unwrap();
+
+        // Now stage a second, complete-but-unpromoted copy, as a concurrent
+        // caller would have, and promote it against the existing directory.
+        let staging = w.partial_dir(&digest);
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("model.safetensors"), A).unwrap();
+        let dir = download(
+            &e,
+            &w,
+            &Fake::new(&[("model.safetensors", A)]),
+            &Cancel::new(),
+            &mut |_| {},
+        )
+        .expect("the loser of the race must succeed, not fail");
+        assert_eq!(dir, w.weights_dir(&digest));
+        assert_eq!(fs::read(dir.join("model.safetensors")).unwrap(), A);
     }
 
     #[test]

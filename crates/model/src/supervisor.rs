@@ -109,6 +109,24 @@ pub enum Event {
         reason: String,
         depth: Depth,
     },
+    /// A token arrived. The UI renders these; nothing polls for them.
+    Token {
+        request_id: String,
+        token: crate::provider::Token,
+    },
+    /// A request finished, with what it cost and where it ran.
+    Completed {
+        request_id: String,
+        model_id: String,
+        completion: Box<crate::provider::Completion>,
+    },
+    /// A request failed, with the code the caller branches on.
+    Failed {
+        request_id: String,
+        model_id: String,
+        code: String,
+        reason: String,
+    },
     /// Emitted whenever the queue or the memory picture moves materially, so
     /// "it is slow" is answerable (SUP-008) without polling.
     Pressure {
@@ -448,6 +466,74 @@ impl Supervisor {
             sustained_load: conditions.sustained_load,
             resident_bytes: self.resident_bytes(),
         });
+    }
+
+    /// Run one queued request through a provider.
+    ///
+    /// The supervisor still owns no inference: it hands the envelope to a
+    /// [`GenerationProvider`] and books the result. What it does own is the
+    /// consequence — a failure feeds the breaker, a success clears it, and
+    /// both emit events rather than being returned to one caller.
+    pub fn run_next(
+        &mut self,
+        model_id: &str,
+        provider: &dyn crate::provider::GenerationProvider,
+        envelope: &crate::envelope::Envelope,
+        cancel: &Cancel,
+        now: Timestamp,
+    ) -> Option<marrow_core::Result<crate::provider::Completion>> {
+        let request = self.next_request(model_id, now)?;
+        let request_id = request.id.to_string();
+        self.transition(model_id, ModelState::Busy, "Running a request.");
+
+        let mut tokens = Vec::new();
+        let result = provider.generate(
+            crate::provider::GenerateRequest {
+                model_id,
+                envelope,
+                reasoning: request.reasoning,
+                max_output_tokens: request.max_output_tokens,
+                cancel,
+            },
+            &mut |t| tokens.push(t),
+        );
+
+        for token in tokens {
+            self.events.push(Event::Token {
+                request_id: request_id.clone(),
+                token,
+            });
+        }
+
+        match &result {
+            Ok(c) => {
+                self.record_success(model_id, now);
+                self.events.push(Event::Completed {
+                    request_id,
+                    model_id: model_id.to_string(),
+                    completion: Box::new(c.clone()),
+                });
+                self.transition(model_id, ModelState::Ready, "Request finished.");
+            }
+            Err(e) => {
+                // A cancel is the user's choice, not the model's failure.
+                // Counting it would suspend a working model after three
+                // impatient Escapes.
+                if e.code() != marrow_core::Code::ModCancelled {
+                    self.record_failure(model_id, now, e.message());
+                }
+                self.events.push(Event::Failed {
+                    request_id,
+                    model_id: model_id.to_string(),
+                    code: e.code().as_str().to_string(),
+                    reason: e.message().to_string(),
+                });
+                if !matches!(self.state_of(model_id), Some(ModelState::Suspended { .. })) {
+                    self.transition(model_id, ModelState::Ready, "Request failed.");
+                }
+            }
+        }
+        Some(result)
     }
 
     /// Take the next request to run for a model.
@@ -979,5 +1065,337 @@ mod tests {
         });
         drop(ctx);
         handle.join().expect("supervisor thread must not panic");
+    }
+}
+
+#[cfg(test)]
+mod running {
+    use super::*;
+    use crate::catalogue;
+    use crate::envelope::{Builder, RandomNonce};
+    use crate::provider::{
+        Boundary, Completion, GenerateRequest, GenerationProvider, StopReason, Token, Usage,
+    };
+    use crate::request::{Priority, Reasoning};
+    use marrow_core::{Code, Error};
+    use marrow_hw::{Sample, Thermal};
+
+    const MODEL: &str = "qwen3.5-4b-mlx-q4";
+
+    /// Answers whatever it is told to, so the supervisor's own behaviour —
+    /// breaker, states, events — is testable without weights.
+    struct Scripted {
+        outcome: std::sync::Mutex<Vec<marrow_core::Result<&'static str>>>,
+    }
+
+    impl Scripted {
+        fn ok(text: &'static str) -> Self {
+            Self {
+                outcome: std::sync::Mutex::new(vec![Ok(text)]),
+            }
+        }
+        fn failing(n: usize) -> Self {
+            Self {
+                outcome: std::sync::Mutex::new(
+                    (0..n)
+                        .map(|_| Err(Error::new(Code::ModWorkerCrash, "the worker exited 137")))
+                        .collect(),
+                ),
+            }
+        }
+    }
+
+    impl GenerationProvider for Scripted {
+        fn boundary(&self) -> Boundary {
+            Boundary::Local
+        }
+        fn describe(&self) -> String {
+            "Scripted".into()
+        }
+        fn generate(
+            &self,
+            request: GenerateRequest<'_>,
+            on_token: &mut dyn FnMut(Token),
+        ) -> marrow_core::Result<Completion> {
+            let next = self
+                .outcome
+                .lock()
+                .unwrap()
+                .pop()
+                .unwrap_or(Ok("default answer"));
+            let text = next?;
+            for word in text.split_inclusive(' ') {
+                on_token(Token::Text(word.to_string()));
+            }
+            Ok(Completion {
+                text: text.into(),
+                thinking: None,
+                usage: Usage {
+                    prompt_tokens: 100,
+                    output_tokens: 10,
+                    thinking_tokens: request.reasoning.thinking_tokens(),
+                    cached_prefix_tokens: 0,
+                },
+                stop_reason: StopReason::Stop,
+                boundary: Boundary::Local,
+                model_id: request.model_id.into(),
+            })
+        }
+    }
+
+    fn sup() -> Supervisor {
+        let mut r = Registry::new();
+        for mut e in catalogue::builtin() {
+            e.installed = true;
+            r.insert(e);
+        }
+        Supervisor::new(
+            Machine {
+                total_memory_bytes: 17_179_869_184,
+                cpu_cores: 10,
+                unified_memory: true,
+                ..Machine::unknown()
+            },
+            r,
+        )
+    }
+
+    fn conditions() -> Conditions {
+        Conditions {
+            latest: Sample {
+                available_memory_bytes: 12_000_000_000,
+                cpu_load: 0.2,
+                thermal: Thermal::Unknown,
+                on_battery: false,
+                battery_level: None,
+                taken_at_ms: 0,
+            },
+            min_available_bytes: 12_000_000_000,
+            sustained_load: 0.2,
+            stale: false,
+        }
+    }
+
+    fn envelope() -> crate::envelope::Envelope {
+        Builder::new("sys", "q").finish(&mut RandomNonce)
+    }
+
+    fn submit(s: &mut Supervisor, reasoning: Reasoning) -> Cancel {
+        let cancel = Cancel::new();
+        let r = Request::new(MODEL, Priority::Interactive, Duration::from_secs(60))
+            .with_reasoning(reasoning);
+        let d = s.submit(
+            r,
+            cancel.clone(),
+            &conditions(),
+            Timestamp::from_millis(0),
+            Overrides::default(),
+            Policy::default(),
+        );
+        assert!(d.admitted(), "{d:?}");
+        cancel
+    }
+
+    #[test]
+    fn a_queued_request_runs_and_its_tokens_reach_subscribers() {
+        // SUP-003: the UI is a subscriber. A completion that only came back as
+        // a return value would leave every other surface blind.
+        let mut s = sup();
+        s.mark_loaded(MODEL, 3_000_000_000, Timestamp::from_millis(0));
+        let cancel = submit(&mut s, Reasoning::Off);
+        s.take_events();
+
+        let out = s
+            .run_next(
+                MODEL,
+                &Scripted::ok("the answer"),
+                &envelope(),
+                &cancel,
+                Timestamp::from_millis(1),
+            )
+            .expect("a request was queued")
+            .expect("it should succeed");
+        assert_eq!(out.text, "the answer");
+
+        let events = s.take_events();
+        let tokens: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, Event::Token { .. }))
+            .collect();
+        assert_eq!(tokens.len(), 2, "each word streamed");
+        assert!(events.iter().any(|e| matches!(e, Event::Completed { .. })));
+    }
+
+    #[test]
+    fn running_nothing_when_the_queue_is_empty_is_not_an_error() {
+        let mut s = sup();
+        assert!(s
+            .run_next(
+                MODEL,
+                &Scripted::ok("x"),
+                &envelope(),
+                &Cancel::new(),
+                Timestamp::from_millis(0)
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn a_failure_feeds_the_breaker_and_three_of_them_suspend_the_model() {
+        // The loop the whole §142.4 ladder exists for, end to end.
+        let mut s = sup();
+        s.mark_loaded(MODEL, 3_000_000_000, Timestamp::from_millis(0));
+        let provider = Scripted::failing(3);
+        for i in 0..3 {
+            let cancel = submit(&mut s, Reasoning::Off);
+            let r = s
+                .run_next(
+                    MODEL,
+                    &provider,
+                    &envelope(),
+                    &cancel,
+                    Timestamp::from_millis(i),
+                )
+                .unwrap();
+            assert!(r.is_err());
+        }
+        let Some(ModelState::Suspended { reason }) = s.state_of(MODEL) else {
+            panic!("expected Suspended, got {:?}", s.state_of(MODEL))
+        };
+        assert!(
+            reason.contains("exited 137"),
+            "must name the first failure: {reason}"
+        );
+    }
+
+    #[test]
+    fn a_cancelled_request_does_not_count_against_the_model() {
+        // Three impatient Escapes would otherwise suspend a working model.
+        let mut s = sup();
+        s.mark_loaded(MODEL, 3_000_000_000, Timestamp::from_millis(0));
+        struct Cancelled;
+        impl GenerationProvider for Cancelled {
+            fn boundary(&self) -> Boundary {
+                Boundary::Local
+            }
+            fn describe(&self) -> String {
+                "Cancelled".into()
+            }
+            fn generate(
+                &self,
+                _: GenerateRequest<'_>,
+                _: &mut dyn FnMut(Token),
+            ) -> marrow_core::Result<Completion> {
+                Err(Error::new(Code::ModCancelled, "The request was cancelled."))
+            }
+        }
+        for i in 0..5 {
+            let cancel = submit(&mut s, Reasoning::Off);
+            let _ = s.run_next(
+                MODEL,
+                &Cancelled,
+                &envelope(),
+                &cancel,
+                Timestamp::from_millis(i),
+            );
+        }
+        assert_eq!(
+            s.state_of(MODEL),
+            Some(&ModelState::Ready),
+            "cancels are not failures"
+        );
+    }
+
+    #[test]
+    fn a_success_after_failures_clears_the_count() {
+        let mut s = sup();
+        s.mark_loaded(MODEL, 3_000_000_000, Timestamp::from_millis(0));
+        let failing = Scripted::failing(2);
+        for i in 0..2 {
+            let cancel = submit(&mut s, Reasoning::Off);
+            let _ = s.run_next(
+                MODEL,
+                &failing,
+                &envelope(),
+                &cancel,
+                Timestamp::from_millis(i),
+            );
+        }
+        let cancel = submit(&mut s, Reasoning::Off);
+        s.run_next(
+            MODEL,
+            &Scripted::ok("fine"),
+            &envelope(),
+            &cancel,
+            Timestamp::from_millis(3),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(s.entry(MODEL).unwrap().breaker.consecutive_failures, 0);
+    }
+
+    #[test]
+    fn the_reasoning_mode_reaches_the_provider_and_is_billed_separately() {
+        // GEN-016 end to end: the switch is a field on the request, and its
+        // cost lands in `thinking_tokens` rather than being folded into the
+        // answer.
+        let mut s = sup();
+        s.mark_loaded(MODEL, 3_000_000_000, Timestamp::from_millis(0));
+        let cancel = submit(&mut s, Reasoning::THOROUGH);
+        let out = s
+            .run_next(
+                MODEL,
+                &Scripted::ok("x"),
+                &envelope(),
+                &cancel,
+                Timestamp::from_millis(1),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            out.usage.thinking_tokens,
+            Reasoning::THOROUGH.thinking_tokens()
+        );
+        assert_ne!(out.usage.thinking_tokens, out.usage.output_tokens);
+    }
+
+    #[test]
+    fn a_model_returns_to_ready_after_a_request_rather_than_staying_busy() {
+        // A model stuck in Busy is a model the next request is refused by.
+        let mut s = sup();
+        s.mark_loaded(MODEL, 3_000_000_000, Timestamp::from_millis(0));
+        let cancel = submit(&mut s, Reasoning::Off);
+        s.run_next(
+            MODEL,
+            &Scripted::ok("x"),
+            &envelope(),
+            &cancel,
+            Timestamp::from_millis(1),
+        );
+        assert_eq!(s.state_of(MODEL), Some(&ModelState::Ready));
+    }
+
+    #[test]
+    fn a_failure_emits_the_code_the_caller_branches_on() {
+        let mut s = sup();
+        s.mark_loaded(MODEL, 3_000_000_000, Timestamp::from_millis(0));
+        let cancel = submit(&mut s, Reasoning::Off);
+        s.take_events();
+        let _ = s.run_next(
+            MODEL,
+            &Scripted::failing(1),
+            &envelope(),
+            &cancel,
+            Timestamp::from_millis(1),
+        );
+        let code = s
+            .take_events()
+            .into_iter()
+            .find_map(|e| match e {
+                Event::Failed { code, .. } => Some(code),
+                _ => None,
+            })
+            .expect("must emit Failed");
+        assert_eq!(code, "MOD_WORKER_CRASH");
     }
 }
