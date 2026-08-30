@@ -59,6 +59,30 @@ pub struct IndexStats {
     pub cloud_only: i64,
     pub workspaces: i64,
     pub schema_version: i64,
+    /// When any root was last reconciled with the disk, and what the watcher
+    /// could see at the time.
+    ///
+    /// **Both columns existed and nothing wrote either.** `watcher_health`
+    /// defaulted to `LIVE`, so a database nobody had ever watched reported a
+    /// live watcher, and `last_reconciled_at` stayed NULL, so no reader could
+    /// tell a current index from a nine-hour-old one. Counts without freshness
+    /// are the failure mode: a search over a stale index answers confidently
+    /// about a disk it has not looked at.
+    pub last_reconciled_ms: Option<i64>,
+    /// `live` | `degraded` | `poll_only` | `unavailable`, lowercased from the
+    /// worst root — the reassuring root must not hide the broken one.
+    pub watcher_health: String,
+}
+
+impl IndexStats {
+    /// Whether an answer drawn from this index may be out of date.
+    ///
+    /// True when nothing has ever reconciled, or nothing is watching now. Both
+    /// mean the same thing to a caller: the disk may have moved on and this
+    /// index would not know.
+    pub fn may_be_stale(&self) -> bool {
+        self.last_reconciled_ms.is_none() || self.watcher_health == "unavailable"
+    }
 }
 
 /// Every workspace, with its counts.
@@ -117,6 +141,25 @@ pub fn index_stats(conn: &ReadConn) -> Result<IndexStats> {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .map_err(|e| map_sqlite(e, "reading index health"))?;
+
+    // The *worst* root, not the newest: one healthy folder must not make a
+    // folder nobody is watching look watched. `ORDER BY` walks the enum from
+    // worst to best, and NULL sorts as never-reconciled.
+    let (last_reconciled_ms, watcher_health): (Option<i64>, String) = conn
+        .query_row(
+            "SELECT max(last_reconciled_at), COALESCE(
+               (SELECT watcher_health FROM workspace_roots
+                 ORDER BY CASE watcher_health
+                            WHEN 'UNAVAILABLE' THEN 0 WHEN 'POLL_ONLY' THEN 1
+                            WHEN 'DEGRADED' THEN 2 ELSE 3 END,
+                          last_reconciled_at IS NOT NULL
+                 LIMIT 1), 'unavailable')
+               FROM workspace_roots",
+            [],
+            |r| Ok((r.get(0)?, r.get::<_, String>(1)?)),
+        )
+        .map_err(|e| map_sqlite(e, "reading index freshness"))?;
+
     Ok(IndexStats {
         files,
         chunks: marrow_store::read::chunk_count(conn)? as i64,
@@ -124,6 +167,15 @@ pub fn index_stats(conn: &ReadConn) -> Result<IndexStats> {
         cloud_only,
         workspaces,
         schema_version: marrow_store::migrate::current_version(conn)?,
+        last_reconciled_ms,
+        // A root that has never been reconciled reports whatever the schema
+        // default left behind, which is `LIVE`. That default is the lie; treat
+        // "never reconciled" as unwatched regardless of what the column says.
+        watcher_health: if last_reconciled_ms.is_none() {
+            "unavailable".to_string()
+        } else {
+            watcher_health.to_lowercase()
+        },
     })
 }
 

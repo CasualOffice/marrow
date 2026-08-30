@@ -116,6 +116,24 @@ pub fn run(
 }
 
 /// One root's loop. Owns no output.
+/// Persist how fresh this root is, and who is watching it.
+///
+/// **The database is the only channel to the other processes.** The MCP server
+/// and a second terminal are separate, short-lived processes; freshness that
+/// lives only in this one's memory cannot be reported by the surface an agent
+/// actually calls, and `marrow watch` running in one window while `index_status`
+/// says "nothing is watching" is exactly the confusion this avoids.
+fn mark(store: &marrow_store::Store, t: &Target, health: &marrow_scan::Health) {
+    let h = match health {
+        marrow_scan::Health::Live => marrow_store::read::WatcherHealth::Live,
+        marrow_scan::Health::Degraded(_) => marrow_store::read::WatcherHealth::Degraded,
+        marrow_scan::Health::PollOnly(_) => marrow_store::read::WatcherHealth::PollOnly,
+    };
+    if let Err(e) = store.mark_reconciled(t.root_id, h, marrow_core::Timestamp::now()) {
+        tracing::warn!(error = %e, "could not record watcher health");
+    }
+}
+
 fn watch_one(
     store: &marrow_store::Store,
     t: &Target,
@@ -164,6 +182,38 @@ fn watch_one(
     // is re-read every loop rather than fixed at startup (WATCH-010).
     let mut last_sweep = Instant::now();
 
+    // **Sweep before listening.** A watcher is not live the instant it opens,
+    // and nothing at all was listening while this process was not running — so
+    // a change in either window emits no event and would wait for the next
+    // scheduled sweep, six hours away. The ingest is idempotent, so on an
+    // unchanged corpus this costs one walk and stores nothing.
+    let progress = Arc::new(Progress::new());
+    match marrow_ingest::ingest_root_with_index(
+        store,
+        t.workspace_id,
+        t.root_id,
+        &root,
+        policy,
+        &progress,
+        cancel,
+        Some(&index),
+    ) {
+        Ok(o) => {
+            mark(store, t, &health);
+            let _ = tx.send(Report::Swept {
+                name: t.name.clone(),
+                files: o.stored,
+                reason: "started watching",
+            });
+        }
+        Err(e) => {
+            let _ = tx.send(Report::Failed {
+                name: t.name.clone(),
+                message: e.message().to_string(),
+            });
+        }
+    }
+
     loop {
         if cancel.is_cancelled() {
             break;
@@ -176,6 +226,7 @@ fn watch_one(
 
         if *watcher.health() != health {
             health = watcher.health().clone();
+            mark(store, t, &health);
             let _ = tx.send(Report::HealthChanged {
                 name: t.name.clone(),
                 health: health.clone(),
@@ -202,6 +253,7 @@ fn watch_one(
                 Some(&index),
             ) {
                 Ok(o) => {
+                    mark(store, t, &health);
                     let _ = tx.send(Report::Swept {
                         name: t.name.clone(),
                         files: o.stored,
@@ -235,6 +287,7 @@ fn watch_one(
             Some(&index),
         ) {
             Ok(o) if o.stored > 0 => {
+                mark(store, t, &health);
                 let _ = tx.send(Report::Applied {
                     name: t.name.clone(),
                     files: o.stored,
@@ -251,6 +304,15 @@ fn watch_one(
         }
     }
 
+    // A watcher that has exited must not leave the database claiming someone is
+    // still listening — that is precisely the "stale index looks fresh" state.
+    if let Err(e) = store.mark_reconciled(
+        t.root_id,
+        marrow_store::read::WatcherHealth::Unavailable,
+        marrow_core::Timestamp::now(),
+    ) {
+        tracing::warn!(error = %e, "could not record that the watcher stopped");
+    }
     let _ = tx.send(Report::Stopped {
         name: t.name.clone(),
     });

@@ -262,6 +262,17 @@ impl Store {
         self.handle.submit(move |c| read::upsert_root(c, &root))
     }
 
+    /// Record a reconciliation. See [`read::mark_reconciled`].
+    pub fn mark_reconciled(
+        &self,
+        root_id: marrow_core::RootId,
+        health: read::WatcherHealth,
+        at: marrow_core::Timestamp,
+    ) -> Result<()> {
+        self.handle
+            .submit(move |c| read::mark_reconciled(c, root_id, health, at))
+    }
+
     pub fn insert_file(&self, f: NewFile) -> Result<FileId> {
         self.handle.submit(move |c| read::insert_file(c, &f))
     }

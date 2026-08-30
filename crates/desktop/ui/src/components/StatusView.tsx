@@ -26,7 +26,7 @@ import { Icon } from "./Icon";
 import { useIndexHealth, useWorkspaces } from "../queries";
 import { unavailable } from "../actions";
 import { useUi } from "../store";
-import type { WorkspaceRow } from "../api";
+import type { IndexHealth, WorkspaceRow } from "../api";
 
 interface Verdict {
   tone: StateTone;
@@ -76,6 +76,9 @@ export function StatusView() {
           <ErrorNotice error={workspaces.error} action={null} />
         )}
         {health.isError && <ErrorNotice error={health.error} action={null} />}
+
+        {/* Above the counts, because it decides whether they mean anything. */}
+        {h?.mayBeStale && <Freshness h={h} />}
 
         {rows.map((w) => {
           const v = verdict(w);
@@ -197,11 +200,58 @@ export function StatusView() {
         <Total v={count(h?.cloudOnly)} k="cloud-only" />
         <span className={styles.grow} />
         <span className={cx("mono", styles.schema)}>
+          {h === undefined
+            ? DASH
+            : h.mayBeStale
+              ? "not watching"
+              : `watching · ${h.watcher}`}
+        </span>
+        <span className={cx("mono", styles.schema)}>
           schema v{h === undefined ? DASH : h.schemaVersion}
         </span>
       </footer>
     </div>
   );
+}
+
+/**
+ * Whether these numbers describe the disk, or describe it as it was.
+ *
+ * **A stale index is worse than no index.** No index answers nothing and the
+ * user knows to scan; a stale one answers confidently about files it has not
+ * looked at, and nothing else on this page would say so. Shown above the counts
+ * because it decides whether the counts mean anything.
+ *
+ * Only rendered when something is actually wrong — a permanent banner saying
+ * "everything is fine" is a banner people stop reading.
+ */
+function Freshness({ h }: { h: IndexHealth }) {
+  const never = h.lastIndexedMs === null;
+  return (
+    <Issue
+      tone="warn"
+      title={
+        never
+          ? "These folders have never been scanned"
+          : `Nothing is watching your folders — last checked ${ago(h.lastIndexedMs!)}`
+      }
+      detail={
+        never
+          ? "Nothing here reflects what is on your disk yet. A scan would populate it."
+          : "Anything added, changed or deleted since then is not in the index, and a search cannot mention what it does not know about. The app watches while it is open; this usually means a folder became unwatchable."
+      }
+      actions={[{ label: "Run an index", onClick: () => unavailable("reindex") }]}
+    />
+  );
+}
+
+/** "3 minutes ago". Coarse on purpose: the decision is stale or not. */
+function ago(ms: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 90) return "just now";
+  if (s < 5_400) return `${Math.round(s / 60)} minutes ago`;
+  if (s < 172_800) return `${Math.round(s / 3600)} hours ago`;
+  return `${Math.round(s / 86_400)} days ago`;
 }
 
 function Stat({

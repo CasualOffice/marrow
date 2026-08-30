@@ -289,6 +289,16 @@ Keeps every future door open, including relicensing your own code, and grants pa
 
 Not worth a separate tier for a single operator. See [Part 7 §129](docs/Part_7_Solo_Rescope.md).
 
+### D58 — May a surface report index counts without reporting freshness? → **No** *(settled 2026-08-30)*
+
+A stale index is worse than no index. No index answers nothing and the user knows to scan; a stale one answers confidently about a disk it has not looked at, and nothing in the result says so. The failure is silent by construction — the counts are *true*, they are just true about a disk that has moved on.
+
+This shipped in every surface at once. `index_status` over MCP reported 35,134 files with no timestamp; the desktop's status page showed five real numbers per workspace and no freshness; `watcher_health` defaulted to `LIVE` in the schema and nothing ever wrote it, so a database nobody had ever watched reported a live watcher; `last_reconciled_at` was never written at all. Asking Marrow about its own source returned `matches: 0` for symbols that plainly existed, because half the files had never been scanned.
+
+Two rules follow. **Freshness is persisted, not held in memory** — the MCP server and the CLI are separate short-lived processes, so freshness that lives only in the desktop app cannot be reported by the surface an agent actually calls. And **the honest default is `unavailable`**: a root that has never been reconciled is treated as unwatched whatever the column says, because a default that reads `LIVE` is a lie every reader downstream repeats.
+
+The corollary is that the app has to *earn* the fresh state: the desktop now runs a watcher per root, and both watchers sweep once before they start listening. A watcher is not live the instant it opens, and nothing is listening while the app is shut — so without that first sweep a change in either window waits six hours for the scheduled reconciliation, which is indistinguishable from having no watcher at all.
+
 ### D57 — Who assembles the migration chain? → **`marrow_index::MIGRATIONS`, never a composition root** *(settled 2026-08-30)*
 
 The chain is numbered across crates: `marrow-store` owns 1 and 3, `marrow-index` owns 2 and 4, and `marrow-index` depends on `marrow-store` so store cannot reference it back ([D3](#d3)). The binary composing them is right. The binary *enumerating* them is not.

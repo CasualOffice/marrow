@@ -526,6 +526,17 @@ fn index(
         totals.chunks += outcome.chunks;
         totals.cancelled |= outcome.cancelled;
         totals.merge_failures_from(&outcome);
+        // Record that this root now agrees with the disk. `UNAVAILABLE`
+        // because a one-shot index leaves nothing watching: the index is
+        // current at this instant and will drift from the next change on, and
+        // saying so is what stops a reader treating the counts as durable.
+        if !outcome.cancelled {
+            let _ = store.mark_reconciled(
+                root_id,
+                marrow_store::read::WatcherHealth::Unavailable,
+                marrow_core::Timestamp::now(),
+            );
+        }
         let _ = progress.get(Stage::Hashed);
     }
 

@@ -493,6 +493,11 @@ const HEALTH: IndexHealth = {
   contentBytes: 1_394_000_000,
   cloudOnly: 412,
   schemaVersion: 7,
+  // Stale on purpose: the state worth looking at in dev is the one the banner
+  // exists for.
+  lastIndexedMs: Date.now() - 9 * 3600 * 1000,
+  watcher: "unavailable",
+  mayBeStale: true,
 };
 
 /* A few hundred rows, so the Files browser is browsing rather than listing. */

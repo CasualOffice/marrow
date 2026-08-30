@@ -62,6 +62,47 @@ fn data_dir() -> PathBuf {
     PathBuf::from(std::env::var_os("HOME").expect("HOME")).join(".local/share/marrow")
 }
 
+/// An empty, authorized workspace with nothing indexed yet.
+///
+/// Deliberately empty: the point of the watcher tests is what happens to files
+/// that appear *after* the app is running, which is the case a one-shot scan
+/// can never cover.
+fn watchable_workspace() -> (tempfile::TempDir, Core) {
+    let corpus = tempfile::tempdir().expect("corpus dir");
+    let db_dir = tempfile::tempdir().expect("db dir");
+    // Leaked on purpose: the Core below outlives this function and the
+    // database must not be removed under it. The corpus dir is returned.
+    let db = Box::leak(Box::new(db_dir)).path().join("marrow.db");
+
+    let store =
+        Store::open_with_migrations(db.clone(), marrow_index::MIGRATIONS).expect("open store");
+    let now = Timestamp::now();
+    let ws = store
+        .upsert_workspace(NewWorkspace {
+            workspace_id: WorkspaceId::new(),
+            name: "watched".into(),
+            at: now,
+        })
+        .expect("workspace");
+    let root = AuthorizedRoot::open(corpus.path()).expect("authorize root");
+    store
+        .upsert_root(NewRoot {
+            root_id: RootId::new(),
+            workspace_id: ws,
+            canonical_path: root.path().to_string_lossy().into_owned(),
+            volume_identity: None,
+            grant_token: None,
+            storage_kind: StorageKind::Local,
+            cloud_provider: None,
+            at: now,
+        })
+        .expect("root");
+    store.flush().expect("flush");
+    drop(store);
+
+    (corpus, Core::open(db).expect("core"))
+}
+
 /// Build an index over a temporary corpus, and a hub pointed at the real
 /// downloaded models.
 fn indexed_corpus() -> (tempfile::TempDir, tempfile::TempDir, PathBuf) {
@@ -490,4 +531,120 @@ fn a_long_answer_is_not_silently_cut_off() {
         out_tokens > 200,
         "this question should produce a real answer"
     );
+}
+
+/// The watcher, which is the difference between an index and a snapshot.
+///
+/// A stale index is worse than no index: no index answers nothing and the user
+/// knows to scan, a stale one answers confidently about a disk it has not
+/// looked at. These pin that the app closes that gap itself rather than
+/// depending on someone running `marrow index` in a terminal.
+mod watching {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use marrow_desktop::Watchers;
+
+    /// Poll until `f` holds or the deadline passes. Filesystem events are
+    /// asynchronous by nature; a fixed sleep is either flaky or slow.
+    fn within(secs: u64, mut f: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        while Instant::now() < deadline {
+            if f() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        f()
+    }
+
+    #[test]
+    fn a_file_created_while_the_app_is_open_becomes_searchable_without_a_manual_scan() {
+        let (dir, core) = super::watchable_workspace();
+        let core = Arc::new(core);
+        let watchers = Watchers::start(Arc::clone(&core)).expect("watchers start");
+
+        std::fs::write(
+            dir.path().join("note.md"),
+            "the quarterly renewal clause is unusual\n",
+        )
+        .unwrap();
+
+        let found = within(20, || {
+            core.search("renewal", 5)
+                .map(|r| !r.hits.is_empty())
+                .unwrap_or(false)
+        });
+        watchers.stop();
+        assert!(
+            found,
+            "a file written while the app was open never reached the index"
+        );
+    }
+
+    /// **The ordinary case, not the edge one.** You work on files all day with
+    /// Marrow closed, then open it. Everything that changed in between produced
+    /// no event for anyone to hear, so without a sweep at startup the app shows
+    /// an index from whenever a scan last ran — and waits six hours to notice.
+    /// That is indistinguishable from having no watcher at all.
+    #[test]
+    fn changes_made_while_the_app_was_closed_are_picked_up_when_it_opens() {
+        let (dir, core) = super::watchable_workspace();
+        let core = Arc::new(core);
+
+        // Written before anything is watching: no event exists to be missed.
+        std::fs::write(
+            dir.path().join("closed.md"),
+            "the sublet provision was added last night\n",
+        )
+        .unwrap();
+        assert!(
+            core.search("sublet", 5).unwrap().hits.is_empty(),
+            "nothing has scanned yet, so this must not be findable"
+        );
+
+        let watchers = Watchers::start(Arc::clone(&core)).expect("watchers start");
+        let found = within(20, || {
+            core.search("sublet", 5)
+                .map(|r| !r.hits.is_empty())
+                .unwrap_or(false)
+        });
+        watchers.stop();
+        assert!(
+            found,
+            "opening the app did not reconcile what changed while it was shut"
+        );
+    }
+
+    /// The freshness the *other* processes read. It lives in the database
+    /// rather than this app's memory precisely so the MCP server and the CLI —
+    /// separate, short-lived processes — can tell how current the index is.
+    #[test]
+    fn watching_is_recorded_where_another_process_can_read_it() {
+        let (_dir, core) = super::watchable_workspace();
+        let core = Arc::new(core);
+
+        let before = marrow_query::catalog::index_stats(&core.store().reader().unwrap()).unwrap();
+        assert!(
+            before.may_be_stale(),
+            "a database nobody has watched must not report itself fresh"
+        );
+
+        let watchers = Watchers::start(Arc::clone(&core)).expect("watchers start");
+        let fresh = within(20, || {
+            marrow_query::catalog::index_stats(&core.store().reader().unwrap())
+                .map(|s| !s.may_be_stale())
+                .unwrap_or(false)
+        });
+        watchers.stop();
+        assert!(fresh, "a running watcher was never recorded in the store");
+
+        // And stopping puts it back: an app that has quit must not leave a
+        // database claiming someone is still watching it.
+        let after = marrow_query::catalog::index_stats(&core.store().reader().unwrap()).unwrap();
+        assert!(
+            after.may_be_stale(),
+            "after the watchers stopped the index still reported itself watched"
+        );
+    }
 }

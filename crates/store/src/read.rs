@@ -304,6 +304,52 @@ pub fn upsert_workspace(conn: &Connection, ws: &NewWorkspace) -> Result<Workspac
 }
 
 /// Create the root, or update the existing one at this path.
+/// Record that a root was just reconciled, and what its watcher can see.
+///
+/// **Both columns existed and nothing wrote either of them.** `watcher_health`
+/// defaulted to `LIVE`, so every surface reported a live watcher whether or not
+/// one had ever run, and `last_reconciled_at` stayed NULL, so nothing could
+/// tell a fresh index from a nine-hour-old one. A stale index that presents
+/// itself as current is worse than no index: a search over it answers
+/// confidently about a disk it has not looked at.
+pub fn mark_reconciled(
+    conn: &Connection,
+    root_id: RootId,
+    health: WatcherHealth,
+    at: Timestamp,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE workspace_roots SET watcher_health = ?2, last_reconciled_at = ?3
+          WHERE root_id = ?1",
+        rusqlite::params![root_id.to_string(), health.as_sql(), at.as_millis()],
+    )
+    .map_err(|e| crate::map_sqlite(e, "recording that a root was reconciled"))?;
+    Ok(())
+}
+
+/// What a watcher can currently see, as the schema spells it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WatcherHealth {
+    Live,
+    Degraded,
+    PollOnly,
+    /// No watcher is running. **The honest default**, and the one the schema
+    /// should have had: a column that says `LIVE` because nobody set it is a
+    /// lie that every reader downstream repeats.
+    Unavailable,
+}
+
+impl WatcherHealth {
+    pub fn as_sql(self) -> &'static str {
+        match self {
+            WatcherHealth::Live => "LIVE",
+            WatcherHealth::Degraded => "DEGRADED",
+            WatcherHealth::PollOnly => "POLL_ONLY",
+            WatcherHealth::Unavailable => "UNAVAILABLE",
+        }
+    }
+}
+
 pub fn upsert_root(conn: &Connection, root: &NewRoot) -> Result<RootId> {
     q(
         conn.execute(

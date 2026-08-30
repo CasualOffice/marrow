@@ -133,6 +133,12 @@ pub struct IndexHealth {
     /// "no cloud files", which is the failure TIER-008 exists to prevent.
     pub cloud_only: i64,
     pub schema_version: i64,
+    /// When the index last agreed with the disk, and whether anything is
+    /// keeping it that way. A count without a freshness is how a stale index
+    /// answers confidently about a disk it has not looked at.
+    pub last_indexed_ms: Option<i64>,
+    pub watcher: String,
+    pub may_be_stale: bool,
 }
 
 #[tauri::command]

@@ -114,6 +114,11 @@ impl Core {
         &self.store
     }
 
+    /// The lexical index, so the watcher can keep it in step with the store.
+    pub fn index(&self) -> &Fts5Index {
+        &self.index
+    }
+
     /// Retrieve for a **question** rather than for a search box.
     ///
     /// A different mode, and the difference is not a nicety: the search field
@@ -367,6 +372,9 @@ impl Core {
             // numbered across crates, so `marrow_core::SCHEMA_VERSION` is the
             // store's own maximum and not what an open database is at.
             schema_version: s.schema_version,
+            last_indexed_ms: s.last_reconciled_ms,
+            may_be_stale: s.may_be_stale(),
+            watcher: s.watcher_health.clone(),
         })
     }
 

@@ -13,6 +13,8 @@ pub mod ask;
 pub mod commands;
 pub mod models;
 pub mod state;
+pub mod watching;
 
 pub use models::Hub;
 pub use state::Core;
+pub use watching::Watchers;

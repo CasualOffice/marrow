@@ -63,9 +63,23 @@ fn main() {
         .unwrap_or_default();
     let hub = Arc::new(models::Hub::start(dir.join("models"), &indexed_roots));
 
+    // **A stale index is worse than no index.** Until this existed the index
+    // only moved when somebody ran `marrow index` in a terminal, so how fresh
+    // an answer was depended on when the author last remembered. Not fatal if
+    // it cannot start: the app still searches what it has, and `index_health`
+    // reports that nothing is watching rather than implying everything is fine.
+    let watchers = match marrow_desktop::Watchers::start(Arc::clone(&core)) {
+        Ok(w) => Some(Arc::new(w)),
+        Err(e) => {
+            tracing::warn!(error = %e, "could not start the folder watchers");
+            None
+        }
+    };
+
     tauri::Builder::default()
         .manage(core)
         .manage(hub)
+        .manage(watchers)
         .invoke_handler(tauri::generate_handler![
             commands::search,
             commands::list_workspaces,

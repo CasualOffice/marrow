@@ -166,6 +166,12 @@ export interface IndexHealth {
   /** Never omitted, even at zero (TIER-008). Zero and unknown must differ. */
   readonly cloudOnly: number;
   readonly schemaVersion: number;
+  /** When the index last agreed with the disk. `null` means it never has. */
+  readonly lastIndexedMs: number | null;
+  /** `live` | `degraded` | `poll_only` | `unavailable`, worst root wins. */
+  readonly watcher: string;
+  /** True when nothing is keeping the index in step with the disk. */
+  readonly mayBeStale: boolean;
 }
 
 export function indexHealth(): Promise<IndexHealth> {

@@ -542,6 +542,14 @@ impl Server {
             // chain is numbered across crates, so a constant in any one of them
             // is not what an open database is at.
             "schema_version": st.schema_version,
+            // **Counts without freshness are how a stale index answers
+            // confidently.** An agent reading `files_indexed: 35,134` has no
+            // way to know whether that reflects the disk now or nine hours
+            // ago, and every tool below reports over the same snapshot.
+            "last_indexed_ms": st.last_reconciled_ms,
+            "watcher": st.watcher_health,
+            "may_be_stale": st.may_be_stale(),
+            "freshness": freshness(&st),
         }))
     }
 
@@ -572,6 +580,36 @@ impl Server {
     fn roots(&self) -> Result<Vec<String>> {
         marrow_query::catalog::roots(&self.store.reader()?)
     }
+}
+
+/// One sentence about whether these counts can be trusted as current.
+///
+/// Three states, not two. "Never scanned" and "scanned an hour ago but nothing
+/// is watching" both mean the index may lag the disk, but they call for
+/// different actions, and collapsing them tells a caller to re-run a scan that
+/// just ran.
+fn freshness(st: &marrow_query::catalog::IndexStats) -> String {
+    let Some(at) = st.last_reconciled_ms else {
+        return "These folders have never been scanned, so this index does not reflect \
+                what is on the disk. Run `marrow index` before relying on a result."
+            .to_string();
+    };
+    if !st.may_be_stale() {
+        return "A watcher is running, so the index follows the disk as it changes.".to_string();
+    }
+    let ago = marrow_core::Timestamp::now().as_millis().saturating_sub(at);
+    let when = match ago / 1000 {
+        s if s < 90 => "less than two minutes ago".to_string(),
+        s if s < 5_400 => format!("{} minutes ago", s / 60),
+        s if s < 172_800 => format!("{} hours ago", s / 3600),
+        s => format!("{} days ago", s / 86_400),
+    };
+    format!(
+        "Last scanned {when}, and nothing is watching these folders now — so anything \
+         added, changed or deleted since then is not here, and a search cannot mention \
+         what it does not know about. Run `marrow index` to catch up, or open the \
+         desktop app, which watches while it runs."
+    )
 }
 
 /// Everything the scan did not look at, in a shape a model can branch on.
