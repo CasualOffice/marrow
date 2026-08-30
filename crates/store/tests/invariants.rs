@@ -627,3 +627,191 @@ fn an_in_memory_store_works_the_same_way() {
     let r = store.reader().unwrap();
     assert_eq!(read::find_file_by_id(&r, id).unwrap().unwrap().file_id, id);
 }
+
+// --------------------------------------------------------------------- tables
+
+/// Two tables' worth of rows for one version, shaped the way the parse crate
+/// produces them.
+fn sample_tables(version: marrow_core::VersionId) -> Vec<read::NewTable> {
+    let cell = |row: i64, col: i64, text: &str, ty: &str, typed: Option<&str>| read::NewCell {
+        row_idx: row,
+        col_idx: col,
+        rowspan: 1,
+        colspan: 1,
+        raw_text: text.to_owned(),
+        typed_value: typed.map(str::to_owned),
+        value_type: Some(ty.to_owned()),
+        cell_span: format!(r#"{{"bytes":{{"start":{row},"end":{}}}}}"#, row + 1),
+        confidence: 1.0,
+    };
+    vec![read::NewTable {
+        table_id: ulid::Ulid::new().to_string(),
+        version_id: version,
+        node_ordinal: Some(0),
+        source_span: r#"{"bytes":{"start":0,"end":40}}"#.to_owned(),
+        n_rows: 2,
+        n_cols: 2,
+        header_rows: 1,
+        header_cols: 0,
+        header_row_idx: Some(0),
+        header_confidence: 0.85,
+        column_names: Some(r#"["part","qty"]"#.to_owned()),
+        column_types: Some(r#"["string","integer"]"#.to_owned()),
+        merged_regions: Some("[]".to_owned()),
+        caption: None,
+        extraction_method: "native_delimited".to_owned(),
+        provenance_class: "EXACT".to_owned(),
+        reconstruction: "EXACT".to_owned(),
+        cells: vec![
+            cell(0, 0, "part", "string", None),
+            cell(0, 1, "qty", "string", None),
+            cell(1, 0, "bolt", "string", None),
+            cell(1, 1, "12", "integer", Some("12")),
+        ],
+    }]
+}
+
+fn version_of(fx: &Fixture, path: &str) -> marrow_core::VersionId {
+    let file_id = fx.file_at(path, b"body");
+    fx.store.flush().unwrap();
+    let r = fx.store.reader().unwrap();
+    read::current_version(&r, file_id)
+        .unwrap()
+        .unwrap()
+        .version_id
+}
+
+#[test]
+fn every_persisted_cell_carries_a_source_span() {
+    // TBL-002 and hard rule 1: the column is NOT NULL, so a cell without a
+    // location is refused by the database rather than by a code review.
+    let fx = fixture();
+    let version = version_of(&fx, "/Users/test/Desktop/parts.csv");
+    let tables = sample_tables(version);
+    let table_id = tables[0].table_id.clone();
+    fx.store
+        .writer()
+        .submit(move |c| read::replace_tables(c, version, &tables))
+        .unwrap();
+    fx.store.flush().unwrap();
+
+    let r = fx.store.reader().unwrap();
+    let cells = read::cells_for(&r, &table_id).unwrap();
+    assert_eq!(cells.len(), 4);
+    for c in &cells {
+        assert!(c.cell_span.contains("bytes"), "{c:?}");
+    }
+
+    // And the schema will not take one without.
+    let err = fx
+        .store
+        .writer()
+        .submit(move |c| {
+            c.execute(
+                "INSERT INTO table_cells
+                    (cell_id, table_id, row_idx, col_idx, raw_text, cell_span)
+                 VALUES ('x', ?1, 9, 9, 'orphan', NULL)",
+                [&table_id],
+            )
+            .map_err(|e| marrow_store::map_sqlite(e, "test"))
+        })
+        .unwrap_err();
+    assert_eq!(err.code(), Code::IntInvariantViolated);
+}
+
+#[test]
+fn a_tables_raw_text_and_header_confidence_survive_the_round_trip() {
+    // TBL-003 and TBL-005: the confidence is stored, and the raw text is stored
+    // next to the typed value rather than replaced by it.
+    let fx = fixture();
+    let version = version_of(&fx, "/Users/test/Desktop/parts.csv");
+    let tables = sample_tables(version);
+    fx.store
+        .writer()
+        .submit(move |c| read::replace_tables(c, version, &tables))
+        .unwrap();
+    fx.store.flush().unwrap();
+
+    let r = fx.store.reader().unwrap();
+    let rows = read::tables_for(&r, version).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!((rows[0].header_confidence - 0.85).abs() < 1e-9);
+    assert_eq!(rows[0].header_row_idx, Some(0));
+    assert_eq!(
+        rows[0].column_types.as_deref(),
+        Some(r#"["string","integer"]"#)
+    );
+
+    let qty = read::cells_for(&r, &rows[0].table_id)
+        .unwrap()
+        .into_iter()
+        .find(|c| c.row_idx == 1 && c.col_idx == 1)
+        .unwrap();
+    assert_eq!(qty.raw_text, "12", "the raw text is never replaced");
+    assert_eq!(qty.typed_value.as_deref(), Some("12"));
+}
+
+#[test]
+fn re_parsing_replaces_a_versions_tables_rather_than_accumulating_them() {
+    let fx = fixture();
+    let version = version_of(&fx, "/Users/test/Desktop/parts.csv");
+    for _ in 0..3 {
+        let tables = sample_tables(version);
+        fx.store
+            .writer()
+            .submit(move |c| read::replace_tables(c, version, &tables))
+            .unwrap();
+    }
+    fx.store.flush().unwrap();
+    let r = fx.store.reader().unwrap();
+    assert_eq!(read::tables_for(&r, version).unwrap().len(), 1);
+    let cells: i64 = r
+        .conn()
+        .query_row("SELECT count(*) FROM table_cells", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(cells, 4, "cascade took the old cells with the old table");
+}
+
+#[test]
+fn deleting_a_file_version_takes_its_tables_with_it() {
+    // Derived state, so it must not outlive what it was derived from — an
+    // orphaned table row is a citation into a file that is gone.
+    let fx = fixture();
+    let version = version_of(&fx, "/Users/test/Desktop/parts.csv");
+    let tables = sample_tables(version);
+    fx.store
+        .writer()
+        .submit(move |c| read::replace_tables(c, version, &tables))
+        .unwrap();
+    fx.store
+        .writer()
+        .submit(move |c| {
+            c.execute(
+                "DELETE FROM file_versions WHERE version_id = ?1",
+                [version.to_string()],
+            )
+            .map_err(|e| marrow_store::map_sqlite(e, "test"))
+        })
+        .unwrap();
+    fx.store.flush().unwrap();
+    let r = fx.store.reader().unwrap();
+    let n: i64 = r
+        .conn()
+        .query_row("SELECT count(*) FROM table_cells", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(n, 0);
+}
+
+#[test]
+fn a_reconstruction_grade_outside_the_taxonomy_is_refused() {
+    let fx = fixture();
+    let version = version_of(&fx, "/Users/test/Desktop/parts.csv");
+    let mut tables = sample_tables(version);
+    tables[0].reconstruction = "PROBABLY_FINE".to_owned();
+    let err = fx
+        .store
+        .writer()
+        .submit(move |c| read::replace_tables(c, version, &tables))
+        .unwrap_err();
+    assert_eq!(err.code(), Code::IntInvariantViolated);
+}

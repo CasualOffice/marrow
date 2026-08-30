@@ -56,6 +56,17 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "m5_conversations",
         up: schema::SCHEMA_V5,
     },
+    // Six is simply the next number: the composed chain reached five with this
+    // crate's own migration 5, so for once there is no extension in the way.
+    // The rule is unchanged — take the number after the highest either crate
+    // has claimed, not the one after this list's own last entry — and
+    // `marrow_index::SCHEMA_VERSION` moves with it, because the version a
+    // binary declares must be the version it writes (D57).
+    Migration {
+        version: 6,
+        name: "m6_table_ir",
+        up: schema::SCHEMA_V6,
+    },
 ];
 
 /// The schema version this build writes.

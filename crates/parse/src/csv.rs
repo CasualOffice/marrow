@@ -146,12 +146,13 @@ impl ContentParser for CsvParser {
             )?;
 
             for (col_no, field) in fields.iter().enumerate() {
+                // An empty cell is still emitted. It has a position, and TBL-002
+                // wants every cell to keep one — but more than that, a grid with
+                // its blanks removed is a grid whose row widths are a guess, and
+                // header detection (TBL-003) is exactly the thing that then goes
+                // wrong. The chunker drops empty text, so this costs a node and
+                // nothing else.
                 let value = unquote(&src[field.clone()]);
-                if value.is_empty() {
-                    // An empty cell has a position but nothing to index. The
-                    // row's span still covers it.
-                    continue;
-                }
                 let (value, clipped) = b.budget().clamp_text(&value);
                 if clipped {
                     b.warn(ParseWarning::new(

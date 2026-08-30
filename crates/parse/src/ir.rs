@@ -224,6 +224,12 @@ pub struct NodeAttrs {
     pub row: Option<u32>,
     /// Zero-based column index within the enclosing row.
     pub col: Option<u32>,
+    /// How many rows this cell covers. `None` means one — TBL-004 asks for
+    /// merged regions to be *preserved*, so the formats that have them say so
+    /// and the ones that do not stay silent rather than claiming `1`.
+    pub rowspan: Option<u32>,
+    /// How many columns this cell covers.
+    pub colspan: Option<u32>,
     /// Column header for this cell, when the table has one.
     pub column_name: Option<String>,
     /// 1-based inclusive line range. Companion to a `Bytes` span, per the note
@@ -586,6 +592,18 @@ impl ArtifactBuilder {
         self.nodes.push(node);
         self.depth.push(depth);
         Ok(self.nodes.len() - 1)
+    }
+
+    /// Widen a already-pushed node's byte span to end at `to`.
+    ///
+    /// For a container whose extent is only known at its closing tag — an HTML
+    /// `<table>` is not `<table>`, it is everything up to `</table>`. Widening
+    /// only ever moves the end forward, and only on a `Bytes` span, so it cannot
+    /// turn a precise span into a wrong one.
+    pub fn widen_span(&mut self, idx: usize, to: u64) {
+        if let Some(SourceSpan::Bytes { end, .. }) = self.nodes.get_mut(idx).map(|n| &mut n.span) {
+            *end = (*end).max(to);
+        }
     }
 
     pub fn warn(&mut self, w: ParseWarning) {

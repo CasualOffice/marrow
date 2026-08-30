@@ -31,13 +31,13 @@ pub use model::{
 /// The highest migration **this crate's chain** defines.
 ///
 /// Not the version an opened database is at. The chain is numbered across
-/// crates — `marrow-index` owns 2 and 4, `marrow-store` owns 1, 3 and 5 — so a
+/// crates — `marrow-index` owns 2 and 4, `marrow-store` owns 1, 3, 5 and 6 — so a
 /// live database opened by the app is at the maximum of the *composed* chain,
 /// which is never lower than this and is only equal to it while the store
 /// happens to hold the highest number. Read it from `schema_meta` when you want
 /// to know what a database actually is; this is only what `marrow-store` alone
 /// would apply.
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 /// Chunk bodies larger than this go to the content-addressed cache rather than
 /// inline in SQLite (Part 2 §50).

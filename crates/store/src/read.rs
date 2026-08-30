@@ -1413,6 +1413,230 @@ pub fn record_parse(conn: &Connection, p: &NewParse) -> Result<()> {
     .map_err(|e| crate::map_sqlite(e, "recording a parse result"))
 }
 
+// ------------------------------------------------------------ tables (§106.6)
+//
+// Plain fields, no `marrow-parse` types. The parse crate turns bytes into an
+// IR and this crate turns rows into SQL; a dependency between them would make
+// the store care what a `ColumnType` is, and the enum-to-`TEXT` conversion
+// belongs at one boundary rather than two. `NewParse` above works the same way.
+
+/// One table to persist, with its cells.
+#[derive(Clone, Debug)]
+pub struct NewTable {
+    /// ULID.
+    pub table_id: String,
+    pub version_id: VersionId,
+    /// Ordinal of the IR node this came from. `ir_nodes` is not written yet, so
+    /// this is what identifies the node — see the note on `node_id` in the DDL.
+    pub node_ordinal: Option<i64>,
+    /// `SourceSpan` as JSON, the same shape `ir_nodes.source_span` holds.
+    pub source_span: String,
+    pub n_rows: i64,
+    pub n_cols: i64,
+    pub header_rows: i64,
+    pub header_cols: i64,
+    pub header_row_idx: Option<i64>,
+    /// TBL-003. Recorded even when no header was accepted.
+    pub header_confidence: f64,
+    pub column_names: Option<String>,
+    pub column_types: Option<String>,
+    pub merged_regions: Option<String>,
+    pub caption: Option<String>,
+    pub extraction_method: String,
+    pub provenance_class: String,
+    pub reconstruction: String,
+    pub cells: Vec<NewCell>,
+}
+
+/// One cell. **TBL-002**: `cell_span` is not optional, here or in the schema.
+#[derive(Clone, Debug)]
+pub struct NewCell {
+    pub row_idx: i64,
+    pub col_idx: i64,
+    pub rowspan: i64,
+    pub colspan: i64,
+    /// TBL-005. Always the text as written.
+    pub raw_text: String,
+    pub typed_value: Option<String>,
+    pub value_type: Option<String>,
+    pub cell_span: String,
+    pub confidence: f64,
+}
+
+/// Replace a version's tables.
+///
+/// Delete-then-insert for the same reason as [`replace_chunks`]: re-parsing a
+/// file that lost a table must not leave the table behind as something a query
+/// can still cite. `ON DELETE CASCADE` takes the cells with it.
+pub fn replace_tables(conn: &Connection, version_id: VersionId, tables: &[NewTable]) -> Result<()> {
+    conn.execute(
+        "DELETE FROM table_ir WHERE version_id = ?1",
+        [version_id.to_string()],
+    )
+    .map_err(|e| crate::map_sqlite(e, "clearing previous tables"))?;
+
+    if tables.is_empty() {
+        return Ok(());
+    }
+    let mut table_stmt = conn
+        .prepare_cached(
+            "INSERT INTO table_ir
+                (table_id, version_id, node_ordinal, source_span, n_rows, n_cols,
+                 header_rows, header_cols, header_row_idx, header_confidence,
+                 column_names, column_types, merged_regions, caption,
+                 extraction_method, provenance_class, reconstruction)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+        )
+        .map_err(|e| crate::map_sqlite(e, "preparing table insert"))?;
+    let mut cell_stmt = conn
+        .prepare_cached(
+            "INSERT INTO table_cells
+                (cell_id, table_id, row_idx, col_idx, rowspan, colspan,
+                 raw_text, typed_value, value_type, cell_span, confidence)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+        )
+        .map_err(|e| crate::map_sqlite(e, "preparing table cell insert"))?;
+
+    for t in tables {
+        table_stmt
+            .execute(params![
+                t.table_id,
+                t.version_id.to_string(),
+                t.node_ordinal,
+                t.source_span,
+                t.n_rows,
+                t.n_cols,
+                t.header_rows,
+                t.header_cols,
+                t.header_row_idx,
+                t.header_confidence,
+                t.column_names,
+                t.column_types,
+                t.merged_regions,
+                t.caption,
+                t.extraction_method,
+                t.provenance_class,
+                t.reconstruction,
+            ])
+            .map_err(|e| crate::map_sqlite(e, "inserting a table"))?;
+        for c in &t.cells {
+            cell_stmt
+                .execute(params![
+                    ulid::Ulid::new().to_string(),
+                    t.table_id,
+                    c.row_idx,
+                    c.col_idx,
+                    c.rowspan,
+                    c.colspan,
+                    c.raw_text,
+                    c.typed_value,
+                    c.value_type,
+                    c.cell_span,
+                    c.confidence,
+                ])
+                .map_err(|e| crate::map_sqlite(e, "inserting a table cell"))?;
+        }
+    }
+    Ok(())
+}
+
+/// A stored table, without its cells.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableRow {
+    pub table_id: String,
+    pub version_id: VersionId,
+    pub source_span: String,
+    pub n_rows: i64,
+    pub n_cols: i64,
+    pub header_rows: i64,
+    pub header_row_idx: Option<i64>,
+    pub header_confidence: f64,
+    pub column_names: Option<String>,
+    pub column_types: Option<String>,
+    pub caption: Option<String>,
+    pub extraction_method: String,
+    pub provenance_class: String,
+    pub reconstruction: String,
+}
+
+/// Every live table of one file version, in document order.
+pub fn tables_for(conn: &Connection, version_id: VersionId) -> Result<Vec<TableRow>> {
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT table_id, version_id, source_span, n_rows, n_cols, header_rows,
+                    header_row_idx, header_confidence, column_names, column_types,
+                    caption, extraction_method, provenance_class, reconstruction
+             FROM table_ir
+             WHERE version_id = ?1 AND status = 'ACTIVE'
+             ORDER BY node_ordinal, table_id",
+        )
+        .map_err(|e| crate::map_sqlite(e, "preparing the table query"))?;
+    let rows = stmt
+        .query_map([version_id.to_string()], |r| {
+            Ok(TableRow {
+                table_id: r.get(0)?,
+                version_id: id_of(&r.get::<_, String>(1)?, "table_ir.version_id")?,
+                source_span: r.get(2)?,
+                n_rows: r.get(3)?,
+                n_cols: r.get(4)?,
+                header_rows: r.get(5)?,
+                header_row_idx: r.get(6)?,
+                header_confidence: r.get(7)?,
+                column_names: r.get(8)?,
+                column_types: r.get(9)?,
+                caption: r.get(10)?,
+                extraction_method: r.get(11)?,
+                provenance_class: r.get(12)?,
+                reconstruction: r.get(13)?,
+            })
+        })
+        .map_err(|e| crate::map_sqlite(e, "reading tables"))?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| crate::map_sqlite(e, "reading tables"))
+}
+
+/// A stored cell.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CellRow {
+    pub row_idx: i64,
+    pub col_idx: i64,
+    pub rowspan: i64,
+    pub colspan: i64,
+    pub raw_text: String,
+    pub typed_value: Option<String>,
+    pub value_type: Option<String>,
+    pub cell_span: String,
+    pub confidence: f64,
+}
+
+/// One table's cells, row-major.
+pub fn cells_for(conn: &Connection, table_id: &str) -> Result<Vec<CellRow>> {
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT row_idx, col_idx, rowspan, colspan, raw_text, typed_value,
+                    value_type, cell_span, confidence
+             FROM table_cells WHERE table_id = ?1 ORDER BY row_idx, col_idx",
+        )
+        .map_err(|e| crate::map_sqlite(e, "preparing the cell query"))?;
+    let rows = stmt
+        .query_map([table_id], |r| {
+            Ok(CellRow {
+                row_idx: r.get(0)?,
+                col_idx: r.get(1)?,
+                rowspan: r.get(2)?,
+                colspan: r.get(3)?,
+                raw_text: r.get(4)?,
+                typed_value: r.get(5)?,
+                value_type: r.get(6)?,
+                cell_span: r.get(7)?,
+                confidence: r.get(8)?,
+            })
+        })
+        .map_err(|e| crate::map_sqlite(e, "reading table cells"))?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| crate::map_sqlite(e, "reading table cells"))
+}
+
 /// How many active chunks exist, for `marrow status`.
 pub fn chunk_count(conn: &Connection) -> Result<i64> {
     conn.query_row(

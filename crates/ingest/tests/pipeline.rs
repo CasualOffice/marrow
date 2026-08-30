@@ -377,3 +377,105 @@ fn a_rename_is_still_detected_when_the_old_path_is_gone() {
         .expect("renamed file must be findable at its new path");
     assert_eq!(original.file_id, moved.file_id, "a rename keeps its FileId");
 }
+
+#[test]
+fn a_csv_is_ingested_as_a_table_with_its_cells_and_their_spans() {
+    // The Table IR reaches the database, not just the parser. `table_ir` and
+    // `table_cells` exist so a numeric question can be answered by evaluating
+    // over cells and citing them (§99.3); a schema nothing writes cannot do
+    // that, which is what `ir_nodes` has been demonstrating since M1.
+    let f = fixture();
+    let body = "part,qty,price\nbolt,12,0.40\nnut,144,0.02\n";
+    f.write("parts.csv", body);
+    let (out, _) = f.run();
+    assert_eq!(out.stored, 1);
+
+    let conn = f.store.reader().unwrap();
+    let version = marrow_store::read::current_version(
+        &conn,
+        marrow_store::read::find_file_by_path(
+            &conn,
+            f.root_id,
+            &f.root_path.join("parts.csv").to_string_lossy(),
+        )
+        .unwrap()
+        .unwrap()
+        .file_id,
+    )
+    .unwrap()
+    .unwrap()
+    .version_id;
+
+    let tables = marrow_store::read::tables_for(&conn, version).unwrap();
+    assert_eq!(tables.len(), 1, "one table in one CSV");
+    let t = &tables[0];
+    assert_eq!((t.n_rows, t.n_cols), (3, 3));
+    assert_eq!(t.header_row_idx, Some(0));
+    assert!(t.header_confidence >= 0.9, "{t:?}");
+    assert_eq!(t.extraction_method, "native_delimited");
+    assert_eq!(t.reconstruction, "EXACT");
+    assert_eq!(t.column_names.as_deref(), Some(r#"["part","qty","price"]"#));
+    assert_eq!(
+        t.column_types.as_deref(),
+        Some(r#"["string","integer","decimal"]"#)
+    );
+
+    let cells = marrow_store::read::cells_for(&conn, &t.table_id).unwrap();
+    assert_eq!(cells.len(), 9);
+    let qty = cells
+        .iter()
+        .find(|c| c.row_idx == 1 && c.col_idx == 1)
+        .unwrap();
+    assert_eq!(qty.raw_text, "12");
+    assert_eq!(qty.typed_value.as_deref(), Some("12"));
+    assert_eq!(qty.value_type.as_deref(), Some("integer"));
+    // TBL-002: the stored span resolves back into the file's own bytes.
+    let span: marrow_core::SourceSpan = serde_json::from_str(&qty.cell_span).unwrap();
+    let marrow_core::SourceSpan::Bytes { start, end } = span else {
+        panic!("a CSV cell is a byte range, not {span:?}");
+    };
+    assert_eq!(&body[start as usize..end as usize], "12");
+
+    // TBL-011: the schema chunk is persisted as its own kind, not as prose.
+    let kinds: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT chunk_kind FROM chunks ORDER BY chunk_kind")
+            .unwrap();
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    };
+    assert_eq!(kinds, vec!["TABLE_BAND", "TABLE_SCHEMA"], "{kinds:?}");
+}
+
+#[test]
+fn a_file_that_stops_being_a_table_has_no_table_at_its_current_version() {
+    // The old version keeps its rows, exactly as its chunks do — history is not
+    // a lie, it is history. What must not happen is the *current* version still
+    // answering with a grid the file no longer contains.
+    let f = fixture();
+    f.write("parts.csv", "part,qty\nbolt,12\nnut,144\n");
+    f.run();
+
+    f.write("parts.csv", "just a line of prose\n");
+    f.run();
+
+    let conn = f.store.reader().unwrap();
+    let file_id = marrow_store::read::find_file_by_path(
+        &conn,
+        f.root_id,
+        &f.root_path.join("parts.csv").to_string_lossy(),
+    )
+    .unwrap()
+    .unwrap()
+    .file_id;
+    let version = marrow_store::read::current_version(&conn, file_id)
+        .unwrap()
+        .unwrap()
+        .version_id;
+    assert!(
+        marrow_store::read::tables_for(&conn, version)
+            .unwrap()
+            .is_empty(),
+        "the current version must not still offer a table"
+    );
+}

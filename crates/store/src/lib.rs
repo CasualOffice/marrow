@@ -35,8 +35,8 @@ use rusqlite::{Connection, OpenFlags};
 
 pub use conversations::{ConversationRow, NewTurn, TurnMode, TurnRow};
 pub use read::{
-    Enqueued, FileRow, JobStatus, LeasedJob, NewFile, NewJob, NewRoot, NewVersion, NewWorkspace,
-    PathRow, ReadConn, StorageKind, VersionRow,
+    CellRow, Enqueued, FileRow, JobStatus, LeasedJob, NewCell, NewFile, NewJob, NewRoot, NewTable,
+    NewVersion, NewWorkspace, PathRow, ReadConn, StorageKind, TableRow, VersionRow,
 };
 pub use writer::{Pending, Writer, WriterConfig};
 

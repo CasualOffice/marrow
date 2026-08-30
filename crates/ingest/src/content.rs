@@ -34,7 +34,15 @@ pub struct ContentInput {
 #[derive(Debug)]
 pub struct Extracted {
     pub docs: Vec<TextDoc>,
+    /// `chunks.chunk_kind` for each doc, in the same order.
+    ///
+    /// A parallel vector rather than a field on `TextDoc`, because `TextDoc` is
+    /// `marrow-index`'s type and the lexical index has no opinion about chunk
+    /// kinds. Ingest is the only place that needs both.
+    pub kinds: Vec<&'static str>,
     pub parse: marrow_store::read::NewParse,
+    /// The Table IR for this version (Part 5 §99.2), ready to persist.
+    pub tables: Vec<marrow_store::read::NewTable>,
 }
 
 /// Parse and chunk one file into index documents.
@@ -87,13 +95,19 @@ pub fn documents_for(
         parsed_at: marrow_core::Timestamp::now(),
     };
 
+    let tables = tables_for(&artifact, input.version_id)?;
+
     if chunks.is_empty() {
         debug!(path = %input.path, outcome = ?artifact.outcome, "no chunks");
         return Ok(Extracted {
             docs: Vec::new(),
+            kinds: Vec::new(),
             parse,
+            tables,
         });
     }
+
+    let kinds: Vec<&'static str> = chunks.iter().map(|c| c.kind.as_str()).collect();
 
     let docs = chunks
         .into_iter()
@@ -115,7 +129,89 @@ pub fn documents_for(
         })
         .collect();
 
-    Ok(Extracted { docs, parse })
+    Ok(Extracted {
+        docs,
+        kinds,
+        parse,
+        tables,
+    })
+}
+
+/// Turn the parse crate's Table IR into rows.
+///
+/// The one place enums become `TEXT`, like `provenance_sql` below. Note what is
+/// *not* here: no re-derivation, no second opinion about the header or the
+/// column types. The parse crate decided; this copies.
+fn tables_for(
+    artifact: &marrow_parse::ParsedArtifact,
+    version_id: VersionId,
+) -> Result<Vec<marrow_store::read::NewTable>> {
+    marrow_parse::tables_in(artifact)
+        .into_iter()
+        .map(|t| {
+            let cells = t
+                .cells
+                .iter()
+                .map(|c| {
+                    Ok(marrow_store::read::NewCell {
+                        row_idx: c.row as i64,
+                        col_idx: c.col as i64,
+                        rowspan: c.rowspan as i64,
+                        colspan: c.colspan as i64,
+                        // TBL-005: the text as written, always.
+                        raw_text: c.raw_text.clone(),
+                        typed_value: c.typed_value(),
+                        value_type: Some(c.value_type.as_str().to_string()),
+                        // TBL-002.
+                        cell_span: span_json(&c.span)?,
+                        confidence: c.confidence as f64,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(marrow_store::read::NewTable {
+                table_id: marrow_core::ChunkId::new().to_string(),
+                version_id,
+                node_ordinal: Some(t.node as i64),
+                source_span: span_json(&t.span)?,
+                n_rows: t.n_rows as i64,
+                n_cols: t.n_cols as i64,
+                header_rows: t.header.rows as i64,
+                header_cols: 0,
+                header_row_idx: t.header.row.map(|r| r as i64),
+                header_confidence: t.header.confidence as f64,
+                column_names: serde_json::to_string(&t.column_names).ok(),
+                column_types: serde_json::to_string(
+                    &t.column_types
+                        .iter()
+                        .map(|c| c.as_str())
+                        .collect::<Vec<_>>(),
+                )
+                .ok(),
+                merged_regions: serde_json::to_string(&t.merged_regions).ok(),
+                caption: t.caption.clone(),
+                extraction_method: t.extraction_method.to_string(),
+                provenance_class: provenance_sql(t.provenance),
+                reconstruction: t.reconstruction.as_str().to_string(),
+                cells,
+            })
+        })
+        .collect()
+}
+
+/// A span as the JSON `ir_nodes.source_span` and `table_cells.cell_span` hold.
+///
+/// Fallible rather than defaulted. A `null` fallback would satisfy the
+/// `json_valid` CHECK and store a cell that claims no location — which is
+/// exactly the state invariant #1 exists to make unrepresentable, so it has to
+/// be an error rather than a placeholder.
+fn span_json(span: &marrow_core::SourceSpan) -> Result<String> {
+    serde_json::to_string(span).map_err(|e| {
+        marrow_core::Error::new(
+            marrow_core::Code::IntInvariantViolated,
+            "A source span could not be recorded, so the cell it belongs to was not written.              Provenance is not optional; this is a bug in Marrow, not in the file.",
+        )
+        .with_context(e.to_string())
+    })
 }
 
 /// Warnings as a JSON array, or `None` when there are none.

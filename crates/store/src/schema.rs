@@ -51,7 +51,13 @@ PRAGMA query_only   = ON;
 ///
 /// The text index's own tables are not here: they live in `marrow-index` and
 /// are applied through the same chain from there.
-pub const LATER_TABLES: &[&str] = &["self_written", "conversations", "conversation_turns"];
+pub const LATER_TABLES: &[&str] = &[
+    "self_written",
+    "conversations",
+    "conversation_turns",
+    "table_ir",
+    "table_cells",
+];
 
 /// Every table this build expects to find.
 pub fn all_tables() -> Vec<&'static str> {
@@ -454,6 +460,104 @@ CREATE TABLE conversation_turns (
     UNIQUE(conversation_id, ordinal)
 );
 CREATE INDEX idx_turns_conversation ON conversation_turns(conversation_id, ordinal);
+"#;
+
+/// Migration 6: tables as a first-class type (Part 5 §99.2, Part 6 §106.6).
+///
+/// Six, because the composed chain is at five: `marrow-index` owns 2 and 4 and
+/// this crate owns 1, 3 and 5. See `migrate::MIGRATIONS` and [D57].
+///
+/// # What differs from §106.6, and why
+///
+/// - **`cell_span` is `NOT NULL`.** §106.6 leaves it nullable. Hard rule 1 says
+///   a node without a source span is a bug, and a cell is the node the whole
+///   feature exists to cite — "the number is in this table somewhere" is not a
+///   citation. The schema refuses to store one rather than trusting a writer.
+/// - **`header_row_idx` is added.** §106.6 records `header_rows` as a count,
+///   which cannot express "the header is row 1, because row 0 is a title". That
+///   file shape is ordinary — every spreadsheet exported with a report title
+///   above the data — and TBL-003 exists precisely because row 0 is not the
+///   answer. `header_rows` keeps its meaning (how many rows *are* header);
+///   `header_row_idx` says where they start, and the body begins at
+///   `header_row_idx + header_rows`.
+/// - **`reconstruction` is added.** TBL-018: a table that failed to rebuild
+///   stays discoverable and is *flagged*. `provenance_class` cannot carry that
+///   — a degraded grid can still be an exact read of the bytes — so the two
+///   facts get two columns.
+/// - **`column_names` is added.** Recoverable by joining back to the header
+///   row's cells, and the join is the point: the schema chunk, the file
+///   intelligence panel and TBL-012's lexical boost all want the names, and a
+///   table row that cannot say what its columns are called is not much of a
+///   read model.
+/// - **`status` is added**, per the soft-delete convention. Derived rows are
+///   replaced wholesale like `chunks`, so nothing sets it to anything else yet;
+///   it is here so the forget path has a column to flip rather than a migration
+///   to write.
+///
+/// `column_units` and `footnotes` are present and unwritten. TBL-006 (unit
+/// extraction) is a later item; the columns cost nothing now and adding them
+/// later would mean migrating a table with real rows in it.
+///
+/// [D57]: ../../../DECISIONS.md
+pub const SCHEMA_V6: &str = r#"
+CREATE TABLE table_ir (
+    table_id            TEXT PRIMARY KEY,            -- ULID
+    version_id          TEXT NOT NULL REFERENCES file_versions(version_id) ON DELETE CASCADE,
+    -- §106.6 makes this an FK to ir_nodes. Nothing writes ir_nodes yet, so the
+    -- FK would be dangling by construction; the column is kept untyped and the
+    -- arena ordinal below is what actually identifies the node today.
+    node_id             TEXT,
+    node_ordinal        INTEGER,
+    -- Invariant #1 at table scope.
+    source_span         TEXT NOT NULL CHECK (json_valid(source_span)),
+    n_rows              INTEGER NOT NULL,
+    n_cols              INTEGER NOT NULL,
+    header_rows         INTEGER NOT NULL DEFAULT 0,
+    header_cols         INTEGER NOT NULL DEFAULT 0,
+    header_row_idx      INTEGER,                     -- ADDED: see the doc comment
+    header_confidence   REAL NOT NULL DEFAULT 1.0,   -- TBL-003
+    column_names        TEXT CHECK (column_names IS NULL OR json_valid(column_names)),
+    column_types        TEXT CHECK (column_types IS NULL OR json_valid(column_types)),
+    column_units        TEXT CHECK (column_units IS NULL OR json_valid(column_units)),
+    merged_regions      TEXT CHECK (merged_regions IS NULL OR json_valid(merged_regions)),
+    caption             TEXT,
+    footnotes           TEXT,
+    -- §99.5's engine column. Deliberately not CHECK-constrained: the list grows
+    -- with every source, and a CHECK here would make adding a parser a
+    -- migration.
+    extraction_method   TEXT NOT NULL,
+    provenance_class    TEXT NOT NULL CHECK (provenance_class IN
+                          ('EXACT','DEGRADED','APPROXIMATE')),
+    reconstruction      TEXT NOT NULL DEFAULT 'EXACT' CHECK (reconstruction IN
+                          ('EXACT','DEGRADED','FAILED')),   -- TBL-018
+    confidence          REAL NOT NULL DEFAULT 1.0,
+    status              TEXT NOT NULL DEFAULT 'ACTIVE'
+                          CHECK (status IN ('ACTIVE','SUPERSEDED','TOMBSTONED'))
+);
+CREATE INDEX idx_table_version ON table_ir(version_id, status);
+
+CREATE TABLE table_cells (
+    cell_id             TEXT PRIMARY KEY,            -- ULID
+    table_id            TEXT NOT NULL REFERENCES table_ir(table_id) ON DELETE CASCADE,
+    row_idx             INTEGER NOT NULL,
+    col_idx             INTEGER NOT NULL,
+    rowspan             INTEGER NOT NULL DEFAULT 1,  -- TBL-004
+    colspan             INTEGER NOT NULL DEFAULT 1,
+    -- TBL-005: the raw text is always retained, alongside the typed reading and
+    -- never replaced by it.
+    raw_text            TEXT NOT NULL,
+    typed_value         TEXT,
+    value_type          TEXT,
+    unit                TEXT,                        -- TBL-006, not yet written
+    formula             TEXT,                        -- PAR-007, not yet written
+    number_format       TEXT,
+    -- **TBL-002.** NOT NULL where §106.6 has it nullable: this is the column the
+    -- product exists to fill in.
+    cell_span           TEXT NOT NULL CHECK (json_valid(cell_span)),
+    confidence          REAL NOT NULL DEFAULT 1.0,   -- TBL-013
+    UNIQUE(table_id, row_idx, col_idx)
+);
+CREATE INDEX idx_cells_table ON table_cells(table_id, row_idx);
 "#;
 
 #[cfg(test)]

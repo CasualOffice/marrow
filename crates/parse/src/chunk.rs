@@ -92,8 +92,31 @@ impl Chunk {
 pub enum ChunkKind {
     Text,
     Code,
+    /// A band of table rows, with the headers and caption repeated (TBL-011).
     TableBand,
+    /// The one chunk per table that describes its columns rather than its rows
+    /// (TBL-011). What semantic search actually matches a question about shape
+    /// against — no band of forty rows says "revenue by quarter" anywhere.
+    TableSchema,
     Metadata,
+}
+
+impl ChunkKind {
+    /// The `chunks.chunk_kind` value, matching the CHECK constraint in
+    /// [Part 6 §106.7].
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ChunkKind::Text => "TEXT",
+            ChunkKind::Code => "CODE",
+            ChunkKind::TableBand => "TABLE_BAND",
+            ChunkKind::TableSchema => "TABLE_SCHEMA",
+            ChunkKind::Metadata => "METADATA",
+        }
+    }
+
+    const fn is_table(self) -> bool {
+        matches!(self, ChunkKind::TableBand | ChunkKind::TableSchema)
+    }
 }
 
 /// Split an artifact into chunks.
@@ -108,7 +131,35 @@ pub fn chunk(artifact: &ParsedArtifact, policy: &ChunkPolicy) -> Vec<Chunk> {
     let mut out = Vec::new();
     let mut pending: Option<Pending> = None;
 
+    // TBL-011. A table is chunked as a table — bands with the headers repeated,
+    // plus a schema chunk — not as a run of loose cells. Claiming the nodes up
+    // front is what stops the ordinary path from also emitting them: a chunk of
+    // rows with no header text is unsearchable by the thing that names the
+    // column, which is the whole point of CHK-002.
+    let tables = crate::table::tables_in(artifact);
+    let mut owner = vec![usize::MAX; artifact.nodes.len()];
+    for (ti, t) in tables.iter().enumerate() {
+        // First claim wins, so a nested table stays part of the outer one
+        // rather than being emitted twice.
+        for (i, owned) in crate::table::descendants_of(artifact, t.node)
+            .into_iter()
+            .enumerate()
+        {
+            if owned && owner[i] == usize::MAX {
+                owner[i] = ti;
+            }
+        }
+    }
+
     for (i, node) in artifact.nodes.iter().enumerate() {
+        if let Some(t) = owner.get(i).and_then(|o| tables.get(*o)) {
+            if t.node == i {
+                flush(&mut pending, &mut out, artifact.provenance);
+                out.extend(table_chunks(artifact, t, policy));
+            }
+            continue;
+        }
+
         // Structural-only nodes contribute their text through their children.
         let Some(text) = node.text() else { continue };
         if text.trim().is_empty() {
@@ -323,6 +374,158 @@ fn split_oversized(
     out
 }
 
+/// Chunk one table (**TBL-011**).
+///
+/// Two shapes come out of here:
+///
+/// - **One schema chunk.** Columns, inferred types and numeric ranges. A
+///   question about what a file *contains* is answered by this chunk; no band
+///   of rows states its own shape.
+/// - **Row bands**, each one opening with the caption, any title rows above the
+///   header, and the header line. Repeating them costs a few dozen bytes per
+///   band and is the difference between a band being findable by the column
+///   name and being forty numbers with no nouns in them (CHK-005).
+///
+/// A table that failed reconstruction (TBL-018) gets neither: its text comes
+/// out as an ordinary text chunk so the content stays discoverable, because a
+/// grid we could not rebuild is still words somebody wrote.
+fn table_chunks(
+    artifact: &ParsedArtifact,
+    t: &crate::table::TableIr,
+    policy: &ChunkPolicy,
+) -> Vec<Chunk> {
+    let prefix = context_prefix(artifact, t.node);
+
+    if !t.is_usable() {
+        let text = t
+            .cells
+            .iter()
+            .map(|c| c.raw_text.trim())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if text.trim().is_empty() {
+            return Vec::new();
+        }
+        return vec![Chunk {
+            context_prefix: prefix,
+            span: t.span.clone(),
+            root_node: t.node,
+            kind: ChunkKind::Text,
+            provenance: t.provenance,
+            text_hash: ContentHash::of(text.as_bytes()),
+            byte_len: text.len(),
+            text,
+        }];
+    }
+
+    // Caption, then any rows above the header — an exported CSV's title row is
+    // its caption in all but name.
+    let mut lead = Vec::new();
+    if let Some(c) = &t.caption {
+        lead.push(c.clone());
+    }
+    for r in 0..t.header.preamble_rows {
+        let row = t
+            .row(r)
+            .map(|c| c.raw_text.trim())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !row.is_empty() {
+            lead.push(row);
+        }
+    }
+    let lead = lead.join("\n");
+    let header = crate::table::header_line(t);
+
+    let mut out = Vec::new();
+    out.push(finish_table_chunk(
+        crate::table::schema_text(t, &lead),
+        t.span.clone(),
+        t.node,
+        ChunkKind::TableSchema,
+        &prefix,
+        t.provenance,
+    ));
+
+    // The band preamble, repeated on every band.
+    let mut opening = String::new();
+    if !lead.is_empty() {
+        opening.push_str(&lead);
+        opening.push('\n');
+    }
+    if let Some(h) = &header {
+        opening.push_str(h);
+        opening.push('\n');
+    }
+
+    let mut body = String::new();
+    let mut span: Option<SourceSpan> = None;
+
+    for row in t.header.body_start()..t.n_rows {
+        let line = (0..t.n_cols)
+            .map(|c| {
+                t.cell(row, c)
+                    .map(|c| c.raw_text.trim())
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+            .join(" | ");
+        for c in t.row(row) {
+            span = Some(match span {
+                Some(s) => merge_spans(&s, &c.span),
+                None => c.span.clone(),
+            });
+        }
+        body.push_str(&line);
+        body.push('\n');
+
+        if opening.len() + body.len() >= policy.target_bytes {
+            out.push(finish_table_chunk(
+                format!("{opening}{body}"),
+                span.take().unwrap_or_else(|| t.span.clone()),
+                t.node,
+                ChunkKind::TableBand,
+                &prefix,
+                t.provenance,
+            ));
+            body.clear();
+        }
+    }
+    if !body.trim().is_empty() {
+        out.push(finish_table_chunk(
+            format!("{opening}{body}"),
+            span.unwrap_or_else(|| t.span.clone()),
+            t.node,
+            ChunkKind::TableBand,
+            &prefix,
+            t.provenance,
+        ));
+    }
+    out
+}
+
+fn finish_table_chunk(
+    text: String,
+    span: SourceSpan,
+    root_node: usize,
+    kind: ChunkKind,
+    prefix: &str,
+    provenance: ProvenanceClass,
+) -> Chunk {
+    Chunk {
+        context_prefix: prefix.to_owned(),
+        text_hash: ContentHash::of(text.as_bytes()),
+        byte_len: text.len(),
+        text,
+        span,
+        root_node,
+        kind,
+        provenance,
+    }
+}
+
 /// Fold chunks below `min_bytes` into a neighbour sharing their context.
 ///
 /// A 12-byte chunk cannot rank meaningfully and pollutes the result list; it is
@@ -330,12 +533,16 @@ fn split_oversized(
 fn merge_runts(chunks: Vec<Chunk>, policy: &ChunkPolicy) -> Vec<Chunk> {
     let mut out: Vec<Chunk> = Vec::with_capacity(chunks.len());
     for c in chunks {
-        let mergeable = out.last().is_some_and(|prev| {
-            prev.context_prefix == c.context_prefix
-                && prev.kind == c.kind
-                && prev.byte_len + c.byte_len <= policy.max_bytes
-                && (prev.byte_len < policy.min_bytes || c.byte_len < policy.min_bytes)
-        });
+        // Table chunks are never merged: two small tables under one heading are
+        // two tables, and a chunk holding both would cite rows from a grid it
+        // does not name.
+        let mergeable = !c.kind.is_table()
+            && out.last().is_some_and(|prev| {
+                prev.context_prefix == c.context_prefix
+                    && prev.kind == c.kind
+                    && prev.byte_len + c.byte_len <= policy.max_bytes
+                    && (prev.byte_len < policy.min_bytes || c.byte_len < policy.min_bytes)
+            });
         if mergeable {
             let prev = out.last_mut().expect("checked by `mergeable`");
             prev.text.push('\n');
@@ -555,6 +762,116 @@ mod tests {
             "expected several pieces, got {}",
             chunks.len()
         );
+    }
+
+    #[test]
+    fn every_table_emits_a_schema_chunk_and_bands_that_repeat_the_header() {
+        // TBL-011. The band is what holds the numbers; the schema chunk is what
+        // a question about the table's *shape* matches against.
+        let rows: String = (0..200)
+            .map(|i| format!("| part-{i} | {i} | {}.50 |\n", i * 2))
+            .collect();
+        let a = parse_md(&format!(
+            "# Stock\n\n| part | qty | price |\n|---|---|---|\n{rows}"
+        ));
+        let chunks = chunk(&a, &ChunkPolicy::default());
+
+        let schema: Vec<_> = chunks
+            .iter()
+            .filter(|c| c.kind == ChunkKind::TableSchema)
+            .collect();
+        assert_eq!(schema.len(), 1, "exactly one schema chunk per table");
+        assert!(
+            schema[0].text.contains("qty (integer"),
+            "{}",
+            schema[0].text
+        );
+        assert!(schema[0].context_prefix.contains("Stock"));
+
+        let bands: Vec<_> = chunks
+            .iter()
+            .filter(|c| c.kind == ChunkKind::TableBand)
+            .collect();
+        assert!(bands.len() > 1, "200 rows should band");
+        for b in &bands {
+            assert!(
+                b.text.starts_with("part | qty | price"),
+                "every band repeats the header: {:?}",
+                &b.text[..b.text.len().min(40)]
+            );
+            assert!(b.span.is_precise());
+        }
+        // The rows are not also emitted as loose cell text.
+        assert!(
+            !chunks
+                .iter()
+                .any(|c| c.kind == ChunkKind::Text && c.text.contains("part-7")),
+            "a table's rows must not be chunked twice"
+        );
+    }
+
+    #[test]
+    fn a_bands_span_covers_the_rows_it_holds() {
+        let src = "| part | qty |\n|---|---|\n| bolt | 12 |\n| nut | 144 |\n";
+        let a = parse_md(src);
+        let band = chunk(&a, &ChunkPolicy::default())
+            .into_iter()
+            .find(|c| c.kind == ChunkKind::TableBand)
+            .expect("a band");
+        let SourceSpan::Bytes { start, end } = band.span else {
+            panic!("expected a byte range, got {:?}", band.span);
+        };
+        let covered = &src[start as usize..end as usize];
+        assert!(covered.contains("bolt"), "{covered:?}");
+        assert!(covered.contains("144"), "{covered:?}");
+    }
+
+    #[test]
+    fn a_table_that_failed_reconstruction_is_still_discoverable_as_text() {
+        // TBL-018. One column is a list, not a table — and dropping it would
+        // lose the words, which is the outcome the requirement forbids.
+        let a = parse_md("| notes |\n|---|\n| shipment delayed at customs |\n");
+        let chunks = chunk(&a, &ChunkPolicy::default());
+        assert!(
+            chunks.iter().all(|c| !c.kind.is_table()),
+            "a failed reconstruction is not badged as a table"
+        );
+        assert!(
+            chunks
+                .iter()
+                .any(|c| c.text.contains("shipment delayed at customs")),
+            "the text survives: {chunks:#?}"
+        );
+    }
+
+    #[test]
+    fn a_caption_and_a_title_row_ride_on_every_band() {
+        let a = parse_with(
+            &crate::csv::CsvParser,
+            "q.csv",
+            "Quarterly results\npart,qty\nbolt,12\nnut,144\n",
+        );
+        for c in chunk(&a, &ChunkPolicy::default()) {
+            assert!(
+                c.text.contains("Quarterly results"),
+                "the title row is context for every chunk of the table: {:?}",
+                c.text
+            );
+        }
+    }
+
+    #[test]
+    fn two_small_tables_under_one_heading_do_not_merge_into_one_chunk() {
+        let a = parse_md(
+            "# H\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n\
+             text between\n\n| c | d |\n|---|---|\n| 3 | 4 |\n",
+        );
+        let bands: Vec<_> = chunk(&a, &ChunkPolicy::default())
+            .into_iter()
+            .filter(|c| c.kind == ChunkKind::TableBand)
+            .collect();
+        assert_eq!(bands.len(), 2, "{bands:#?}");
+        assert!(bands[0].text.contains('1') && !bands[0].text.contains('3'));
     }
 
     #[test]

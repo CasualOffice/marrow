@@ -332,7 +332,12 @@ impl<'a> Walker<'a> {
             return Ok(());
         }
 
-        if done.text.trim().is_empty() && done.kind != IrKind::CodeBlock {
+        // An empty table cell is kept, unlike an empty paragraph: dropping it
+        // takes a square out of the grid, and the reconstruction in
+        // [`crate::table`] would then read the row as narrower than it is.
+        if done.text.trim().is_empty()
+            && !matches!(done.kind, IrKind::CodeBlock | IrKind::TableCell)
+        {
             return Ok(());
         }
 

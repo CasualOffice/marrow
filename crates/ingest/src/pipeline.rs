@@ -936,15 +936,18 @@ fn extract(
     let extracted = documents_for(router, &policy.chunking, &input, &bytes)?;
     let docs = extracted.docs;
     let parse = extracted.parse;
+    let tables = extracted.tables;
+    let version_id = ids.version_id;
 
     // PAR-003: recorded even when nothing was chunked, so a parser upgrade can
     // find every file it has already seen.
     if docs.is_empty() {
-        inflight.push(
-            store
-                .writer()
-                .send(move |c| marrow_store::read::record_parse(c, &parse))?,
-        );
+        inflight.push(store.writer().send(move |c| {
+            marrow_store::read::record_parse(c, &parse)?;
+            // Still replaced, not skipped: a file that *had* a table and no
+            // longer does must lose it, or a query cites a grid that is gone.
+            marrow_store::read::replace_tables(c, version_id, &tables)
+        })?);
         return Ok(0);
     }
 
@@ -952,10 +955,14 @@ fn extract(
     // D3's consistency property expressed in DDL rather than in prose.
     let rows: Vec<marrow_store::read::NewChunk> = docs
         .iter()
-        .map(|d| marrow_store::read::NewChunk {
+        .zip(extracted.kinds.iter())
+        .map(|(d, kind)| marrow_store::read::NewChunk {
             chunk_id: d.chunk_id,
             version_id: d.version_id,
-            chunk_kind: "TEXT".into(),
+            // The chunker's own classification. It used to be hard-coded
+            // `TEXT`, which made `TABLE_BAND` and `TABLE_SCHEMA` (TBL-011)
+            // indistinguishable from prose the moment they existed.
+            chunk_kind: (*kind).to_string(),
             text: d.body.clone(),
             context_prefix: (!d.title.is_empty()).then(|| d.title.clone()),
             token_count: d.body.len().div_ceil(4) as i64,
@@ -965,7 +972,6 @@ fn extract(
         })
         .collect();
 
-    let version_id = ids.version_id;
     let n = rows.len();
     if let Some(ix) = index {
         // One closure, so one transaction: the canonical chunks and their index
@@ -980,6 +986,7 @@ fn extract(
         let docs_for_write = docs.clone();
         inflight.push(store.writer().send(move |c| {
             marrow_store::read::record_parse(c, &parse)?;
+            marrow_store::read::replace_tables(c, version_id, &tables)?;
             marrow_store::read::replace_chunks(c, version_id, &rows)?;
             marrow_index::fts5::upsert_docs(c, &docs_for_write)
         })?);
@@ -987,6 +994,7 @@ fn extract(
     } else {
         inflight.push(store.writer().send(move |c| {
             marrow_store::read::record_parse(c, &parse)?;
+            marrow_store::read::replace_tables(c, version_id, &tables)?;
             marrow_store::read::replace_chunks(c, version_id, &rows)
         })?);
     }

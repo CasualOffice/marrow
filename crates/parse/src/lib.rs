@@ -11,6 +11,7 @@
 //!        │
 //!        ├── code::CodeParser         T1  Tree-sitter, ~1,300 files
 //!        ├── markdown::MarkdownParser T1  headings, sections, links
+//!        ├── html::HtmlParser         T1  headings, prose, tables
 //!        ├── structured::Structured…  T1  TOML / JSON / YAML key paths
 //!        ├── csv::CsvParser           T1  table / row / cell
 //!        ├── text::TextParser         T1  the catch-all, byte + line spans
@@ -82,6 +83,7 @@ pub mod chunk;
 pub mod code;
 pub mod csv;
 pub mod decode;
+pub mod html;
 pub mod image;
 pub mod ir;
 pub mod markdown;
@@ -89,6 +91,7 @@ pub mod parser;
 pub mod pdf;
 pub mod router;
 pub mod structured;
+pub mod table;
 pub mod text;
 
 pub use budget::{BudgetGuard, Budgets};
@@ -96,6 +99,7 @@ pub use chunk::{chunk, Chunk, ChunkKind, ChunkPolicy, CHUNKER_VERSION};
 pub use code::{CodeParser, Lang};
 pub use csv::CsvParser;
 pub use decode::Decoded;
+pub use html::HtmlParser;
 pub use image::ImageParser;
 pub use ir::{
     ArtifactBuilder, IrKind, IrNode, LineIndex, NodeAttrs, ParseOutcome, ParseWarning,
@@ -105,6 +109,7 @@ pub use markdown::MarkdownParser;
 pub use parser::{ContentParser, FileProbe, ParseInput};
 pub use router::ParserRouter;
 pub use structured::StructuredParser;
+pub use table::{tables_in, CellValue, ColumnType, Header, Reconstruction, TableCell, TableIr};
 pub use text::TextParser;
 
 /// Parse one file's bytes with the default chain and the default budgets.

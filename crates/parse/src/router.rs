@@ -63,19 +63,23 @@ impl ParserRouter {
         r.register(Box::new(crate::code::CodeParser::new()));
         // 2. Markdown — 289 files, and the format the docs themselves are in.
         r.register(Box::new(crate::markdown::MarkdownParser));
-        // 3. Structured config — ~165 TOML/JSON/YAML files.
+        // 3. HTML — before the text fallback, which would otherwise index the
+        //    markup and never the cell between the `<td>`s. §99.5 lists HTML
+        //    as a native, EXACT table source.
+        r.register(Box::new(crate::html::HtmlParser));
+        // 4. Structured config — ~165 TOML/JSON/YAML files.
         r.register(Box::new(crate::structured::StructuredParser));
-        // 4. CSV — ~90 files.
+        // 5. CSV — ~90 files.
         r.register(Box::new(crate::csv::CsvParser));
-        // 5. PDF — before the text fallback, which would otherwise decode a
+        // 6. PDF — before the text fallback, which would otherwise decode a
         //    PDF's compressed streams into replacement characters and call it
         //    content. On a non-macOS build this refuses and the file stays
         //    findable by name.
         r.register(Box::new(crate::pdf::PdfParser));
-        // 6. Plain text — 449 files, and the T1 fallback for everything else
+        // 7. Plain text — 449 files, and the T1 fallback for everything else
         //    that decodes.
         r.register(Box::new(crate::text::TextParser));
-        // 7. Images — T4, so `register`'s sort puts it after every parser
+        // 8. Images — T4, so `register`'s sort puts it after every parser
         //    above regardless of where it appears here. That is the right
         //    place: OCR is the most expensive parse in the crate and the only
         //    one whose output is a guess, so it must never win a file that
