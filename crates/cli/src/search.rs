@@ -75,6 +75,7 @@ pub fn run(
     limit: usize,
     roots: &[String],
     json: bool,
+    explain: bool,
     style: Style,
     out: &mut impl Write,
 ) -> Result<()> {
@@ -105,6 +106,26 @@ pub fn run(
     let branch = semantic.map(|s| (&s.vectors as &dyn VectorIndex, &s.embedding));
     let results = marrow_query::search::search_hybrid(store, index, branch, &req)?;
     let hits = results.hits;
+
+    // **Why these results, in the ranking's own terms.** `explain` has existed
+    // in `marrow-query`, tested, with no way to reach it — a ranking nobody can
+    // interrogate is one you can only trust or distrust wholesale, and every
+    // retrieval bug this week was found by someone asking "why did it return
+    // *that*". Rendered from the same hits the answer used, so it explains the
+    // search that ran rather than a second one that might disagree.
+    if explain {
+        let ex = marrow_query::explain::explain(&req, &hits);
+        if json {
+            writeln!(
+                out,
+                "{}",
+                serde_json::to_string(&ex).unwrap_or_else(|_| "{}".into())
+            )?;
+        } else {
+            render_explanation(&ex, roots, style, out)?;
+        }
+        return Ok(());
+    }
 
     // IDX-001: a file must be findable by its name. Content search alone cannot
     // do that — a file with no parseable content has no chunks and therefore no
@@ -336,6 +357,80 @@ fn render_hits(
 }
 
 /// Zero results is a diagnosis, not a shrug ([UX §4]).
+/// The ranking, in words, for someone asking why a result is where it is.
+fn render_explanation(
+    ex: &marrow_query::explain::Explanation,
+    roots: &[String],
+    style: Style,
+    out: &mut impl Write,
+) -> Result<()> {
+    writeln!(out)?;
+    writeln!(
+        out,
+        "{} {}",
+        style.bold(&ex.query),
+        style.dim(&format!("· {} · rrf k={}", ex.mode, ex.rrf_k))
+    )?;
+
+    writeln!(out)?;
+    writeln!(out, "  {}", style.dim("branches"))?;
+    for b in &ex.branches {
+        writeln!(
+            out,
+            "    {:<10} weight {:<5} {:>3} of these hits   {}",
+            b.name,
+            b.weight,
+            b.contributed,
+            style.dim(b.ran_because)
+        )?;
+    }
+
+    writeln!(out)?;
+    for h in &ex.hits {
+        let where_ = crate::render::elide(&relative_to(&h.path, roots), 64);
+        writeln!(out, "  {:>2}. {}", h.rank, style.bold(&where_))?;
+        let ranks: Vec<String> = h
+            .branch_ranks
+            .iter()
+            .map(|r| format!("{}#{}", r.branch, r.rank))
+            .collect();
+        writeln!(
+            out,
+            "      {}",
+            style.dim(&format!(
+                "{} → base {:.4}{} → {:.4}",
+                ranks.join(" + "),
+                h.base_score,
+                h.multipliers
+                    .iter()
+                    .map(|m| format!(" × {:.2} ({})", m.factor, m.reason))
+                    .collect::<String>(),
+                h.final_score
+            ))
+        )?;
+        // Invariant #13 is the one line here that changes what you may *do*
+        // with a result, so it is stated rather than implied by its absence.
+        if !h.can_support_a_claim {
+            writeln!(
+                out,
+                "      {}",
+                style.warn("written by Marrow itself — cannot support a claim")
+            )?;
+        }
+    }
+
+    // Never omitted: an explanation that hides its own limits invites more
+    // confidence than it has earned.
+    if !ex.caveats.is_empty() {
+        writeln!(out)?;
+        writeln!(out, "  {}", style.dim("this cannot tell you"))?;
+        for c in &ex.caveats {
+            writeln!(out, "    {}", style.dim(c))?;
+        }
+    }
+    Ok(())
+}
+
 fn render_nothing(
     query: &str,
     branches: &[&'static str],

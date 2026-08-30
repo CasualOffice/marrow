@@ -6,10 +6,13 @@
 //! rather than a second, plausible-looking derivation of it. An explanation
 //! that can disagree with the ranking is worse than no explanation.
 //!
-//! **With one branch it says so.** M1 runs the lexical branch alone, which
-//! means RRF is a monotone transform of BM25 order and contributes nothing to
-//! the outcome. Presenting a fusion score as though it were doing work would be
-//! theatre; [`Explanation::caveats`] states the limitation instead.
+//! **With one branch it says so.** When only the lexical branch runs — which is
+//! the state of any machine with no embedding model, and hard rule 10 says that
+//! machine must still search — RRF is a monotone transform of BM25 order and
+//! contributes nothing to the outcome. Presenting a fusion score as though it
+//! were doing work would be theatre; [`Explanation::caveats`] states the
+//! limitation instead, and states it only when it is true: the branch list is
+//! derived from the hits, so a hybrid search is described as one.
 //!
 //! [Part 6 §113.4]: ../../../docs/Part_6_Engineering_Reference.md
 
@@ -18,6 +21,7 @@ use serde::Serialize;
 
 use crate::search::{
     mode_label, AppliedMultiplier, BranchRank, Hit, SearchRequest, LEXICAL, LEXICAL_WEIGHT, RRF_K,
+    SEMANTIC, SEMANTIC_WEIGHT,
 };
 
 /// Why the results came out in the order they did.
@@ -81,10 +85,45 @@ pub fn explain(req: &SearchRequest, hits: &[Hit]) -> Explanation {
         .filter(|h| h.branch_ranks.iter().any(|b| b.branch == LEXICAL))
         .count();
 
-    let mut caveats = vec![
-        "M1 runs one branch, so fusion does not change the order BM25 produced. \
-         The per-branch ranks become informative when the vector branch lands.",
-    ];
+    // Stated from what this search actually did, not from what the milestone was
+    // when the code was written. The original text said "M1 runs one branch …
+    // when the vector branch lands"; the vector branch has landed, so a caveat
+    // asserting otherwise is exactly the kind of stale claim an explanation
+    // exists to prevent.
+    // **Derived from the hits, not asserted.** This list was hard-coded to
+    // lexical alone, so once the semantic branch shipped the explanation
+    // reported one branch for a search that had run two — an explanation that
+    // is wrong about what happened is worse than none, because it is the thing
+    // people reach for when they already suspect something.
+    let semantic_hits = hits
+        .iter()
+        .filter(|h| h.branch_ranks.iter().any(|b| b.branch == SEMANTIC))
+        .count();
+
+    let mut branches = vec![BranchExplanation {
+        name: LEXICAL,
+        weight: LEXICAL_WEIGHT,
+        contributed,
+        ran_because: "always: lexical retrieval needs no model, no GPU and no network \
+                      (invariant #15)",
+    }];
+    if semantic_hits > 0 {
+        branches.push(BranchExplanation {
+            name: SEMANTIC,
+            weight: SEMANTIC_WEIGHT,
+            contributed: semantic_hits,
+            ran_because: "an embedding model was loaded and the chunk had a vector",
+        });
+    }
+
+    let mut caveats = Vec::new();
+    if branches.len() < 2 {
+        caveats.push(
+            "Only one branch ran, so fusion did not change the order BM25 produced. \
+             The per-branch ranks become informative when a second branch runs — \
+             the semantic one needs an embedding model and a finished backfill.",
+        );
+    }
     if hits.iter().any(|h| !h.can_support_a_claim) {
         caveats.push(
             "Some results are agent-written (origin = SELF). They are findable and \
@@ -104,13 +143,7 @@ pub fn explain(req: &SearchRequest, hits: &[Hit]) -> Explanation {
     Explanation {
         query: req.text.clone(),
         mode: mode_label(req.mode),
-        branches: vec![BranchExplanation {
-            name: LEXICAL,
-            weight: LEXICAL_WEIGHT,
-            contributed,
-            ran_because: "always: lexical retrieval needs no model, no GPU and no network \
-                          (invariant #15)",
-        }],
+        branches,
         rrf_k: RRF_K,
         hits: hits.iter().map(hit_explanation).collect(),
         caveats,

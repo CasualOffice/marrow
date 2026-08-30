@@ -134,6 +134,13 @@ enum Cmd {
         /// "not found".
         #[arg(long, value_name = "SECONDS", requires = "literal")]
         time_limit: Option<u64>,
+        /// Show why each result ranked where it did, instead of the results
+        ///
+        /// Prints the branches that ran, their weights, each hit's rank inside
+        /// each branch, the multipliers applied, and what the explanation
+        /// cannot tell you.
+        #[arg(long, conflicts_with = "literal")]
+        explain: bool,
         /// Also search by meaning, not only by words
         ///
         /// Off by default because it starts an embedding model, which costs
@@ -288,6 +295,7 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
             workspace,
             time_limit,
             semantic,
+            explain,
         } => {
             let q = query.join(" ");
             if q.trim().is_empty() {
@@ -345,6 +353,7 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
                 *limit,
                 &roots,
                 cli.json,
+                *explain,
                 style,
                 out,
             )
