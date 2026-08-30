@@ -188,6 +188,58 @@ fn indexed_corpus() -> (tempfile::TempDir, tempfile::TempDir, PathBuf) {
     (corpus, db_dir, db)
 }
 
+/// **A request for a shape is not a request for a fact.**
+///
+/// Asked to "generate an HTML page about pitching STT to our clients" over a
+/// corpus that documents the STT service in detail, the model replied that the
+/// evidence contained nothing about *pitching* and declined. It had read the
+/// format instruction as a claim needing support. The refusal was polite,
+/// confident and useless: everything needed to write the page was in front of
+/// it.
+///
+/// This runs the real model, because the bug lived in what the model made of
+/// the prompt and no assertion about the prompt's text can catch it.
+#[test]
+#[ignore = "needs a downloaded model and about a minute"]
+fn asking_for_a_page_built_from_the_evidence_produces_one_rather_than_a_refusal() {
+    let (_corpus, _db_dir, db) = indexed_corpus();
+    let core = Arc::new(Core::open(db).expect("core"));
+    let hub = Arc::new(Hub::start(data_dir().join("models"), &[]));
+    if !hub.snapshot().runtime_ready || hub.generator().is_none() {
+        panic!("needs a runtime and a model");
+    }
+
+    let mut answer = String::new();
+    ask::run(
+        &core,
+        &hub,
+        "conversation-page",
+        "Generate an HTML page pitching this lease to a client.",
+        &[],
+        false,
+        None,
+        &Cancel::new(),
+        &mut |e| {
+            if let ask::AskEvent::Token { text } = e {
+                answer.push_str(&text)
+            }
+        },
+    );
+
+    eprintln!("--- answer ---\n{answer}\n");
+    let lower = answer.to_lowercase();
+    assert!(
+        lower.contains("<html") || lower.contains("<!doctype") || lower.contains("```html"),
+        "asked for a page and got prose or a refusal instead:\n{answer}"
+    );
+    // And it must still be built from the file rather than invented: the lease
+    // fixture is the only place these could come from.
+    assert!(
+        lower.contains("renew") || lower.contains("rent"),
+        "the page was not built from the evidence:\n{answer}"
+    );
+}
+
 #[test]
 #[ignore = "needs a downloaded model and about ten seconds"]
 fn a_question_about_real_files_is_answered_from_them_with_a_citation() {

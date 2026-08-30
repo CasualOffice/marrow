@@ -52,12 +52,40 @@ const MAX_EVIDENCE_BYTES: usize = 16 * 1024;
 
 /// The runtime template. Assembled here, in the binary — **no retrieved text
 /// ever reaches it** (§114.1).
+/// The instructions. **No retrieved text ever reaches this** (§114.1).
+///
+/// The first version said "Answer only from the evidence blocks provided", and
+/// that sentence made the model refuse work it could do. Asked to "generate an
+/// HTML page about pitching STT to our clients" — over a corpus that documents
+/// the STT service in detail — it replied that the evidence contained nothing
+/// about *pitching* and declined. It had read the word "generate an HTML page
+/// about X" as a claim needing support, rather than as an instruction about the
+/// shape of the answer.
+///
+/// So the two are now separated explicitly. **What may be asserted** about the
+/// user's files comes from the evidence and is cited. **What form the answer
+/// takes** — prose, a table, a diagram, a page, a pitch — is the user's to
+/// choose, and choosing it is not a claim about anything. Presenting what the
+/// evidence says persuasively is still only saying what the evidence says;
+/// inventing a capability it does not mention is not, and that is the line the
+/// model has to hold.
 const SYSTEM: &str = "\
-You are Marrow, answering questions about the user's own files. Answer only \
-from the evidence blocks provided. Every claim must cite the block it came \
-from, like [E1]. If the evidence does not contain the answer, say so plainly \
-rather than guessing. Use Markdown. When a diagram would be clearer than \
-prose, write a ```mermaid block.";
+You are Marrow. You answer from the user's own files.
+
+**Facts come from the evidence.** Every statement about what the user's files, \
+projects or systems contain must come from an evidence block and cite it, like \
+[E1]. Never invent a detail, a capability or a number that is not there. If the \
+evidence does not contain what was asked for, say exactly which part is missing.
+
+**The form of the answer is the user's instruction, not a claim.** If they ask \
+for a page, a table, a diagram, a summary, a plan or a pitch, produce that \
+thing, built from the evidence you have. Asking for a different shape is never \
+a reason to refuse: shaping and presenting what the evidence says is still \
+saying what the evidence says. Refuse only when the *facts* are absent, and \
+then name the facts rather than the format.
+
+Use Markdown. Write a ```mermaid block when a diagram is clearer than prose, \
+and a ```html block when asked for a page — both are rendered for the user.";
 
 /// What the window receives while an answer is being produced.
 ///
@@ -585,14 +613,27 @@ mod tests {
     #[test]
     fn the_system_prompt_is_a_template_and_contains_no_retrieved_text() {
         // §114.1, and the thing that is easy to break by accident later.
-        assert!(SYSTEM.contains("Answer only from the evidence"));
+        //
+        // Pinned as properties rather than as a sentence. The previous version
+        // asserted the literal "Answer only from the evidence" — which is the
+        // exact phrasing that made the model refuse to build a page out of
+        // evidence it had, because it read a format request as a claim. A test
+        // that pins the wording of a prompt outlives the reason for the wording.
         assert!(
-            SYSTEM.contains("say so plainly"),
-            "must license 'I don't know'"
+            SYSTEM.contains("cite") && SYSTEM.contains("[E1]"),
+            "claims about the user's files must be cited"
         );
         assert!(
-            SYSTEM.contains("mermaid"),
-            "diagrams are part of the answer format"
+            SYSTEM.contains("Never invent"),
+            "the model must not fill a gap with plausible detail"
+        );
+        assert!(
+            SYSTEM.contains("name the facts rather than the format"),
+            "refusing a shape rather than a missing fact is the bug this replaced"
+        );
+        assert!(
+            SYSTEM.contains("mermaid") && SYSTEM.contains("html"),
+            "diagrams and pages are part of the answer format"
         );
     }
 
