@@ -487,6 +487,13 @@ fn extraction_method(parser_id: &str) -> &'static str {
     }
 }
 
+/// How large a bounding box is graded by painting every square.
+///
+/// Four million squares is a 4 MB bitmap and far larger than any table a parser
+/// can actually fill: the cell caps are three orders of magnitude below it. Past
+/// this the box is an address rather than a table, and grading counts instead.
+const MAX_PAINTED_SQUARES: u64 = 1 << 22;
+
 fn grade(cells: &[TableCell], n_rows: u32, n_cols: u32) -> Reconstruction {
     if n_cols < 2 || n_rows < 2 || cells.is_empty() {
         // One column is a list and one row is a sentence. Saying so is TBL-018:
@@ -495,6 +502,39 @@ fn grade(cells: &[TableCell], n_rows: u32, n_cols: u32) -> Reconstruction {
     }
     // Every square either holds a cell or is covered by a span. Anything else is
     // a hole, and a hole means the shape is a guess.
+    //
+    // **Painted only while the box is small enough to paint.** `n_rows` and
+    // `n_cols` are the far edge of the bounding box, and a workbook with a
+    // value in A1 and one in XFD1048576 has two cells and a box of 17 billion
+    // squares — so this asked for a 17.2 GB `Vec<bool>` to grade a two-cell
+    // table. It has never crashed, for two reasons that are both accidents:
+    // `vec![false; n]` allocates zeroed, so the pages are mapped lazily and
+    // never touched, and `all()` short-circuits on the first hole, which in a
+    // sparse table is index 1. Neither is a guarantee. An allocator that
+    // refuses aborts the process, uncatchably, and the page-table cost is real
+    // even when the reservation is not.
+    let area = (n_rows as u64) * (n_cols as u64);
+    if area > MAX_PAINTED_SQUARES {
+        // Counted instead. Overlapping spans could in principle double-count,
+        // but every parser caps its cells far below this — XLSX at 20,000 per
+        // sheet, DOCX at 512 per row — so a box this size cannot be filled and
+        // the answer is `Degraded` either way. Counting says so without
+        // reserving an address space to say it in.
+        let painted: u64 = cells
+            .iter()
+            .map(|c| {
+                let rows = (c.rowspan as u64).min(n_rows.saturating_sub(c.row) as u64);
+                let cols = (c.colspan as u64).min(n_cols.saturating_sub(c.col) as u64);
+                rows * cols
+            })
+            .sum();
+        return if painted >= area {
+            Reconstruction::Exact
+        } else {
+            Reconstruction::Degraded
+        };
+    }
+
     let mut covered = vec![false; (n_rows as usize) * (n_cols as usize)];
     for c in cells {
         for r in c.row..(c.row + c.rowspan).min(n_rows) {
