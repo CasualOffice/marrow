@@ -549,6 +549,32 @@ impl Hub {
         cancel: &Cancel,
         on_token: &mut dyn FnMut(Token),
     ) -> marrow_core::Result<Completion> {
+        self.generate_with_progress(
+            model_id,
+            envelope,
+            thorough,
+            cancel,
+            &mut |_, _| {},
+            on_token,
+        )
+    }
+
+    /// As [`Hub::generate`], reporting what it is doing while it does it.
+    ///
+    /// The first question of a session loads several gigabytes of weights, and
+    /// until this existed the window showed nothing between Enter and the first
+    /// token. A system with no progress looks slow whether or not it is.
+    #[allow(clippy::too_many_arguments)] // Each is a distinct input; a struct
+                                         // would move the list rather than shorten it.
+    pub fn generate_with_progress(
+        &self,
+        model_id: &str,
+        envelope: &Envelope,
+        thorough: bool,
+        cancel: &Cancel,
+        on_stage: &mut dyn FnMut(&str, &str),
+        on_token: &mut dyn FnMut(Token),
+    ) -> marrow_core::Result<Completion> {
         let entry = self
             .registry
             .lock()
@@ -574,6 +600,15 @@ impl Hub {
 
         let mut slot = self.loaded.lock().map_err(|_| poisoned())?;
         if slot.as_ref().map(|l| l.model_id.as_str()) != Some(model_id) {
+            // SKEL-006: the stage, named. "Loading" for ten seconds with no
+            // subject is indistinguishable from hung.
+            on_stage(
+                "loading",
+                &format!(
+                    "Loading {} — first question of the session",
+                    entry.display_name
+                ),
+            );
             // Swapping models means the old one's weights and cache go first;
             // holding both would be exactly the memory spike admission exists
             // to prevent.
@@ -627,6 +662,14 @@ impl Hub {
             });
         }
 
+        on_stage(
+            "thinking",
+            if thorough {
+                "Reading the evidence and reasoning"
+            } else {
+                "Reading the evidence"
+            },
+        );
         let provider = &slot.as_ref().expect("just loaded").provider;
         provider.generate(
             GenerateRequest {

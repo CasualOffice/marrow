@@ -51,6 +51,8 @@ interface Turn {
   meta: { boundary: string; model: string; bytes: number } | null;
   usage: Usage | null;
   failure: { code: string; message: string } | null;
+  /** What the pipeline is doing, while it is doing it. */
+  stage: { stage: string; detail: string } | null;
   /** True while tokens are still arriving. */
   running: boolean;
 }
@@ -67,6 +69,7 @@ function newTurn(question: string, thorough: boolean): Turn {
     meta: null,
     usage: null,
     failure: null,
+    stage: { stage: "retrieving", detail: "Searching your files" },
     running: true,
   };
 }
@@ -135,6 +138,9 @@ export function AskView() {
 
       const onEvent = (e: AskEvent) => {
         switch (e.kind) {
+          case "stage":
+            update(turn.id, (t) => ({ ...t, stage: { stage: e.stage, detail: e.detail } }));
+            break;
           case "sources":
             update(turn.id, (t) => ({
               ...t,
@@ -144,13 +150,18 @@ export function AskView() {
             }));
             break;
           case "token":
-            update(turn.id, (t) => ({ ...t, answer: t.answer + e.text }));
+            // The first token ends the waiting state: once text is arriving,
+            // a stage line beside it would be describing the past.
+            update(turn.id, (t) => ({ ...t, answer: t.answer + e.text, stage: null }));
             break;
           case "thinking":
-            update(turn.id, (t) => ({ ...t, thinking: t.thinking + e.text }));
+            // Reasoning arriving is output arriving. Leaving the skeleton up
+            // through a long Thorough think would say "nothing yet" while the
+            // model is visibly working.
+            update(turn.id, (t) => ({ ...t, thinking: t.thinking + e.text, stage: null }));
             break;
           case "done":
-            update(turn.id, (t) => ({ ...t, usage: e }));
+            update(turn.id, (t) => ({ ...t, usage: e, stage: null }));
             break;
           case "failed":
             update(turn.id, (t) => ({
@@ -175,7 +186,7 @@ export function AskView() {
           },
         }));
       } finally {
-        update(turn.id, (t) => ({ ...t, running: false }));
+        update(turn.id, (t) => ({ ...t, running: false, stage: null }));
         setRunning(false);
         askId.current = null;
         field.current?.focus();
@@ -287,6 +298,47 @@ export function AskView() {
   );
 }
 
+/**
+ * What the pipeline is doing, while it is doing it.
+ *
+ * SKEL-003: a skeleton that is still there at ten seconds becomes a status
+ * with a reason. The first question of a session loads several gigabytes, so
+ * that is not an edge case — it is the first thing anyone sees. The elapsed
+ * counter is what makes a long load read as working rather than stuck.
+ */
+function Waiting({ stage }: { stage: { stage: string; detail: string } }) {
+  const [seconds, setSeconds] = useState(0);
+  useEffect(() => {
+    setSeconds(0);
+    const t = window.setInterval(() => setSeconds((s) => s + 1), 1000);
+    return () => window.clearInterval(t);
+  }, [stage.stage]);
+
+  return (
+    <div className={styles.waiting} aria-busy="true" aria-live="polite">
+      <div className={styles.waitingLine}>
+        <span className={styles.waitingDot} aria-hidden="true" />
+        <span className={styles.waitingText}>{stage.detail}</span>
+        {/* Only once it has been long enough to wonder. A counter that starts
+            at 1 s makes every fast answer look slow. */}
+        {seconds >= 3 && <span className={styles.waitingClock}>{seconds}s</span>}
+      </div>
+      {/* SKEL-001: a skeleton in the shape of the result, not a spinner. */}
+      <div className={styles.skeleton}>
+        <span className={styles.skelLine} style={{ width: "92%" }} />
+        <span className={styles.skelLine} style={{ width: "78%" }} />
+        <span className={styles.skelLine} style={{ width: "85%" }} />
+      </div>
+      {seconds >= 20 && stage.stage === "loading" && (
+        <p className={styles.waitingNote}>
+          Still loading. A model is a few gigabytes and this happens once per
+          session; the next question will be quick.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function Empty() {
   return (
     <div className={styles.empty}>
@@ -380,7 +432,11 @@ function TurnBlock({
         </details>
       )}
 
-      {(turn.answer || turn.running) && (
+      {turn.stage && <Waiting stage={turn.stage} />}
+
+      {/* Not while waiting: the skeleton is already saying "something is
+          coming", and a caret beside it is two answers to one question. */}
+      {(turn.answer || (turn.running && !turn.stage)) && (
         <Answer
           text={turn.answer}
           citations={citationIds}

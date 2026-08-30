@@ -452,6 +452,8 @@ export interface ExcludedSource {
 }
 
 export type AskEvent =
+  /** What the pipeline is doing right now (SKEL-003, SKEL-006). */
+  | { readonly kind: "stage"; readonly stage: string; readonly detail: string }
   | {
       readonly kind: "sources";
       readonly hits: readonly Citation[];

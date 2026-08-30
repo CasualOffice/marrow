@@ -433,3 +433,85 @@
   flex: none;
   margin-top: 3px;
 }
+
+/* ── waiting ────────────────────────────────────────────────────────── */
+
+.waiting {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  max-width: var(--prose-measure);
+}
+
+.waitingLine {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--fg2);
+}
+
+.waitingDot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-dot);
+  background: var(--accent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .waitingDot {
+    animation: waitingPulse 1.2s var(--ease) infinite;
+  }
+}
+
+@keyframes waitingPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.75); }
+}
+
+.waitingText {
+  font-family: var(--tight);
+}
+
+/* Only after three seconds. A counter from 1 s makes every fast answer look
+   slow, which is the opposite of what this is for. */
+.waitingClock {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg3);
+}
+
+.waitingNote {
+  margin: 0;
+  color: var(--fg3);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-body);
+}
+
+/* SKEL-001: the shape of the answer that is coming, not a spinner. */
+.skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.skelLine {
+  height: 12px;
+  border-radius: var(--r-ctrl);
+  background: var(--sunken);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .skelLine {
+    animation: skelPulse 1.4s var(--ease) infinite;
+  }
+  .skelLine:nth-child(2) { animation-delay: 0.15s; }
+  .skelLine:nth-child(3) { animation-delay: 0.3s; }
+}
+
+@keyframes skelPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}

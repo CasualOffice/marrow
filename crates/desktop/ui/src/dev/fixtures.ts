@@ -653,6 +653,20 @@ export async function mockAsk(
   onEvent: (e: AskEvent) => void,
   priorTurns = 0,
 ): Promise<string> {
+  // The stages a real run emits, with delays long enough to actually see —
+  // a fixture that skips straight to tokens hides every layout problem the
+  // waiting state has.
+  onEvent({ kind: "stage", stage: "retrieving", detail: "Searching your files" });
+  await sleep(400);
+  if (priorTurns === 0) {
+    onEvent({
+      kind: "stage",
+      stage: "loading",
+      detail: "Loading Qwen 3.5 4B — first question of the session",
+    });
+    await sleep(900);
+  }
+
   const sources: Citation[] = [
     {
       id: "E1",
@@ -690,6 +704,13 @@ export async function mockAsk(
     boundary: "local",
     model: "Qwen 3.5 4B",
   });
+
+  onEvent({
+    kind: "stage",
+    stage: "thinking",
+    detail: thorough ? "Reading the evidence and reasoning" : "Reading the evidence",
+  });
+  await sleep(500);
 
   if (thorough) {
     for (const t of [

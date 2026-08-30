@@ -49,6 +49,17 @@ prose, write a ```mermaid block.";
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum AskEvent {
+    /// What the pipeline is doing right now.
+    ///
+    /// Between pressing Enter and the first token there is retrieval, possibly
+    /// a multi-second model load, and a prefill — and until this event existed
+    /// the window showed nothing at all for all of it. "It feels slow" is what
+    /// a system with no progress looks like even when it is not slow, and the
+    /// first question of a session genuinely does load several gigabytes.
+    Stage {
+        stage: String,
+        detail: String,
+    },
     /// Retrieval finished. Sent before the first token so the citation list
     /// can render while the model is still thinking.
     Sources {
@@ -284,6 +295,10 @@ pub fn run(
     emit: &mut dyn FnMut(AskEvent),
 ) {
     let started = std::time::Instant::now();
+    emit(AskEvent::Stage {
+        stage: "retrieving".into(),
+        detail: "Searching your files".into(),
+    });
     // One session per conversation, so the delimiter — and therefore the whole
     // preamble — is byte-identical across turns and the KV prefix cache has
     // something to reuse. A fresh session per question reused 3% of the prompt;
@@ -328,10 +343,28 @@ pub fn run(
         model: generator.clone(),
     });
 
-    match hub.generate(&generator, &envelope, thorough, cancel, &mut |t| match t {
-        Token::Text(text) => emit(AskEvent::Token { text }),
-        Token::Thinking(text) => emit(AskEvent::Thinking { text }),
-    }) {
+    // Two callbacks, one sink. `RefCell` rather than threading a channel
+    // through the hub: the borrow is dynamic but the calls are strictly
+    // sequential on one thread, so it cannot actually overlap.
+    let sink = std::cell::RefCell::new(emit);
+    let outcome = hub.generate_with_progress(
+        &generator,
+        &envelope,
+        thorough,
+        cancel,
+        &mut |stage: &str, detail: &str| {
+            (sink.borrow_mut())(AskEvent::Stage {
+                stage: stage.into(),
+                detail: detail.into(),
+            })
+        },
+        &mut |t| match t {
+            Token::Text(text) => (sink.borrow_mut())(AskEvent::Token { text }),
+            Token::Thinking(text) => (sink.borrow_mut())(AskEvent::Thinking { text }),
+        },
+    );
+    let emit = sink.into_inner();
+    match outcome {
         Ok(c) => emit(AskEvent::Done {
             prompt_tokens: c.usage.prompt_tokens,
             output_tokens: c.usage.output_tokens,
