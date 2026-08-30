@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git show:*)",
+
+      "Bash(cargo build:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(cargo tree:*)",
+      "Bash(sh check.sh)",
+
+      "Bash(npx tsc --noEmit)",
+      "Bash(npx vite build)",
+
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(sort:*)",
+      "Bash(uniq:*)",
+      "Bash(comm:*)",
+
+      "Bash(df:*)",
+      "Bash(du:*)",
+      "Bash(vm_stat)",
+      "Bash(pgrep:*)",
+
+      "Bash(./target/debug/marrow status:*)",
+      "Bash(./target/release/marrow status:*)",
+      "Bash(./target/debug/marrow search:*)",
+      "Bash(./target/release/marrow search:*)"
+    ],
+
+    "deny": [
+      "Bash(cargo clean:*)",
+      "Bash(git push:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(rm -rf:*)",
+
+      "Read(./.env)",
+      "Read(./**/.env)",
+      "Read(./**/*.pem)",
+      "Read(./**/id_rsa*)"
+    ]
+  }
+}

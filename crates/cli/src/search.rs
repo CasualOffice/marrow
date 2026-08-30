@@ -13,8 +13,10 @@ use std::path::Path;
 use marrow_core::{Origin, ProvenanceClass, Result, SourceSpan, Timestamp};
 use marrow_index::{Embedding, MatchMode, Snippet, SqliteVectorIndex, TextIndex, VectorIndex};
 use marrow_query::search::{BranchRank, Hit, SearchRequest, LEXICAL, SEMANTIC};
+use marrow_store::rusqlite::types::ToSql;
 use marrow_store::Store;
 
+use crate::filters::Filters;
 use crate::render::{self, Style};
 
 /// The semantic branch's inputs, when this machine has them.
@@ -65,20 +67,34 @@ pub struct Semantic {
     prepared_in: std::time::Duration,
 }
 
+/// One indexed search, as the command line asked for it.
+///
+/// A struct rather than ten positional parameters: filters made the argument
+/// list long enough that `run(store, index, sem, q, 20, &roots, false, true, …)`
+/// stopped being readable at the call site, and two adjacent `bool`s that mean
+/// `--json` and `--explain` are a swap waiting to happen.
+pub struct Request<'a> {
+    pub query: &'a str,
+    pub limit: usize,
+    /// Narrowing, already resolved. Applied *inside* the query, never to its
+    /// results — see [`crate::filters`].
+    pub filters: &'a Filters,
+    /// Workspace roots, for rendering paths relative to them.
+    pub roots: &'a [String],
+    pub json: bool,
+    pub explain: bool,
+}
+
 /// Render results, or a diagnosis when there are none.
-#[allow(clippy::too_many_arguments)]
 pub fn run(
     store: &Store,
     index: &dyn TextIndex,
     semantic: Option<&Semantic>,
-    query: &str,
-    limit: usize,
-    roots: &[String],
-    json: bool,
-    explain: bool,
+    req: &Request<'_>,
     style: Style,
     out: &mut impl Write,
 ) -> Result<()> {
+    let query = req.query;
     // The surface names its own escape hatch. The index rejects a query that
     // tokenizes to nothing, but its message cannot know whether the caller has
     // a flag, a tool or a button — so it names none and each surface names its.
@@ -100,12 +116,24 @@ pub fn run(
     // multipliers and the hydration a semantic-only hit needs all live there
     // and are tested there. Calling the index alone is what made `marrow embed`
     // change nothing that this surface showed.
-    let req = SearchRequest::new(query)
+    //
+    // The filters ride on the request, so the index applies them *before*
+    // `limit`. Narrowing the returned page instead would let a `--type html`
+    // search report nothing while HTML matches sat at rank 101.
+    let search = SearchRequest::new(query)
         .mode(MatchMode::Terms)
-        .limit(limit);
+        .limit(req.limit)
+        .filters(req.filters.search.clone());
     let branch = semantic.map(|s| (&s.vectors as &dyn VectorIndex, &s.embedding));
-    let results = marrow_query::search::search_hybrid(store, index, branch, &req)?;
-    let hits = results.hits;
+    let results = marrow_query::search::search_hybrid(store, index, branch, &search)?;
+    // See `Filters::admits`: the semantic branch is filtered by workspace and
+    // nothing else, so a chunk only it found has passed no extension, path or
+    // date test. This removes those and only those.
+    let hits: Vec<Hit> = results
+        .hits
+        .into_iter()
+        .filter(|h| req.filters.admits(&h.path, h.modified))
+        .collect();
 
     // **Why these results, in the ranking's own terms.** `explain` has existed
     // in `marrow-query`, tested, with no way to reach it — a ranking nobody can
@@ -113,18 +141,12 @@ pub fn run(
     // retrieval bug this week was found by someone asking "why did it return
     // *that*". Rendered from the same hits the answer used, so it explains the
     // search that ran rather than a second one that might disagree.
-    if explain {
-        let ex = marrow_query::explain::explain(&req, &hits);
-        if json {
-            writeln!(
-                out,
-                "{}",
-                serde_json::to_string(&ex).unwrap_or_else(|_| "{}".into())
-            )?;
-        } else {
-            render_explanation(&ex, roots, style, out)?;
+    if req.explain {
+        let ex = marrow_query::explain::explain(&search, &hits);
+        if req.json {
+            return render_explanation_json(&ex, req.filters, out);
         }
-        return Ok(());
+        return render_explanation(&ex, req.filters, req.roots, style, out);
     }
 
     // IDX-001: a file must be findable by its name. Content search alone cannot
@@ -132,23 +154,19 @@ pub fn run(
     // index document, so `marrow index` could truthfully report "still findable
     // by name" about a file that was not findable at all.
     //
+    // Filtered by the same filters as the content search. A `--type html`
+    // search that answered with a `.pdf` because its *name* matched would be
+    // reporting a result the reader had explicitly excluded.
+    //
     // This branch belongs in `marrow-query` alongside the fusion machinery; it
     // lives here until the CLI is moved onto that crate.
-    let by_name = path_matches(store, query, limit, &hits)?;
+    let by_name = path_matches(store, query, req.limit, &hits, req.filters)?;
     // Everything the user waited for, model load included.
     let setup = semantic.map(|s| s.prepared_in.as_millis()).unwrap_or(0);
     let elapsed = started.elapsed().as_millis() + setup;
 
-    if json {
-        return render_json(
-            &hits,
-            &by_name,
-            &results.branches,
-            setup,
-            query,
-            elapsed,
-            out,
-        );
+    if req.json {
+        return render_json(&hits, &by_name, &results.branches, setup, req, elapsed, out);
     }
     if hits.is_empty() && by_name.is_empty() {
         // Cheap: a count on the vector table, no model started. The
@@ -157,9 +175,22 @@ pub fn run(
             .and_then(|v| v.doc_count())
             .map(|n| n > 0)
             .unwrap_or(false);
+        // Only asked when filters were applied, because that is the one case
+        // where the number changes the diagnosis. A failure is not worth
+        // failing the command over — the screen is correct without the extra
+        // line — so it degrades to "unknown" with a note in the log.
+        let outside = if req.filters.is_empty() {
+            None
+        } else {
+            count_without_filters(store, index, semantic, query)
+                .map_err(|e| tracing::debug!(error = %e, "could not count outside the filters"))
+                .ok()
+        };
         return render_nothing(
             query,
+            req.filters,
             &results.branches,
+            outside,
             semantic_available,
             elapsed,
             style,
@@ -171,11 +202,66 @@ pub fn run(
         &by_name,
         &results.branches,
         setup,
-        roots,
+        req,
         elapsed,
         style,
         out,
     )
+}
+
+/// What the same query finds with every filter taken off.
+///
+/// `count` is **not** always a total, and the difference is the whole reason
+/// this type exists rather than a bare `usize`. Retrieval is bounded — the
+/// index takes a `LIMIT` and the port exposes no count-of-matches — so a number
+/// read off a result set is a fact about what was returned, and printing it as
+/// "11 matches" when eleven is merely as far as the probe looked is the exact
+/// class of untruth this whole change is about. `capped` says which one it is,
+/// and the renderer says "at least" when it must.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Outside {
+    count: usize,
+    /// The probe reached its own ceiling, so `count` is a floor.
+    capped: bool,
+}
+
+/// The same query with every filter taken off, and how much it finds.
+///
+/// Only ever run when a filtered search returned nothing, because that is the
+/// one moment the number changes what the answer *means*: "nothing matched"
+/// and "nothing matched inside these filters, though eleven things matched
+/// outside them" send the reader to two different places, and the screen this
+/// replaces said the first while meaning the second.
+///
+/// Probed at [`CANDIDATE_DEPTH`] rather than at the user's `-n`. Two reasons,
+/// and the second is the important one: it is the depth both branches retrieve
+/// at anyway, so asking for it costs nothing extra — and probing at `-n` would
+/// have made the answer to "how much did my filter exclude?" depend on how many
+/// results the reader happened to ask to see, which is not a fact about their
+/// corpus at all.
+///
+/// The semantic branch is reused rather than re-prepared — the model is already
+/// loaded and the query already embedded — so this asks the identical question
+/// of the identical branches and its count is comparable rather than merely
+/// suggestive.
+fn count_without_filters(
+    store: &Store,
+    index: &dyn TextIndex,
+    semantic: Option<&Semantic>,
+    query: &str,
+) -> Result<Outside> {
+    let probe = marrow_query::search::CANDIDATE_DEPTH;
+    let search = SearchRequest::new(query)
+        .mode(MatchMode::Terms)
+        .limit(probe);
+    let branch = semantic.map(|s| (&s.vectors as &dyn VectorIndex, &s.embedding));
+    let results = marrow_query::search::search_hybrid(store, index, branch, &search)?;
+    let by_name = path_matches(store, query, probe, &results.hits, &Filters::default())?;
+    Ok(Outside {
+        count: results.hits.len() + by_name.len(),
+        // Either half reaching the ceiling means the corpus had more to give.
+        capped: results.hits.len() >= probe || by_name.len() >= probe,
+    })
 }
 
 /// The branches that ran, as one word each.
@@ -198,41 +284,87 @@ pub struct NameHit {
     pub metadata_only: bool,
 }
 
-/// Files whose path contains the query, excluding ones already found by content.
-fn path_matches(store: &Store, query: &str, limit: usize, already: &[Hit]) -> Result<Vec<NameHit>> {
+/// Files whose path contains the query, excluding ones already found by
+/// content, and narrowed by the same filters the content search used.
+///
+/// The filter clauses are appended to the SQL rather than applied to the rows
+/// that come back, for the reason the whole feature exists: `LIMIT` runs first,
+/// so filtering the result would throw away most of a page and call what
+/// remained the answer.
+fn path_matches(
+    store: &Store,
+    query: &str,
+    limit: usize,
+    already: &[Hit],
+    filters: &Filters,
+) -> Result<Vec<NameHit>> {
     let needle = query.trim();
     if needle.is_empty() {
         return Ok(Vec::new());
     }
     let seen: std::collections::HashSet<&str> = already.iter().map(|h| h.path.as_str()).collect();
 
+    // Every value is bound; nothing the user typed becomes SQL. The numbered
+    // `?1` is the query, and the filter clauses and the limit take the
+    // anonymous holes after it in push order — the same shape `fts5.rs` uses
+    // for the identical job.
+    let mut sql = String::from(
+        "SELECT f.current_path, COALESCE(v.mtime_ms, 0),
+                (SELECT count(*) FROM chunks c WHERE c.version_id = v.version_id)
+           FROM files f
+      LEFT JOIN file_versions v
+             ON v.file_id = f.file_id AND v.status = 'CURRENT'
+          WHERE f.status = 'ACTIVE'
+            AND f.current_path IS NOT NULL
+            AND lower(f.current_path) LIKE '%' || lower(?1) || '%'",
+    );
+    let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(needle.to_string())];
+
+    if let Some(ext) = &filters.search.extension {
+        // `'%.' || ext` rather than a match anywhere in the name, so `--type ml`
+        // does not claim every `.html` file on the disk.
+        sql.push_str(" AND lower(f.current_path) LIKE '%.' || ?");
+        args.push(Box::new(ext.trim_start_matches('.').to_ascii_lowercase()));
+    }
+    if let Some(sub) = filters.path_substring() {
+        sql.push_str(" AND lower(f.current_path) LIKE '%' || lower(?) || '%'");
+        args.push(Box::new(sub.to_string()));
+    }
+    if let Some(name) = &filters.search.workspace {
+        // Resolved through `marrow-query` so a name that matches nothing raises
+        // the same error here as it does for the content search — and so the
+        // case-insensitive second pass its resolver does applies to both halves
+        // of one search rather than to one of them.
+        sql.push_str(" AND f.workspace_id = ?");
+        args.push(Box::new(
+            marrow_query::search::workspace_id_for(store, name)?.to_string(),
+        ));
+    }
+    if let Some(after) = filters.search.modified_after {
+        sql.push_str(" AND COALESCE(v.mtime_ms, 0) >= ?");
+        args.push(Box::new(after.as_millis()));
+    }
+    if let Some(before) = filters.search.modified_before {
+        sql.push_str(" AND COALESCE(v.mtime_ms, 0) <= ?");
+        args.push(Box::new(before.as_millis()));
+    }
+    sql.push_str(" ORDER BY length(f.current_path) LIMIT ?");
+    args.push(Box::new(limit as i64 * 2));
+
     let conn = store.reader()?;
     let mut stmt = conn
-        .prepare(
-            "SELECT f.current_path, COALESCE(v.mtime_ms, 0),
-                    (SELECT count(*) FROM chunks c WHERE c.version_id = v.version_id)
-               FROM files f
-          LEFT JOIN file_versions v
-                 ON v.file_id = f.file_id AND v.status = 'CURRENT'
-              WHERE f.status = 'ACTIVE'
-                AND f.current_path IS NOT NULL
-                AND lower(f.current_path) LIKE '%' || lower(?1) || '%'
-              ORDER BY length(f.current_path)
-              LIMIT ?2",
-        )
+        .prepare(&sql)
         .map_err(|e| marrow_store::map_sqlite(e, "searching by name"))?;
 
+    let refs: Vec<&dyn ToSql> = args.iter().map(|b| b.as_ref()).collect();
     let rows = stmt
-        .query_map(
-            marrow_store::rusqlite::params![needle, limit as i64 * 2],
-            |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, i64>(2)?,
-                ))
-            },
-        )
+        .query_map(refs.as_slice(), |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })
         .and_then(|it| it.collect::<std::result::Result<Vec<_>, _>>())
         .map_err(|e| marrow_store::map_sqlite(e, "searching by name"))?;
 
@@ -254,11 +386,12 @@ fn render_hits(
     by_name: &[NameHit],
     branches: &[&'static str],
     model_load_ms: u128,
-    roots: &[String],
+    req: &Request<'_>,
     elapsed: u128,
     style: Style,
     out: &mut impl Write,
 ) -> Result<()> {
+    let roots = req.roots;
     writeln!(out)?;
     for h in hits {
         let loc = location(&relative_to(&h.path, roots), &h.span);
@@ -333,11 +466,20 @@ fn render_hits(
         out,
         "{}",
         style.dim(&format!(
-            "{} result{} · {} · {}{}{}",
+            "{} result{} · {} · {}{}{}{}",
             total,
             if total == 1 { "" } else { "s" },
             render::duration(elapsed),
             branch_line(branches),
+            // What was excluded, on the same line as what was found. A count
+            // is not interpretable without it: three results out of a filtered
+            // corpus and three out of the whole index are different findings,
+            // and only the second is a reason to stop looking.
+            if req.filters.is_empty() {
+                String::new()
+            } else {
+                format!(" · {}", req.filters.summary())
+            },
             // Named separately because it is nearly all of the wall time and
             // none of the search: without it the same query looks ten times
             // slower than it is, and nobody could tell which half to blame.
@@ -356,10 +498,30 @@ fn render_hits(
     Ok(())
 }
 
+/// The explanation as JSON, with the filters the query ran under.
+///
+/// `Explanation` is `marrow-query`'s type and has no filter field — filters are
+/// resolved on this side of the boundary, so the crate that ranks has never
+/// heard of them. Adding the key here keeps the payload complete without
+/// inventing a shape in the library for one caller's benefit.
+fn render_explanation_json(
+    ex: &marrow_query::explain::Explanation,
+    filters: &Filters,
+    out: &mut impl Write,
+) -> Result<()> {
+    let mut value = serde_json::to_value(ex).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("filters".into(), filters.json());
+    }
+    writeln!(out, "{value}")?;
+    Ok(())
+}
+
 /// Zero results is a diagnosis, not a shrug ([UX §4]).
 /// The ranking, in words, for someone asking why a result is where it is.
 fn render_explanation(
     ex: &marrow_query::explain::Explanation,
+    filters: &Filters,
     roots: &[String],
     style: Style,
     out: &mut impl Write,
@@ -371,6 +533,15 @@ fn render_explanation(
         style.bold(&ex.query),
         style.dim(&format!("· {} · rrf k={}", ex.mode, ex.rrf_k))
     )?;
+
+    // Before the branches, because a filter changes what the branches were
+    // ranking *over*. An explanation that describes the ranking but not its
+    // candidate set explains the wrong half of the outcome.
+    if !filters.is_empty() {
+        writeln!(out)?;
+        writeln!(out, "  {}", style.dim("filters"))?;
+        writeln!(out, "    {}", filters.summary())?;
+    }
 
     writeln!(out)?;
     writeln!(out, "  {}", style.dim("branches"))?;
@@ -431,16 +602,41 @@ fn render_explanation(
     Ok(())
 }
 
+/// Zero results, diagnosed rather than shrugged at ([UX §4]).
+///
+/// The filtered case is a *different* finding and gets a different screen. A
+/// search narrowed to `--type html` that returned nothing while eleven matches
+/// sat outside the filter is not "nothing matched" — it is "your filter is what
+/// removed them", and it sends the reader to their command line instead of to
+/// `marrow status` wondering what failed to index. The old screen said the
+/// second thing while meaning the first.
+///
+/// `outside` is what the same search finds with the filters taken off, or
+/// `None` when there were no filters or the second search failed. It is passed
+/// in rather than computed here so this stays what the module says it is — a
+/// pure function of data — and so both screens can be tested without a store.
+#[allow(clippy::too_many_arguments)]
 fn render_nothing(
     query: &str,
+    filters: &Filters,
     branches: &[&'static str],
+    outside: Option<Outside>,
     semantic_available: bool,
     elapsed: u128,
     style: Style,
     out: &mut impl Write,
 ) -> Result<()> {
     writeln!(out)?;
-    writeln!(out, "No matches for {}", style.bold(query))?;
+    if filters.is_empty() {
+        writeln!(out, "No matches for {}", style.bold(query))?;
+    } else {
+        writeln!(
+            out,
+            "No matches for {} {}",
+            style.bold(query),
+            style.dim(&format!("with {}", filters.summary()))
+        )?;
+    }
     // Which branches looked, not just how long it took. "Nothing matched" from
     // one branch and from two are different findings, and only the second is a
     // reason to stop looking.
@@ -453,8 +649,47 @@ fn render_nothing(
             render::duration(elapsed)
         ))
     )?;
+    match outside {
+        Some(o) if o.count > 0 => {
+            // "at least" whenever the probe stopped at its own ceiling rather
+            // than at the end of the matches. Without that word the number
+            // reads as a total, which is a claim about the corpus that a
+            // bounded retrieval never made.
+            writeln!(
+                out,
+                "  {}",
+                style.warn(&format!(
+                    "{}{} match{} without the filters — they are what excluded them",
+                    if o.capped { "at least " } else { "" },
+                    o.count,
+                    if o.count == 1 { "" } else { "es" }
+                ))
+            )?;
+        }
+        // Said out loud rather than left as an absence. Without this line, a
+        // reader who filtered and found nothing cannot tell whether the filter
+        // or the corpus is the reason, which is the entire question they have.
+        Some(_) => {
+            writeln!(
+                out,
+                "  {}",
+                style.dim("nothing matches without the filters either, so they are not the reason")
+            )?;
+        }
+        None => {}
+    }
     writeln!(out)?;
     writeln!(out, "  {}", style.dim("try"))?;
+    // The first thing to try when a filter is what emptied the page is the same
+    // search without it, and it is offered before the escape hatches because it
+    // is the one that most often works.
+    if outside.is_some_and(|o| o.count > 0) {
+        writeln!(
+            out,
+            "    marrow search '{query}'   {}",
+            style.dim("the same search with no filters")
+        )?;
+    }
     // Single-quoted for the same reason the error above is: this is the one
     // message whose entire purpose is patterns a shell eats — `});`, `$foo`,
     // `*` — and an unquoted hint is a command that fails when pasted.
@@ -485,7 +720,7 @@ fn render_json(
     by_name: &[NameHit],
     branches: &[&'static str],
     model_load_ms: u128,
-    query: &str,
+    req: &Request<'_>,
     elapsed: u128,
     out: &mut impl Write,
 ) -> Result<()> {
@@ -534,7 +769,13 @@ fn render_json(
             // What actually ran. A script that pipes this has no other way to
             // tell a machine with a built semantic index from one without.
             "branches": branches,
-            "query": query,
+            "query": req.query,
+            // What was excluded, alongside what came back. A result set is not
+            // interpretable without it: a consumer counting three results has
+            // no way to tell a three-document corpus from a filter that
+            // removed the other forty, and an omitted key reads as "no
+            // filters" rather than as "unknown".
+            "filters": req.filters.json(),
             // The whole command, and the part of it that was the model
             // starting up. Zero whenever the semantic branch did not run, so
             // the difference is the search itself either way.
@@ -753,13 +994,31 @@ mod tests {
         assert_eq!(branch_line(&[LEXICAL, SEMANTIC]), "lexical + semantic");
     }
 
+    fn nothing(query: &str, filters: &Filters, outside: Option<Outside>) -> String {
+        let mut buf = Vec::new();
+        render_nothing(
+            query,
+            filters,
+            &[LEXICAL],
+            outside,
+            false,
+            3,
+            Style::plain(),
+            &mut buf,
+        )
+        .expect("rendering");
+        String::from_utf8(buf).expect("output is utf-8")
+    }
+
+    fn typed(args: crate::filters::Args<'_>) -> Filters {
+        crate::filters::resolve(args, Timestamp::now()).expect("the fixture's flags resolve")
+    }
+
     #[test]
     fn the_zero_results_hint_survives_being_pasted_into_a_shell() {
         // The whole point of `--literal` is patterns the index cannot express,
         // which are exactly the ones a shell would expand or swallow.
-        let mut buf = Vec::new();
-        render_nothing("});", &[LEXICAL], false, 3, Style::plain(), &mut buf).expect("rendering");
-        let text = String::from_utf8(buf).expect("output is utf-8");
+        let text = nothing("});", &Filters::default(), None);
         assert!(
             text.contains("marrow search --literal '});'"),
             "the hint must quote the query: {text}"
@@ -771,7 +1030,9 @@ mod tests {
         let mut buf = Vec::new();
         render_nothing(
             "lease",
+            &Filters::default(),
             &[LEXICAL, SEMANTIC],
+            None,
             true,
             3,
             Style::plain(),
@@ -780,6 +1041,103 @@ mod tests {
         .expect("rendering");
         let text = String::from_utf8(buf).expect("output is utf-8");
         assert!(text.contains("searched lexical + semantic"), "{text}");
+    }
+
+    #[test]
+    fn zero_results_from_a_filter_is_a_different_finding_from_an_empty_index() {
+        // The bug this fixes: the old screen said "no matches" — a claim about
+        // the corpus — when the truthful finding was "no matches inside the
+        // filters you gave, and eleven outside them".
+        let f = typed(crate::filters::Args {
+            extension: Some("html"),
+            ..Default::default()
+        });
+        let text = nothing(
+            "lease",
+            &f,
+            Some(Outside {
+                count: 11,
+                capped: false,
+            }),
+        );
+        assert!(text.contains("type=html"), "the filter is named: {text}");
+        assert!(
+            text.contains("11 matches without the filters"),
+            "the count outside the filters is stated: {text}"
+        );
+        assert!(
+            text.contains("marrow search 'lease'"),
+            "and the search without them is offered: {text}"
+        );
+    }
+
+    #[test]
+    fn a_count_that_only_reached_the_probes_ceiling_is_reported_as_a_floor() {
+        // The number comes off a bounded retrieval, so printing it bare would
+        // state a total the search never established. "at least" is the whole
+        // difference between a measurement and a claim.
+        let f = typed(crate::filters::Args {
+            extension: Some("html"),
+            ..Default::default()
+        });
+        let text = nothing(
+            "lease",
+            &f,
+            Some(Outside {
+                count: 100,
+                capped: true,
+            }),
+        );
+        assert!(
+            text.contains("at least 100 matches without the filters"),
+            "{text}"
+        );
+
+        // And the unbounded case must *not* hedge, or the word stops meaning
+        // anything where it matters.
+        let exact = nothing(
+            "lease",
+            &f,
+            Some(Outside {
+                count: 4,
+                capped: false,
+            }),
+        );
+        assert!(exact.contains("4 matches without"), "{exact}");
+        assert!(!exact.contains("at least"), "{exact}");
+    }
+
+    #[test]
+    fn a_filter_that_excluded_nothing_says_so_rather_than_staying_silent() {
+        // Otherwise a reader cannot tell whether the filter or the corpus is
+        // the reason, which is the only question they have at this point.
+        let f = typed(crate::filters::Args {
+            path: Some("docs"),
+            ..Default::default()
+        });
+        let text = nothing(
+            "lease",
+            &f,
+            Some(Outside {
+                count: 0,
+                capped: false,
+            }),
+        );
+        assert!(
+            text.contains("nothing matches without the filters either"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("marrow search 'lease'   "),
+            "no point offering an unfiltered search that also finds nothing: {text}"
+        );
+    }
+
+    #[test]
+    fn an_unfiltered_zero_result_screen_is_unchanged() {
+        let text = nothing("lease", &Filters::default(), None);
+        assert!(text.contains("No matches for lease"), "{text}");
+        assert!(!text.contains("without the filters"), "{text}");
     }
 
     #[test]

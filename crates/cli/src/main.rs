@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 mod embed;
+mod filters;
 mod literal;
 mod render;
 mod search;
@@ -116,16 +117,40 @@ enum Cmd {
         /// Match whole words only (with --literal)
         #[arg(short = 'w', long, requires = "literal")]
         whole_word: bool,
-        /// Only scan files whose path contains this (with --literal)
+        /// Only files whose path contains this
         ///
         /// A substring of the whole path, case-blind: `--path crates/model`,
         /// `--path .rs`. The counterpart of MCP's `path_contains`, which the
         /// incomplete-scan advice used to name on a CLI that had no such flag.
-        #[arg(long, value_name = "SUBSTRING", requires = "literal")]
+        #[arg(long, value_name = "SUBSTRING")]
         path: Option<String>,
-        /// Only scan this workspace (with --literal)
-        #[arg(long, value_name = "NAME", requires = "literal")]
+        /// Only this workspace
+        ///
+        /// A name from `marrow workspace list`. A name that matches nothing is
+        /// an error rather than an empty result — zero hits for a typo reads as
+        /// "nothing is indexed" and sends you to debug the wrong thing.
+        #[arg(long, value_name = "NAME")]
         workspace: Option<String>,
+        /// Only files with this extension
+        ///
+        /// With or without the dot: `--type md`, `--type .html`. One
+        /// extension; the index's filter takes a list, but no query yet has
+        /// wanted two and a flag nobody uses is a flag nobody maintains.
+        #[arg(long = "type", value_name = "EXT", conflicts_with = "literal")]
+        file_type: Option<String>,
+        /// Only files modified on or after this
+        ///
+        /// A calendar date, `2026-01-31`, or a span counted back from now:
+        /// `7d`, `3w`, `6m`, `2y`. Dates are read as UTC, which is what the
+        /// index stores.
+        #[arg(long, value_name = "WHEN", conflicts_with = "literal")]
+        since: Option<String>,
+        /// Only files modified on or before this
+        ///
+        /// Same spellings as `--since`. A bare date covers the whole of that
+        /// day, so `--until 2026-01-31` includes a file saved that evening.
+        #[arg(long, value_name = "WHEN", conflicts_with = "literal")]
+        until: Option<String>,
         /// Seconds to scan before reporting a partial result; 0 for no limit
         ///
         /// A literal scan reads files, so a large corpus does not finish
@@ -293,6 +318,9 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
             whole_word,
             path,
             workspace,
+            file_type,
+            since,
+            until,
             time_limit,
             semantic,
             explain,
@@ -322,6 +350,19 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
                 // roots — it wants the folders themselves.
                 return literal::run(&store, &req, cli.json, style, out, cancel.as_flag());
             }
+            // Resolved before anything is opened or loaded, so a mistyped date
+            // costs nothing and a mistyped workspace name is caught by the
+            // search that follows rather than answered with zero results.
+            let filters = filters::resolve(
+                filters::Args {
+                    extension: file_type.as_deref(),
+                    path: path.as_deref(),
+                    workspace: workspace.as_deref(),
+                    since: since.as_deref(),
+                    until: until.as_deref(),
+                },
+                Timestamp::now(),
+            )?;
             let conn = store.reader()?;
             let roots: Vec<String> = list_workspaces(&conn)?
                 .into_iter()
@@ -349,11 +390,14 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
                 &store,
                 &index,
                 semantic.as_ref(),
-                &q,
-                *limit,
-                &roots,
-                cli.json,
-                *explain,
+                &search::Request {
+                    query: &q,
+                    limit: *limit,
+                    filters: &filters,
+                    roots: &roots,
+                    json: cli.json,
+                    explain: *explain,
+                },
                 style,
                 out,
             )
@@ -1020,15 +1064,20 @@ mod tests {
         }
     }
 
-    /// The three narrowing flags only mean anything to the literal scan, and
-    /// clap has to say so rather than accepting them and ignoring them — "a
-    /// parameter declared but ignored is the worst kind of bug".
+    /// Flags that only mean something to the literal scan have to be refused
+    /// rather than accepted and ignored — "a parameter declared but ignored is
+    /// the worst kind of bug".
+    ///
+    /// `--path` and `--workspace` used to be on this list and are not any more:
+    /// they narrow the indexed search too now, which is what the tracker's
+    /// "the port supports them, the CLI does not expose them" was about.
     #[test]
     fn the_literal_only_flags_are_refused_without_literal() {
         for flag in [
-            vec!["--path", "src"],
-            vec!["--workspace", "melp"],
             vec!["--time-limit", "10"],
+            vec!["--regex"],
+            vec!["--ignore-case"],
+            vec!["--whole-word"],
         ] {
             let mut args = vec!["marrow", "search", "x"];
             args.extend(flag.iter().copied());
@@ -1037,5 +1086,67 @@ mod tests {
                 "{args:?} should not parse without --literal"
             );
         }
+    }
+
+    /// And the mirror of it. The literal scan reads the filesystem and knows
+    /// nothing about extensions or the index's mtimes, so accepting these
+    /// beside `--literal` would silently answer a narrower question than the
+    /// one that was asked.
+    #[test]
+    fn the_index_only_filters_are_refused_with_literal() {
+        for flag in [
+            vec!["--type", "html"],
+            vec!["--since", "7d"],
+            vec!["--until", "2026-01-01"],
+        ] {
+            let mut args = vec!["marrow", "search", "--literal", "x"];
+            args.extend(flag.iter().copied());
+            assert!(
+                Cli::try_parse_from(&args).is_err(),
+                "{args:?} should not parse with --literal"
+            );
+        }
+    }
+
+    /// The filters the tracker named, on the surface that lacked them.
+    #[test]
+    fn the_indexed_search_accepts_every_filter_the_port_supports() {
+        let cli = Cli::try_parse_from([
+            "marrow",
+            "search",
+            "lease",
+            "--type",
+            "html",
+            "--path",
+            "docs",
+            "--workspace",
+            "system",
+            "--since",
+            "7d",
+            "--until",
+            "2026-01-31",
+            "--semantic",
+            "--explain",
+        ])
+        .expect("every filter parses together, and beside --semantic and --explain");
+        let Cmd::Search {
+            file_type,
+            path,
+            workspace,
+            since,
+            until,
+            semantic,
+            explain,
+            ..
+        } = cli.cmd
+        else {
+            panic!("did not parse as a search")
+        };
+        assert_eq!(file_type.as_deref(), Some("html"));
+        assert_eq!(path.as_deref(), Some("docs"));
+        assert_eq!(workspace.as_deref(), Some("system"));
+        assert_eq!(since.as_deref(), Some("7d"));
+        assert_eq!(until.as_deref(), Some("2026-01-31"));
+        assert!(semantic && explain);
     }
 }
