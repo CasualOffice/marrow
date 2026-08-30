@@ -401,7 +401,6 @@ mod writes {
     /// and actionless.
     #[test]
     fn a_host_the_user_allowed_is_no_longer_treated_as_new() {
-        let f = fixture_with_root();
         let dir = tempfile::tempdir().expect("dir");
         std::fs::write(
             dir.path().join("net-allow.txt"),
