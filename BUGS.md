@@ -370,3 +370,34 @@ Both criticals were unprotected because the existing test covered **one arm of a
 two-arm condition**. `a_cancelled_sweep_never_concludes_that_the_files_it_missed_are_gone`
 pins the `cancelled` half of `!cancelled && failures.is_empty()` — and reads, to
 anyone scanning the list, like coverage of the guard.
+
+---
+
+## Second adversarial review (2026-08-31) — all cleared
+
+Twelve candidates, eleven survived refutation. Every one is now fixed with a
+regression test, and each test was mutation-verified: the fix was reverted and
+the test confirmed to fail.
+
+| # | sev | What | Fixed |
+|---|---|---|---|
+| C1 | **critical** | **Grading a two-cell table asked the allocator for 17.2 GB.** `grade` painted every square of a table's bounding box into a `Vec<bool>`. A workbook with a value in A1 and one in XFD1048576 has two cells and a box of 17,179,869,184 squares. It never crashed for two reasons that are both accidents: `vec![false; n]` allocates zeroed so the pages are mapped lazily and never touched, and `all()` short-circuits on the first hole — index 1 in a sparse table. An allocator that refuses aborts the process uncatchably. | `ee6c87a` |
+| C2 | **critical** | **The chunker walked the same box.** `table_chunks` rendered `body_start()..n_rows` × `0..n_cols`, so the same workbook produced roughly 51 GB of chunk text, with no ceiling and outside any budget. Measured at 1/2,850th of the box: 6,668 chunks from two cells. The XLSX parser is careful about exactly this and says so in a comment; the chunker undid it one layer up. `render_row` and `schema_text` had the same shape. | `654053f` |
+| C3 | high | **A change to the chunker reached no already-indexed file.** `CHUNKER_VERSION` was documented from the start as "persisted so a change can schedule re-chunking" and written faithfully with every chunk — and the staleness gate compared only *parser* versions, so nothing ever read it back. Exactly the stale index the reconciler exists to prevent. | `654053f` |
+| C4 | high | **`decode_entities` panicked on ordinary web prose.** It looked for the `;` in a fixed 12-byte window after an `&` and sliced there. `Tom & Jerry café` puts the `é`'s first byte at exactly 12, so the slice split a character — a whole file lost to a stray ampersand. | `0b1caf1` |
+| C5 | high | **`<SCRIPT>` bodies were indexed as prose.** `name_at` returns the tag name as written and the RAW set is lowercase, so `RAW.contains(&name)` skipped `<script>` and missed `<SCRIPT>` — which is what a Word "Save as Web Page" export produces. Searching for a function name then matched every page that called it. | `0b1caf1` |
+| C6 | high | **Skipping a raw element was quadratic, and the budget could not stop it.** Each skip lowercased the whole remainder of the document, allocating a copy of the tail: 16 s at 4 MB. And `tokenize` ran to completion before anything checked the clock, so the one phase that most needed a deadline had none. The 1 MB regression fixture did not finish in five minutes against the old code; it takes 0.15 s now. | `0b1caf1` |
+| C7 | high | **`--explain` denied a branch that ran.** The branch list was derived from whether a *surviving* hit carried a semantic rank. A semantic branch that ran and returned nothing, or whose candidates were outranked past the limit or removed afterwards by a `--type` filter it does not apply itself, vanished — and the caveat then stated flatly that "only one branch ran", on a page whose own footer said otherwise. `search_hybrid` already returns `SearchResults::branches` for exactly this. | `138da1f` |
+| C8 | med | **`read_table` ended on half a row.** It clipped at a flat 400 cells, which lands mid-row: a thirty-column table came back with a last row holding ten cells. `truncated` said something had been cut, not that the *last row* was, so an agent reading or summing that row read a row that never existed. | `138da1f` |
+
+### The structural lesson, again
+
+C1 and C2 are the same mistake in two places, and the XLSX parser had already
+made the argument against it — in a comment, about work "proportional to an
+address the file merely mentioned". A rule learned in one module does not
+propagate to its callers by being written down near where it was learned.
+
+C1 is also a reminder that **the platform can hide a bug rather than expose
+it.** Peak RSS for the 17.2 GB request is 12 MB, so no memory measurement would
+ever have found it. The test counts bytes *requested* through a global
+allocator, because the request is the defect and residency is what forgave it.
