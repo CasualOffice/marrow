@@ -130,7 +130,7 @@ against `crates/parse/src/` and `ParserRouter::with_default_parsers`.
   metadata-only, so they stay findable by name (T5); **no EXIF/XMP is read**
 - [x] CSV with dialect + encoding detection (~90) — delimiter sniffed unless the
   extension names one; decoding and its loss reported by `decode.rs`
-- [ ] HTML / CSS (~94) — no parser registered; they fall to plain text
+- [x] HTML — a parser lands with the table work. **CSS deliberately not parsed**: a stylesheet has no content buried inside non-content, so a parser would re-emit the same bytes under different node kinds (BUGS.md)
 - [ ] XLSX / DOCX (66 — low priority, may slip to M3)
 - [x] PDF — **the drop was reversed.** M0 F3 counted 14 files and dropped it;
   [D54](DECISIONS.md) built it in M3 on PDFKit, because per-character bounds are
@@ -156,7 +156,7 @@ against `crates/parse/src/` and `ParserRouter::with_default_parsers`.
 - [x] Migration composition at the binary, not in store (avoids the cycle)
 - [x] Wire the index into the ingest pipeline
 - [x] CLI `search` — jumpable `path:line`, breadcrumb, workspace-relative paths
-- [ ] Search filters (path, type, date) — the port supports them, the CLI does not expose them yet
+- [x] Search filters (path, type, date) — the port supported them all along, including date bounds; they were unreachable from the CLI
 - [ ] CLI `file` — the file-intelligence panel
 - [x] CLI `status` — workspaces, file counts, bytes, cloud-only
 - [x] CLI `workspace add` / `list`, `index`
@@ -243,17 +243,17 @@ recorded only in the Log (`a8362be`, `c2141d1`, `cd9b50f`, `e883546`) and in
   silently dropped
 - [x] Provenance is `Degraded`, not `Exact`: the text is what PDFKit extracted,
   not what is on the page, and the citation badge depends on that distinction
-- [ ] Table IR schema (`table_ir`, `table_cells`)
-- [ ] CSV / Markdown / HTML tables
+- [x] Table IR schema (`table_ir`, `table_cells`) — migration 6, `cell_span` NOT NULL
+- [x] CSV / Markdown / HTML tables — one IR derived from the node arena, so TBL-001 holds by construction
 - [ ] XLSX via calamine — formulas, named ranges, number formats
 - [ ] DOCX tables
 - [ ] PDF ruled tables from line objects
-- [ ] Header detection with confidence
-- [ ] Column type inference; raw text always retained
+- [x] Header detection with confidence — four weighted signals; width is a gate, not a signal, which is what skips a title row
+- [x] Column type inference; raw text always retained
 - [ ] Unit extraction from headers/formats/captions
 - [ ] `table compute`: sum / filter / group / lookup, citing cells
 - [ ] Unit-mismatch blocks the operation (never coerce silently)
-- [ ] Table chunks: repeated headers + schema chunk
+- [x] Table chunks: repeated headers + schema chunk
 - [ ] Expose over MCP
 
 ---
@@ -363,7 +363,7 @@ wrong.
 - [~] RRF fusion; weights in config, not code — the constants live in
   `query/src/search.rs` and the desktop's Ask fuses with them, but in code, not
   config, and `search_hybrid` itself has no caller
-- [ ] `search --explain` — `query/src/explain.rs` exists; no CLI flag reaches it
+- [x] `search --explain` — and the explanation was wrong about itself twice: a hard-coded branch list, and a caveat asserting the vector branch had not landed
 - [x] `marrow embed` — builds semantic search over what is already indexed.
   Separate from `index` on purpose: indexing must work with no model, no GPU
   and no network, so the meaning-based half is a thing you turn on. Resumable;
@@ -491,6 +491,8 @@ Short entries. What shipped, what surprised you, what changed.
 | Date | Entry |
 |---|---|
 | 2026-08-30 | **The files that tell you what this is were describing a different project** (BUGS C21–C23, C3, C4). `CLAUDE.md` — loaded into every agent's context as instructions — opened with "Currently specification-only. No code yet." against fourteen crates, a shipped desktop app, a CLI, an MCP server and 838 tests, and told every agent not to build a UI or an agent layer when [D42](DECISIONS.md) had been reversed and [D56](DECISIONS.md) records all four agent-layer refusals as already violated. The README named Tantivy (D3 chose FTS5), PDFium (D54 chose PDFKit), Candle-or-Ollama (D55 chose an MLX sidecar) and a UI "deferred past M6". This tracker ticked **M4 Semantic done** with 11 of its 13 items open and one consumer of the vector index in the whole repo. Two more ticks were false on inspection: `--json` "on every command" (`embed` and `watch` never received it — fixed in a parallel pass, so the tick is true again) and the whole M1 parsing block, which was still unticked long after the parsers shipped — including PDF, marked *dropped* while `pdf.rs` was in the router. Two library error messages were worse than stale: `marrow reindex` does not exist and "delete the index directory" resolves to deleting `marrow.db`, corrections and all, which hard rule 8 says is the one thing that cannot be rebuilt. The pattern is the same every time: nothing enforces a document, so a document drifts silently while the code moves, and the drift is invisible until someone acts on it. |
+| 2026-08-30 | **Tables land, and TBL-001 holds by construction rather than by discipline.** Parsers emit Table/Row/Cell nodes and one function derives the IR from the node arena, so header detection, type inference and chunking exist once — XLSX will inherit all three by emitting the same nodes. `cell_span` is NOT NULL against a spec that leaves it nullable: it is the column the product exists to fill in. A ragged row leaves a hole rather than a synthesised cell, because synthesising a cell means synthesising a location. Header detection makes **width a gate rather than a signal**, which is what lets a one-cell title row be skipped instead of winning on the three signals it trivially satisfies; two corrections came from the real corpus, including that a numeric header row is reported as *no header* because it genuinely could be data. Verified against four spreadsheet-clipboard exports producing identical IR, and 405 tables across this repo's own docs with every cell span asserted to land on a character boundary in the file's own bytes. |
+| 2026-08-30 | **Search filters, and the count that says it is a floor.** `Filters` had carried extension, path and **date bounds** all along, implemented in SQL and tested in two crates, simply unreachable from the CLI. Empty-with-filters is now a different screen from empty — and reports "at least 100 matches without the filters", because there is no count-of-matches on the index and any number comes off a bounded retrieval. A number true about what was retrieved and read as a claim about the corpus is the defect this whole session has been made of. |
 | 2026-08-30 | **Images are readable.** Vision-based OCR (D13's platform-native engine, D60), every line carrying a real bbox `source_span` so a screenshot's text is citable to the region it came from — 42 lines off a real screenshot in 1.79 s. Two undocumented behaviours found by measuring: Vision **composites transparent images onto black**, so a diagram exported with a transparent background and dark ink returns *zero* observations rather than poor ones, indistinguishable from an image with no text (confirmed in standalone Swift; fixed with a white-backdrop retry gated on alpha-capable formats). And a wall-clock budget cannot bound `performRequests:` — it is one uninterruptible call whose cold model load alone eats nine of ten seconds, so a check afterwards discards a completed reading instead of bounding anything. |
 | 2026-08-30 | **Six bugs from three screenshots, and every one was invisible to the test suite.** (1) Every answer's footer read `tokens in NaNm NaNs` — `#[serde(rename_all)]` on an enum renames the *variants*, not their fields, so every multi-word field crossed to the window in snake_case while the UI read camelCase. It silently suppressed the truncation notice too, which is part of why answers still looked like they stopped for no reason. (2) "What model are you using?" was answered *from the corpus*: retrieval found chunks containing the word "model", reported that no model name appeared in the documents, and offered "GPT-4" and "Llama-3" as examples of what it had not found — while the footer of that same answer read `qwen3.5-4b-mlx-q4`. The envelope has carried a FACT block with `trust=DETERMINISTIC_RUNTIME` since it was written and **nothing ever populated it**. (3) No text was selectable: `user-select: none` is right for chrome and wrong for an answer. (4) **No way to add a folder from the app at all** — the premise of the product needed a terminal. (5) Switching tabs destroyed the whole Ask conversation, and a generation in flight kept running with nothing to receive its tokens. (6) "Retry parsing" is a dead button aimed at a non-problem: of 46,129 parse results, **zero** are FAILED and 35,422 are METADATA_ONLY — photos and binaries with no parser, which the spec calls expected. The Status page presents that count with a warning triangle. |
 | 2026-08-30 | **Dogfooding the MCP server found that the index was silently stale, and every surface reported over it confidently.** Asked marrow about its own code and got `matches: 0` for symbols that plainly exist — 109 `.rs` files on disk, 50 indexed, last scan nine hours earlier. Three compounding causes: nothing ran a watcher (`marrow watch` existed; the desktop app had no watcher code at all), `watcher_health` defaulted to `LIVE` in the schema and **nothing ever wrote it**, and `last_reconciled_at` was never written either — so a database nobody had ever watched reported a live watcher and no reader could tell a current index from a stale one. Fixed: the desktop starts one watcher per root on launch, both watchers persist health and reconciliation time to the store so *other processes* (the MCP server, the CLI) can read freshness, and `index_status` now carries `last_indexed_ms`, `watcher`, `may_be_stale` and a sentence saying what that means. A fourth bug fell out while testing: **a watcher is not listening the instant it opens, and nothing listens while the app is shut** — so a change in either window emitted no event and waited for the *six-hour* scheduled sweep. Both watchers now sweep once before listening. That is the ordinary case, not the edge one: you edit files all day with the app closed, open it, and every answer came from whenever you last ran a scan. |
