@@ -240,7 +240,11 @@ fn self_written_content_is_flagged_and_downweighted() {
 
     // And `--explain` carries the flag, so a caller assembling evidence never
     // has to infer it from a score.
-    let e = explain(&SearchRequest::new("quarterly revenue"), &results.hits);
+    let e = explain(
+        &SearchRequest::new("quarterly revenue"),
+        &results.branches,
+        &results.hits,
+    );
     let agent_line = e
         .hits
         .iter()

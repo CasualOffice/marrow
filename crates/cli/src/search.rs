@@ -129,6 +129,7 @@ pub fn run(
     // See `Filters::admits`: the semantic branch is filtered by workspace and
     // nothing else, so a chunk only it found has passed no extension, path or
     // date test. This removes those and only those.
+    let ran = results.branches.clone();
     let hits: Vec<Hit> = results
         .hits
         .into_iter()
@@ -142,7 +143,7 @@ pub fn run(
     // *that*". Rendered from the same hits the answer used, so it explains the
     // search that ran rather than a second one that might disagree.
     if req.explain {
-        let ex = marrow_query::explain::explain(&search, &hits);
+        let ex = marrow_query::explain::explain(&search, &ran, &hits);
         if req.json {
             return render_explanation_json(&ex, req.filters, out);
         }

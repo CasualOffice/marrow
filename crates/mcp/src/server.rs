@@ -570,8 +570,9 @@ impl Server {
         let mut out = Vec::new();
         for (i, t) in selected {
             let cells = marrow_store::read::cells_for(&conn, &t.table_id)?;
-            let shown = cells.len().min(MAX_TABLE_CELLS);
+            let shown = clip_to_whole_rows(&cells, MAX_TABLE_CELLS);
             let rows = group_rows(&cells[..shown]);
+            let rows_shown = rows.len();
             out.push(json!({
                 "index": i,
                 "caption": t.caption,
@@ -594,6 +595,10 @@ impl Server {
                 "cells_shown": shown,
                 "cells_total": cells.len(),
                 "truncated": shown < cells.len(),
+                // Which rows these are, so a caller that got a clipped table
+                // knows the last row it holds is row `rows_shown - 1` of
+                // `rows` and not the last row of the table.
+                "rows_shown": rows_shown,
                 "cells": rows,
             }));
         }
@@ -928,6 +933,33 @@ fn mode_name(mode: marrow_index::MatchMode) -> &'static str {
 /// A hole stays a hole. The parser refuses to synthesise a cell because
 /// synthesising a cell means synthesising a location, and re-inventing one here
 /// would undo that at the last step.
+/// How many of `cells` to return so the last row returned is a whole one.
+///
+/// Cutting at a flat cell count lands in the middle of a row, and a half row is
+/// indistinguishable from a short one: a thirty-column table clipped at 400
+/// cells ends with a row holding ten, and a caller reading the last row — or
+/// summing across it — reads a row that never existed. `truncated` said
+/// something was cut; it did not say the last row was.
+///
+/// The XLSX parser makes the same call for the same reason when a sheet read
+/// stops mid-row, and resolves it the same way: drop back to the last row whose
+/// end was actually seen.
+///
+/// The exception is a single row wider than the budget. Dropping back there
+/// would return nothing at all, turning a clip into a deletion, so the partial
+/// row is kept — `rows_shown` is 1 and `truncated` is true, which together say
+/// what it is.
+fn clip_to_whole_rows(cells: &[marrow_store::read::CellRow], max: usize) -> usize {
+    if cells.len() <= max {
+        return cells.len();
+    }
+    let last = cells[max - 1].row_idx;
+    match cells[..max].iter().position(|c| c.row_idx == last) {
+        Some(0) | None => max,
+        Some(start) => start,
+    }
+}
+
 fn group_rows(cells: &[marrow_store::read::CellRow]) -> Vec<Value> {
     let mut rows: Vec<Value> = Vec::new();
     let mut current: Vec<Value> = Vec::new();
@@ -1322,6 +1354,61 @@ fn default_models_dir() -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cells(rows: usize, cols: usize) -> Vec<marrow_store::read::CellRow> {
+        let mut v = Vec::new();
+        for r in 0..rows {
+            for c in 0..cols {
+                v.push(marrow_store::read::CellRow {
+                    row_idx: r as i64,
+                    col_idx: c as i64,
+                    rowspan: 1,
+                    colspan: 1,
+                    raw_text: format!("r{r}c{c}"),
+                    typed_value: None,
+                    value_type: Some("STRING".into()),
+                    formula: None,
+                    cell_span: "{}".into(),
+                    confidence: 1.0,
+                });
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn a_clipped_table_never_ends_on_half_a_row() {
+        // 400 cells into a 30-column table lands at row 13, column 9. The row
+        // came back holding ten of its thirty cells and nothing said so, so a
+        // caller reading the last row -- or summing across it -- read a row
+        // that never existed. `truncated` said something was cut; it did not
+        // say the last row was.
+        let c = cells(40, 30);
+        let shown = clip_to_whole_rows(&c, MAX_TABLE_CELLS);
+        assert_eq!(shown % 30, 0, "the cut landed inside a row");
+        assert!(shown <= MAX_TABLE_CELLS, "the cut went over budget");
+        assert!(shown > 0, "the cut returned nothing");
+        assert_eq!(
+            c[shown - 1].col_idx,
+            29,
+            "the last cell returned is not the end of its row"
+        );
+    }
+
+    #[test]
+    fn a_row_wider_than_the_budget_is_clipped_rather_than_dropped() {
+        // Dropping back to a row boundary would return nothing here, turning a
+        // clip into a deletion. The partial row is kept; `rows_shown` is 1 and
+        // `truncated` is true, which together say what it is.
+        let c = cells(2, MAX_TABLE_CELLS * 2);
+        assert_eq!(clip_to_whole_rows(&c, MAX_TABLE_CELLS), MAX_TABLE_CELLS);
+    }
+
+    #[test]
+    fn a_table_that_fits_is_returned_whole() {
+        let c = cells(3, 4);
+        assert_eq!(clip_to_whole_rows(&c, MAX_TABLE_CELLS), 12);
+    }
 
     #[test]
     fn enum_names_become_snake_case_on_the_wire() {

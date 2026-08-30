@@ -79,7 +79,7 @@ pub struct HitExplanation {
 ///
 /// Pure: no store, no index, no second query. It takes the request for the
 /// query text and mode, and the hits for everything else.
-pub fn explain(req: &SearchRequest, hits: &[Hit]) -> Explanation {
+pub fn explain(req: &SearchRequest, ran: &[&'static str], hits: &[Hit]) -> Explanation {
     let contributed = hits
         .iter()
         .filter(|h| h.branch_ranks.iter().any(|b| b.branch == LEXICAL))
@@ -90,11 +90,17 @@ pub fn explain(req: &SearchRequest, hits: &[Hit]) -> Explanation {
     // when the vector branch lands"; the vector branch has landed, so a caveat
     // asserting otherwise is exactly the kind of stale claim an explanation
     // exists to prevent.
-    // **Derived from the hits, not asserted.** This list was hard-coded to
-    // lexical alone, so once the semantic branch shipped the explanation
-    // reported one branch for a search that had run two — an explanation that
-    // is wrong about what happened is worse than none, because it is the thing
-    // people reach for when they already suspect something.
+    //
+    // **Which branches ran is told, not inferred.** It was first hard-coded to
+    // lexical alone, and then derived from whether any *surviving* hit carried
+    // a semantic rank — which is a different question. A semantic branch that
+    // ran and returned nothing, or whose candidates were all outranked past the
+    // limit or dropped by a `--type` filter afterwards, was reported as never
+    // having run, and the caveat below then stated flatly that only one branch
+    // ran. That is the explanation asserting something false about the very
+    // search it is explaining, to a reader who came to it *because* they
+    // already suspected the ranking. `search_hybrid` knows the answer and
+    // returns it in `SearchResults::branches`; it is passed in now.
     let semantic_hits = hits
         .iter()
         .filter(|h| h.branch_ranks.iter().any(|b| b.branch == SEMANTIC))
@@ -107,7 +113,7 @@ pub fn explain(req: &SearchRequest, hits: &[Hit]) -> Explanation {
         ran_because: "always: lexical retrieval needs no model, no GPU and no network \
                       (invariant #15)",
     }];
-    if semantic_hits > 0 {
+    if ran.contains(&SEMANTIC) {
         branches.push(BranchExplanation {
             name: SEMANTIC,
             weight: SEMANTIC_WEIGHT,
@@ -122,6 +128,16 @@ pub fn explain(req: &SearchRequest, hits: &[Hit]) -> Explanation {
             "Only one branch ran, so fusion did not change the order BM25 produced. \
              The per-branch ranks become informative when a second branch runs — \
              the semantic one needs an embedding model and a finished backfill.",
+        );
+    } else if semantic_hits == 0 {
+        // Ran, contributed nothing. Distinct from not running, and the reader
+        // is chasing a missing result: "the semantic branch is off" and "the
+        // semantic branch found nothing you can see" call for different next
+        // steps.
+        caveats.push(
+            "The semantic branch ran and none of its candidates reached this page — \
+             they were outranked, or removed by a filter it does not apply itself. \
+             Fusion still ran; the order is not BM25's alone.",
         );
     }
     if hits.iter().any(|h| !h.can_support_a_claim) {
@@ -236,7 +252,11 @@ mod tests {
     #[test]
     fn one_branch_says_it_is_one_branch() {
         let req = SearchRequest::new("auth").filters(SearchFilters::default());
-        let e = explain(&req, &[hit(1, Origin::User, ProvenanceClass::Exact)]);
+        let e = explain(
+            &req,
+            &[LEXICAL],
+            &[hit(1, Origin::User, ProvenanceClass::Exact)],
+        );
         assert_eq!(e.branches.len(), 1);
         assert_eq!(e.branches[0].name, LEXICAL);
         assert_eq!(e.branches[0].contributed, 1);
@@ -254,7 +274,7 @@ mod tests {
             hit(1, Origin::SelfWritten, ProvenanceClass::Exact),
             hit(2, Origin::User, ProvenanceClass::Exact),
         ];
-        let e = explain(&SearchRequest::new("auth"), &hits);
+        let e = explain(&SearchRequest::new("auth"), &[LEXICAL], &hits);
         for (h, x) in hits.iter().zip(&e.hits) {
             assert_eq!(x.final_score, h.fused_score);
             assert_eq!(x.base_score, h.base_score);
@@ -265,7 +285,7 @@ mod tests {
     #[test]
     fn self_written_hits_are_called_out_and_marked_uncitable() {
         let hits = vec![hit(1, Origin::SelfWritten, ProvenanceClass::Exact)];
-        let e = explain(&SearchRequest::new("auth"), &hits);
+        let e = explain(&SearchRequest::new("auth"), &[LEXICAL], &hits);
         assert!(!e.hits[0].can_support_a_claim);
         assert!(!citable(&e.hits[0]));
         assert!(e.caveats.iter().any(|c| c.contains("SELF")));
@@ -275,16 +295,57 @@ mod tests {
     #[test]
     fn the_summary_spells_out_the_multiplication() {
         let hits = vec![hit(1, Origin::SelfWritten, ProvenanceClass::Degraded)];
-        let e = explain(&SearchRequest::new("auth"), &hits);
+        let e = explain(&SearchRequest::new("auth"), &[LEXICAL], &hits);
         let line = summarize(&e.hits[0]);
         assert!(line.contains("× 0.50"), "{line}");
         assert!(line.contains("× 0.80"), "{line}");
     }
 
     #[test]
+    fn a_semantic_branch_that_contributed_nothing_is_still_reported_as_having_run() {
+        // The branch list was derived from whether a *surviving* hit carried a
+        // semantic rank. A semantic branch that ran and returned nothing --
+        // or whose candidates were outranked past the limit, or removed by a
+        // `--type` filter the branch does not apply itself -- vanished from
+        // the explanation, and the caveat then stated flatly that only one
+        // branch ran. An explanation that is wrong about the search it is
+        // explaining is worse than none: it is what people reach for when they
+        // already suspect the ranking.
+        let hits = vec![hit(1, Origin::User, ProvenanceClass::Exact)];
+        let e = explain(&SearchRequest::new("auth"), &[LEXICAL, SEMANTIC], &hits);
+
+        let semantic = e
+            .branches
+            .iter()
+            .find(|b| b.name == SEMANTIC)
+            .expect("the semantic branch ran and must be listed");
+        assert_eq!(semantic.contributed, 0, "it contributed nothing, honestly");
+        assert!(
+            !e.caveats.iter().any(|c| c.contains("Only one branch ran")),
+            "the explanation denied a branch that ran: {:?}",
+            e.caveats
+        );
+        assert!(
+            e.caveats
+                .iter()
+                .any(|c| c.contains("none of its candidates reached this page")),
+            "ran-but-empty was not distinguished from never-ran: {:?}",
+            e.caveats
+        );
+    }
+
+    #[test]
+    fn a_lexical_only_search_still_says_so() {
+        let hits = vec![hit(1, Origin::User, ProvenanceClass::Exact)];
+        let e = explain(&SearchRequest::new("auth"), &[LEXICAL], &hits);
+        assert_eq!(e.branches.len(), 1);
+        assert!(e.caveats.iter().any(|c| c.contains("Only one branch ran")));
+    }
+
+    #[test]
     fn an_exact_user_result_has_nothing_to_apologise_for() {
         let hits = vec![hit(1, Origin::User, ProvenanceClass::Exact)];
-        let e = explain(&SearchRequest::new("auth"), &hits);
+        let e = explain(&SearchRequest::new("auth"), &[LEXICAL], &hits);
         assert!(e.hits[0].multipliers.is_empty());
         assert_eq!(e.caveats.len(), 1, "only the one-branch caveat");
         assert!(origin_is_citable(Origin::User));
