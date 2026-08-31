@@ -17,8 +17,10 @@
 /* ── prose ──────────────────────────────────────────────────────────── */
 
 .prose {
-  font-size: var(--fs-body);
-  line-height: var(--lh-body);
+  /* See `--fs-prose`. The rest of the app is a list tool and is sized for it;
+     this is the one place a person reads paragraphs. */
+  font-size: var(--fs-prose);
+  line-height: var(--lh-prose);
   color: var(--fg);
 }
 

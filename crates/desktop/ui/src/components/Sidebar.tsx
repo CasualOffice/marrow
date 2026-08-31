@@ -22,6 +22,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import styles from "./Sidebar.module.css";
 import { cx } from "../lib/cx";
 import { age, count } from "../lib/format";
+import { ConversationFinder } from "./ConversationFinder";
 import { Icon } from "./Icon";
 import { Kbd } from "./Kbd";
 import { CONVERSATIONS_KEY, useConversations, useWorkspaces } from "../queries";
@@ -143,6 +144,11 @@ export const Sidebar = forwardRef<HTMLElement>(function Sidebar(_props, ref) {
       </div>
 
       <h2 className={styles.heading}>Conversations</h2>
+
+      {/* Directly above the list it searches. It used to render inside the Ask
+          view, over the thread, where a control for choosing *between*
+          conversations took the top of the column you read one in. */}
+      <ConversationFinder />
 
       {conversations.isError && (
         <p className={styles.problem}>

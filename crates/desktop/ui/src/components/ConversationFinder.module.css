@@ -1,0 +1,122 @@
+/* The conversation finder, beside the list it searches.
+ *
+ * Its styles lived in `AskView.module.css` because the component did. Both are
+ * here now; the panel still overlays rather than pushes, which is why `.finder`
+ * is a positioning context and the panel is absolute. */
+
+/* Two hundred rows ordered by recency, each labelled with whatever its first
+   question happened to be, is not an index of anything. This is the way back
+   into one. */
+.finder {
+  position: relative;
+  z-index: 2;
+  flex: none;
+  width: 100%;
+  /* Was centred at a reading measure with a 48px gutter, because it used to sit
+     over the thread. In the rail it is simply the width of the rail. */
+  padding: 0 var(--sp-4) var(--sp-3);
+}
+.box {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: var(--ctl-h-lg);
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-ctrl);
+  background: var(--sunken);
+  color: var(--fg3);
+}
+/* The ring goes on the box, so it surrounds the icon as well as the text —
+   the field itself has none, or there would be two rectangles. */
+.box:focus-within {
+  outline: var(--focus-ring-w) solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+.icon {
+  flex: none;
+}
+.field {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--fs-sm);
+}
+.field:focus-visible {
+  outline: none;
+}
+.field::placeholder {
+  color: var(--fg3);
+}
+/* Over the thread, not above it: an answer someone is reading must not move
+   down the screen because a search box was focused. */
+.panel {
+  position: absolute;
+  z-index: 3;
+  top: 100%;
+  left: var(--sp-12);
+  right: var(--sp-12);
+  max-height: 46vh;
+  overflow-y: auto;
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  border-radius: var(--r-surf);
+  background: var(--sheet);
+  box-shadow: var(--el3);
+}
+.note {
+  margin: 0;
+  padding: var(--sp-4) var(--sp-5);
+  color: var(--fg3);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-body);
+}
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: var(--sp-4) var(--sp-5);
+  border: 0;
+  border-radius: var(--r-ctrl);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.row:hover,
+.row:focus-visible {
+  background: var(--hover);
+}
+.title {
+  overflow: hidden;
+  color: var(--fg);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meta {
+  color: var(--fg3);
+  font-size: var(--fs-micro);
+}
+/* The words that matched, clamped to two lines. This is how a thread is
+   recognised, not how it is read — the thread itself is one click away. */
+.snippet {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  color: var(--fg2);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-body);
+}

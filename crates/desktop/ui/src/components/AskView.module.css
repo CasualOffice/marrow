@@ -29,12 +29,12 @@
 .viewOpening .scroll {
   flex: 0 1 auto;
   padding-bottom: 0;
-  /* The conversation finder is the first child of the column now, and
-     `justify-content` would centre it along with everything else — a search
-     box floating in the middle of an empty view. Auto margins take the free
-     space instead, splitting it above the scroller and below the composer:
-     the finder stays at the top where it is reachable, and the greeting and
-     the composer are still centred as a pair in what is left. */
+  /* Auto margins rather than `justify-content`, so the free space splits above
+     the scroller and below the composer and the greeting and composer stay
+     centred as a pair. This used to be load-bearing for a different reason —
+     the conversation finder was the column's first child and centring would
+     have floated a search box in the middle of an empty view. The finder moved
+     to the sidebar; the split is still the layout that reads best. */
   margin-top: auto;
 }
 
@@ -666,136 +666,20 @@
 
 /* ── finding a conversation ─────────────────────────────────────────── */
 
-/* Two hundred rows ordered by recency, each labelled with whatever its first
-   question happened to be, is not an index of anything. This is the way back
-   into one. */
-.finder {
-  position: relative;
-  z-index: 2;
-  flex: none;
-  width: 100%;
-  max-width: calc(var(--prose-measure) + var(--sp-12) * 2);
-  margin: 0 auto;
-  padding: var(--sp-5) var(--sp-12) 0;
-}
 
-.finderBox {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  height: var(--ctl-h-lg);
-  padding: 0 var(--sp-4);
-  border-radius: var(--r-ctrl);
-  background: var(--sunken);
-  color: var(--fg3);
-}
 
-/* The ring goes on the box, so it surrounds the icon as well as the text —
-   the field itself has none, or there would be two rectangles. */
-.finderBox:focus-within {
-  outline: var(--focus-ring-w) solid var(--focus-ring);
-  outline-offset: var(--focus-ring-offset);
-}
 
-.finderIcon {
-  flex: none;
-}
 
-.finderField {
-  flex: 1 1 auto;
-  min-width: 0;
-  border: 0;
-  background: none;
-  color: var(--fg);
-  font: inherit;
-  font-size: var(--fs-sm);
-}
 
-.finderField:focus-visible {
-  outline: none;
-}
 
-.finderField::placeholder {
-  color: var(--fg3);
-}
 
-/* Over the thread, not above it: an answer someone is reading must not move
-   down the screen because a search box was focused. */
-.finderPanel {
-  position: absolute;
-  z-index: 3;
-  top: 100%;
-  left: var(--sp-12);
-  right: var(--sp-12);
-  max-height: 46vh;
-  overflow-y: auto;
-  margin-top: var(--sp-3);
-  padding: var(--sp-3);
-  border-radius: var(--r-surf);
-  background: var(--sheet);
-  box-shadow: var(--el3);
-}
 
-.finderNote {
-  margin: 0;
-  padding: var(--sp-4) var(--sp-5);
-  color: var(--fg3);
-  font-size: var(--fs-sm);
-  line-height: var(--lh-body);
-}
 
-.finderList {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
 
-.finderRow {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: 100%;
-  padding: var(--sp-4) var(--sp-5);
-  border: 0;
-  border-radius: var(--r-ctrl);
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
 
-.finderRow:hover,
-.finderRow:focus-visible {
-  background: var(--hover);
-}
 
-.finderTitle {
-  overflow: hidden;
-  color: var(--fg);
-  font-size: var(--fs-sm);
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
-.finderMeta {
-  color: var(--fg3);
-  font-size: var(--fs-micro);
-}
 
-/* The words that matched, clamped to two lines. This is how a thread is
-   recognised, not how it is read — the thread itself is one click away. */
-.finderSnippet {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  overflow: hidden;
-  color: var(--fg2);
-  font-size: var(--fs-sm);
-  line-height: var(--lh-body);
-}
 
 /* ── the question waiting behind this one ───────────────────────────── */
 

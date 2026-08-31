@@ -39,6 +39,17 @@
   --fs-head: 15px; /* a state block's heading */
   --fs-display: 22px; /* stat tiles */
 
+  /* **Sustained reading is not a table row.** The ramp above was decided for a
+     result list — GUI §6's "28px rows, 13px base" — and an answer is the one
+     surface someone reads for a minute at a time. At `--fs-body` a 62ch measure
+     comes out around 525px, which is why the Ask column looked like a ribbon in
+     a 1180px window: the measure was right and the size it was measured at was
+     not. 15px puts the same 62 characters at about 630px and reads like prose.
+     Its own token rather than a step on the ramp, because nothing else on the
+     ramp wants to move. */
+  --fs-prose: 15px;
+  --lh-prose: 1.55;
+
   --lh-tight: 1.35;
   --lh-body: 1.45;
   --ls-tight: -0.02em;

@@ -24,7 +24,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import styles from "./AskView.module.css";
 import { cx } from "../lib/cx";
-import { age, bytes, duration } from "../lib/format";
+import { bytes, duration } from "../lib/format";
 import { Answer } from "./Answer";
 import { ProvenanceBadge } from "./Badges";
 import { openInSystem, revealInFileManager } from "../actions";
@@ -37,10 +37,8 @@ import {
   forgetConversation,
   loadConversation,
   saveTurn,
-  searchConversations,
   type AskEvent,
   type Citation,
-  type ConversationMatch,
   type ExcludedSource,
   type PriorTurn,
   type StoredTurn,
@@ -726,7 +724,12 @@ export function AskView() {
 
   return (
     <section className={cx(styles.view, opening && styles.viewOpening)} aria-label="Ask">
-      <ConversationFinder />
+      {/* The conversation finder used to sit here, above the thread, taking the
+          top of the reading column on every answer — a control for the *list*
+          of conversations, rendered over the one you are reading. It is in the
+          sidebar now, immediately above the list it searches, which is where
+          every product with a thread list puts it. It was only ever here
+          because the sidebar was out of scope for the change that added it. */}
       <div
         className={styles.scroll}
         ref={scroller}
@@ -885,132 +888,6 @@ function QueuedNext({
  * Empty is not a search: the panel then shows the recent list, so this doubles
  * as a jump-to-conversation for anyone who never types anything into it.
  */
-function ConversationFinder() {
-  const openConversation = useUi((s) => s.openConversation);
-  const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
-  const [rows, setRows] = useState<readonly ConversationMatch[]>([]);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    let live = true;
-    // Debounced only once there is something to debounce. The empty query is
-    // the recent list and wants to be there the moment the field is focused;
-    // a keystroke is worth the wait, because the results replace each other
-    // and a stale one arriving late would overwrite a newer one.
-    const timer = window.setTimeout(
-      () => {
-        searchConversations(query, 40)
-          .then((found) => {
-            if (!live) return;
-            setRows(found);
-            setError(null);
-          })
-          .catch((e) => {
-            if (!live) return;
-            setRows([]);
-            setError(asUiError(e).message);
-          });
-      },
-      query.trim() === "" ? 0 : 120,
-    );
-    return () => {
-      live = false;
-      window.clearTimeout(timer);
-    };
-  }, [open, query]);
-
-  const choose = (id: string) => {
-    setOpen(false);
-    setQuery("");
-    openConversation(id);
-  };
-
-  return (
-    <div
-      className={styles.finder}
-      // Closed when focus leaves the whole control, not when the field alone
-      // blurs: clicking a result moves focus to the button inside the panel,
-      // and closing on that would unmount the row mid-click.
-      onBlur={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false);
-      }}
-    >
-      <div className={styles.finderBox}>
-        <Icon name="search" size={13} className={styles.finderIcon} />
-        <input
-          type="text"
-          className={styles.finderField}
-          value={query}
-          placeholder="Search conversations…"
-          aria-label="Search conversations by title or by what was said"
-          onFocus={() => setOpen(true)}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              e.preventDefault();
-              // The window binds Escape as well, where it clears the *file*
-              // search and takes focus to that field. Here it means this box.
-              e.stopPropagation();
-              if (query !== "") setQuery("");
-              else {
-                setOpen(false);
-                e.currentTarget.blur();
-              }
-            }
-          }}
-        />
-      </div>
-
-      {open && (
-        <div
-          className={styles.finderPanel}
-          // WebKit does not focus a button when it is clicked, so the pointer
-          // press would blur the field, close this panel and destroy the row
-          // before the click ever landed on it. Keeping focus where it is makes
-          // the click arrive. Tabbing to a row still moves focus, and the
-          // `onBlur` above still closes on that.
-          onMouseDown={(e) => e.preventDefault()}
-        >
-          {error !== null ? (
-            <p className={styles.finderNote}>{error}</p>
-          ) : rows.length === 0 ? (
-            <p className={styles.finderNote}>
-              {query.trim() === ""
-                ? "No conversations yet. The first answer you keep starts one."
-                : `Nothing in your conversations says “${query.trim()}”. Titles, questions and answers are all searched.`}
-            </p>
-          ) : (
-            <ul className={styles.finderList}>
-              {rows.map((c) => (
-                <li key={c.id}>
-                  <button
-                    type="button"
-                    className={styles.finderRow}
-                    onClick={() => choose(c.id)}
-                  >
-                    <span className={styles.finderTitle}>{c.title}</span>
-                    <span className={styles.finderMeta}>
-                      {age(c.updatedMs)} · {c.turns} {c.turns === 1 ? "turn" : "turns"}
-                      {/* Which turn matched, because "somewhere in nine" and
-                          "in the first thing you asked" are different answers
-                          to "is this the one?". */}
-                      {c.matchedTurn !== null && ` · matched in turn ${c.matchedTurn}`}
-                    </span>
-                    {c.snippet !== null && (
-                      <span className={styles.finderSnippet}>{c.snippet}</span>
-                    )}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 
 /**
  * What the pipeline is doing, while it is doing it.
@@ -1114,8 +991,11 @@ function ModeSwitch({
           </button>
         ))}
       </div>
+      {/* An em dash, because without one this sat beside two buttons at the
+          same baseline and read as a third, unselected option. It is a caption
+          for whichever is chosen. */}
       <span className={styles.modeWhy}>
-        {value ? "reasons first, slower" : "straight answer"}
+        — {value ? "reasons first, slower" : "straight answer"}
       </span>
     </div>
   );
