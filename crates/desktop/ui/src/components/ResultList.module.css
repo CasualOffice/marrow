@@ -42,8 +42,17 @@
   transition: transform var(--motion-rerank) var(--ease);
 }
 
-/* Nothing selected and nothing typed. Quiet: this is not an empty state with
-   tips (GUI §4). */
+/*
+ * The list's own empty box.
+ *
+ * **Its only caller no longer reaches it.** `SearchView` renders `ResultList`
+ * when `hits.length > 0` and draws its own block otherwise, so the branch in
+ * `ResultList.tsx` that uses this class is unreachable from the app as it
+ * stands. Left in place rather than deleted because the rule and the branch
+ * have to go together and `ResultList.tsx` is not this change's to edit —
+ * noted here so the next reader does not take a live-looking rule for a live
+ * one, which is the exact confusion UI_AUDIT §1 is about.
+ */
 .idle {
   flex: 1 1 0;
   min-height: 0;

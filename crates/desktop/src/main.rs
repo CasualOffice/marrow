@@ -111,6 +111,7 @@ fn main() {
             commands::set_ai_profile,
             commands::set_generator_model,
             commands::download_model,
+            commands::delete_model,
             commands::cancel_model_download,
             commands::dismiss_model_download,
             commands::provider_settings,

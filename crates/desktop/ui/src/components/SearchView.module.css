@@ -40,7 +40,15 @@
   border-radius: 0;
 }
 
-/* Zero results takes the width the two panes had. */
+/*
+ * No ranking to sit beside: the column takes the width the two panes had.
+ *
+ * Both empty states use this — nothing searched yet, and searched with no
+ * matches — because in neither case is there anything for the detail pane to
+ * hold. There is no right-hand hairline here on purpose: the inset shadow on
+ * `.results` is the seam *between* two panes, and drawing it with nothing on
+ * its far side is a border around the window.
+ */
 .wideArea {
   flex: 1 1 auto;
   min-width: 0;
@@ -50,14 +58,21 @@
   overflow: hidden;
 }
 
+/*
+ * One gutter and one cap, in every state.
+ *
+ * The field must not move when the split opens or closes. It used to: the wide
+ * surface put it in a 520px box at a 16px gutter and the results column put it
+ * in a 344px box at a 12px gutter, so the first keystroke of any search — and
+ * the last one of a search that found nothing — resized and shifted the input
+ * the user was typing into. Capping at `--results-w` (the column's own width,
+ * `box-sizing: border-box`, so the gutter is inside the cap) makes the field's
+ * box identical in all three states, and only the surface behind it changes.
+ */
 .fieldRow {
   flex: none;
+  max-width: var(--results-w);
   padding: var(--sp-5) var(--sp-6) var(--sp-4);
-}
-
-.wideArea .fieldRow {
-  padding: var(--sp-5) var(--sp-8) var(--sp-4);
-  max-width: 520px;
 }
 
 .errorRow {
@@ -85,8 +100,38 @@
   font-variant-numeric: tabular-nums;
 }
 
-.wideArea .footer {
-  padding: 0 var(--sp-8);
+/*
+ * Nothing typed, or typed and still in flight. Quiet: GUI §4 makes this the
+ * launch view and rules out both a dashboard and an empty state with tips, so
+ * this says what the field is for and how much it covers, and stops.
+ *
+ * Centred in the whole sheet rather than in a 344px column, which is the point
+ * of the change: one message in the middle of one surface, instead of two half
+ * messages centred in two panes that between them held nothing.
+ */
+.blank {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-12);
+  text-align: center;
+}
+
+.blankPrompt {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--fg2);
+}
+
+.blankScope {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--fg3);
+  font-variant-numeric: tabular-nums;
 }
 
 .count {

@@ -126,6 +126,32 @@ impl ModelWorkspace {
         }
         Ok(())
     }
+
+    /// Delete an installed model's weights, and any partial download beside
+    /// them. Returns how many bytes went.
+    ///
+    /// **There was no way to remove a model at all.** The Models page could
+    /// start a 3.1 GB download and nothing could undo it from inside the app,
+    /// so the only remedy was to find the directory by hand — on a machine
+    /// where a full disk had already stopped SQLite writing once.
+    ///
+    /// The digest is the directory name, so this can only ever remove a path
+    /// this type composed itself: the id never reaches the filesystem, and a
+    /// caller cannot walk out of the weights directory with one. Removing a
+    /// model that is not installed is not an error — the end state the caller
+    /// asked for is the end state they get, and a second click on a button
+    /// that already worked should not raise.
+    pub fn delete_weights(&self, sha256: &str) -> Result<u64> {
+        let dir = self.weights_dir(sha256);
+        let freed = dir_size(&dir);
+        if dir.exists() {
+            fs::remove_dir_all(&dir)?;
+        }
+        // A half-finished download of the same model is the same model.
+        // Leaving it would make "delete" free nothing on a cancelled fetch.
+        self.discard_partial(sha256)?;
+        Ok(freed)
+    }
 }
 
 /// A request's working directory. Removed on drop.

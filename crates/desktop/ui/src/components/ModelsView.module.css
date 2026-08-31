@@ -739,3 +739,27 @@
   font-size: var(--fs-xs);
   line-height: var(--lh-body);
 }
+
+/* Beside "installed", not instead of it. Quiet until hovered, because removing
+   a model is rare and the card is mostly there to say what is on the machine. */
+.removeBtn {
+  padding: 2px var(--sp-3);
+  border: 0;
+  border-radius: var(--r-ctrl);
+  background: transparent;
+  box-shadow: var(--hairline);
+  color: var(--fg3);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  transition: color var(--motion-rerank), background var(--motion-rerank);
+}
+
+.removeBtn:hover:not(:disabled) {
+  background: var(--tint-danger);
+  color: var(--danger-text);
+}
+
+.removeBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

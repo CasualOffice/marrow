@@ -736,6 +736,16 @@ export function setGeneratorModel(modelId: string | null): Promise<ModelsSnapsho
   return call<ModelsSnapshot>("set_generator_model", { modelId });
 }
 
+/**
+ * Remove an installed model's weights. Resolves with the bytes freed folded
+ * into a fresh snapshot.
+ *
+ * The page could start a 3.1 GB download and offer no way back.
+ */
+export function deleteModel(modelId: string): Promise<ModelsSnapshot> {
+  return call<ModelsSnapshot>("delete_model", { modelId });
+}
+
 export function downloadModel(modelId: string): Promise<ModelsSnapshot> {
   return call<ModelsSnapshot>("download_model", { modelId });
 }

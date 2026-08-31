@@ -657,6 +657,7 @@ const COMMAND_NAMES: &[&str] = &[
     "set_ai_profile",
     "set_generator_model",
     "download_model",
+    "delete_model",
     "cancel_model_download",
     "dismiss_model_download",
     "ask",
@@ -690,7 +691,14 @@ const COMMAND_NAMES: &[&str] = &[
 /// the window — the first opens a native panel, the second has no argument at
 /// all — so neither can be pointed at anything the user wrote.
 #[cfg(test)]
-const DELIBERATE_MUTATIONS: &[&str] = &["delete_conversation", "add_files", "clear_scratch"];
+const DELIBERATE_MUTATIONS: &[&str] = &[
+    "delete_conversation",
+    // Weights, not work. A download pinned to a digest, re-fetchable with a
+    // progress bar — the opposite of the corrections hard rule 8 protects.
+    "delete_model",
+    "add_files",
+    "clear_scratch",
+];
 
 #[cfg(test)]
 mod tests {
@@ -825,7 +833,13 @@ mod tests {
         // `conversations` and `conversation_turns` on a reader connection —
         // rows Marrow wrote itself, and nothing of the user's disk. It reads
         // strictly less than `load_conversation`, which was already here.
-        assert_eq!(COMMAND_NAMES.len(), 33);
+        //
+        // 34 since `delete_model`, which is the first command here that removes
+        // something the user paid bandwidth for. It is on the mutations list
+        // deliberately: weights are a download pinned to a digest, re-fetchable
+        // with a progress bar, and nothing the user wrote is reachable from it
+        // — which is the line hard rule 8 draws between derived and precious.
+        assert_eq!(COMMAND_NAMES.len(), 34);
         for n in COMMAND_NAMES {
             if DELIBERATE_MUTATIONS.contains(n) {
                 continue;
@@ -907,6 +921,30 @@ pub async fn set_generator_model(
     let hub = Arc::clone(&hub);
     blocking(move || {
         hub.set_generator_model(model_id)?;
+        Ok(hub.snapshot())
+    })
+    .await
+}
+
+/// Remove an installed model's weights from disk. Returns the bytes freed.
+///
+/// **A deliberate mutation, and the only one that removes a user-visible
+/// thing that cost bandwidth to get.** It is here because the app could
+/// download 3.1 GB and offer no way back: the only remedy was to find the
+/// directory by hand, on a machine where a full disk had already stopped
+/// SQLite writing once.
+///
+/// Weights are the definition of rebuildable — they are a download, pinned to
+/// a digest, and re-fetching one is a progress bar rather than a loss. Nothing
+/// the user wrote is touched, which is the line hard rule 8 draws.
+#[tauri::command]
+pub async fn delete_model(
+    hub: State<'_, Arc<crate::models::Hub>>,
+    model_id: String,
+) -> Result<crate::models::ModelsSnapshot, UiError> {
+    let hub = Arc::clone(&hub);
+    blocking(move || {
+        hub.delete_model(&model_id)?;
         Ok(hub.snapshot())
     })
     .await

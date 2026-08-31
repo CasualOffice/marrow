@@ -28,8 +28,18 @@ export interface DetailPaneProps {
   anchor: Anchor | null;
   /** The hit the anchor came from, when it is still in the current ranking. */
   hit: SearchHit | null;
-  /** Rendered when nothing is selected. Kept quiet: this is not an empty state
-   *  with tips (GUI §4). */
+  /**
+   * Rendered when nothing is selected. Kept quiet: this is not an empty state
+   * with tips (GUI §4).
+   *
+   * Files passes one, because its list is there from launch and "pick a file"
+   * is a real instruction about a real list. Search passes none and is not
+   * mounted at all until a result is selected — a pane whose only content was
+   * a sentence held 62% of that window from launch, and the sentence has moved
+   * to the surface it describes. So on the Search path this branch renders for
+   * the single frame between a ranking arriving and App anchoring its first
+   * hit, and it must draw nothing at all in that frame.
+   */
   idle?: ReactNode;
 }
 

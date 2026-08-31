@@ -1443,6 +1443,85 @@ impl Hub {
         }
     }
 
+    /// Delete an installed model's weights. Returns the bytes freed.
+    ///
+    /// **The app could download 3.1 GB and never undo it.** There was no
+    /// command, no button and no path back: the only way to remove a model was
+    /// to find the directory by hand — on a machine where a full disk had
+    /// already stopped SQLite writing once.
+    ///
+    /// Three things happen before the files go, in this order, because each
+    /// one is a way for the delete to leave something worse than it found:
+    ///
+    /// 1. **Unloaded if it is the model in memory.** Removing the weights under
+    ///    a live worker leaves a process holding a deleted file, and the next
+    ///    question fails somewhere far from here.
+    /// 2. **Unpinned if it is the pinned one.** `local_generator` already
+    ///    ignores a pin that is not installed, but leaving the id in
+    ///    `preferences.json` means the page keeps naming a model that is gone.
+    /// 3. **The registry entry is marked not-installed**, so the page stops
+    ///    offering to answer with it before the disk work begins rather than
+    ///    after.
+    ///
+    /// A model that is not installed is not an error. The caller asked for it
+    /// to be gone and it is gone; raising would make a second click on a
+    /// working button fail.
+    pub fn delete_model(&self, model_id: &str) -> marrow_core::Result<u64> {
+        let Some(workspace) = self.workspace.as_ref() else {
+            return Err(marrow_core::Error::new(
+                marrow_core::Code::CfgInvalid,
+                self.workspace_problem.clone().unwrap_or_else(|| {
+                    "The model directory could not be opened, so nothing can be removed from it."
+                        .into()
+                }),
+            ));
+        };
+
+        // The manifest digest names the directory, exactly as the download
+        // path composes it — so a model is deleted from the same identity it
+        // was installed under, and the id never reaches the filesystem.
+        let digest = {
+            let registry = self.registry.lock().map_err(|_| poisoned())?;
+            let found = registry
+                .iter()
+                .find(|e| e.id == model_id)
+                .and_then(|e| e.manifest_digest.clone());
+            drop(registry);
+            found
+        };
+        let Some(digest) = digest else {
+            return Err(marrow_core::Error::new(
+                marrow_core::Code::ModNotInstalled,
+                format!(
+                    "`{model_id}` has no pinned manifest, so this build cannot tell which \
+                     files on disk are its weights. Nothing was removed."
+                ),
+            ));
+        };
+
+        if self
+            .loaded
+            .lock()
+            .map_err(|_| poisoned())?
+            .as_ref()
+            .is_some_and(|l| l.model_id == model_id)
+        {
+            self.release_model();
+        }
+        if self.pinned_model().as_deref() == Some(model_id) {
+            self.set_generator_model(None)?;
+        }
+        if let Ok(mut registry) = self.registry.lock() {
+            if let Some(e) = registry.iter_mut().find(|e| e.id == model_id) {
+                e.installed = false;
+            }
+        }
+
+        let freed = workspace.delete_weights(&digest)?;
+        tracing::info!(model = %model_id, freed_bytes = freed, "deleted a model's weights");
+        Ok(freed)
+    }
+
     pub fn snapshot(&self) -> ModelsSnapshot {
         let remote = self.provider_status();
         self.sampler.tick();

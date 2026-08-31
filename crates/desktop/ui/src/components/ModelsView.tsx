@@ -25,6 +25,7 @@ import {
   asUiError,
   cancelModelDownload,
   dismissModelDownload,
+  deleteModel,
   downloadModel,
   setGeneratorModel,
   type ModelsSnapshot,
@@ -195,14 +196,18 @@ function ModelCard({
   onDownload,
   onCancel,
   onDismiss,
+  onDelete,
   busy,
 }: {
   m: ModelRow;
   onDownload: (id: string) => void;
   onCancel: (id: string) => void;
   onDismiss: (id: string) => void;
+  onDelete: (id: string) => void;
   busy: boolean;
 }) {
+  /** Which model is one click from being removed. See the Remove button. */
+  const [confirming, setConfirming] = useState<string | null>(null);
   const v = fitVerdict(m);
   const blocked = m.fit === "too_large" || m.blockedReason !== null;
   const blockedNote =
@@ -305,9 +310,31 @@ function ModelCard({
           // The badge already says "installed", so repeating it here would be
           // two words for one fact. Show the lifecycle state only when it is
           // more than that, and the context window otherwise.
-          <span className={styles.stateText}>
-            {m.state.state === "installed" ? contextWindow(m) : stateWord(m.state)}
-          </span>
+          <>
+            <span className={styles.stateText}>
+              {m.state.state === "installed" ? contextWindow(m) : stateWord(m.state)}
+            </span>
+            {/* **A download had no way back.** The page could start 3.1 GB and
+                nothing here could undo it, so the only remedy was finding the
+                directory by hand — on a machine where a full disk had already
+                stopped SQLite writing once.
+
+                Two clicks rather than a dialog. A modal for this is heavier
+                than the act deserves: the weights are a download pinned to a
+                digest and getting them back is a progress bar, not a loss. But
+                one click beside "installed" is close enough to a misclick that
+                the second press has to be deliberate. */}
+            <button
+              type="button"
+              className={styles.removeBtn}
+              disabled={busy}
+              title={`Remove this model's weights from ${bytes(m.downloadBytes)} of disk. It can be downloaded again.`}
+              onClick={() => (confirming === m.id ? onDelete(m.id) : setConfirming(m.id))}
+              onBlur={() => setConfirming((c) => (c === m.id ? null : c))}
+            >
+              {confirming === m.id ? `Remove ${bytes(m.downloadBytes)}?` : "Remove"}
+            </button>
+          </>
         ) : m.downloadable ? (
           <button
             type="button"
@@ -579,6 +606,7 @@ export function ModelsView() {
                     onDownload={(id) => void act(downloadModel, id)}
                     onCancel={(id) => void act(cancelModelDownload, id)}
                     onDismiss={(id) => void act(dismissModelDownload, id)}
+                    onDelete={(id) => void act(deleteModel, id)}
                   />
                 ))}
               </ul>
