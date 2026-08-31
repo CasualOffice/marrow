@@ -68,6 +68,26 @@ pub struct Preferences {
     /// secret. This file is a plain file the user is invited to read and edit,
     /// and it ends up in backups.
     pub remote_provider: Option<RemoteProvider>,
+    /// What to call the person using Marrow, for addressing them and nothing
+    /// else — a greeting, "saved for {name}", the second person in a sentence
+    /// that needs a first. It is not an identity, not an account, and nothing
+    /// reads it to decide what may be indexed, cited or sent anywhere.
+    ///
+    /// **Deliberately not inferred.** The OS account name, the Git author on
+    /// the repositories in a workspace and the names inside the user's own
+    /// files would all produce a plausible answer, and all three are the wrong
+    /// mechanism. The first two are frequently not what a person is called;
+    /// the third is worse than wrong — a name read out of indexed content is a
+    /// *derived fact about a person*, which under the authority rules would
+    /// need evidence, provenance and a correction path, and which the system
+    /// would then have written into its own preferences file where nothing
+    /// records where it came from. Asking is one text field. Guessing is a
+    /// subsystem, and a subsystem that is confidently wrong about somebody's
+    /// name.
+    ///
+    /// `None` means not answered, which is the state to render as no greeting
+    /// at all rather than as a placeholder.
+    pub user_name: Option<String>,
 }
 
 /// A configured OpenAI-compatible endpoint, as the Settings page holds it.
@@ -128,6 +148,19 @@ pub fn set_ai_profile(data_dir: &Path, profile: Profile) {
 pub fn set_generator_model(data_dir: &Path, model_id: Option<String>) -> std::io::Result<()> {
     let mut prefs = load(data_dir);
     prefs.generator_model_id = model_id;
+    write(data_dir, &prefs)
+}
+
+/// Record — or clear — what to call the user.
+///
+/// Blank is cleared, not a person called "". A text field that has been emptied
+/// is how someone withdraws an answer, and storing the empty string would leave
+/// `user_name` present-and-meaningless: every caller would then need its own
+/// `is_empty` check, and the first one to forget renders "Hello, ." Normalised
+/// here so `Some(_)` always means a name.
+pub fn set_user_name(data_dir: &Path, name: Option<String>) -> std::io::Result<()> {
+    let mut prefs = load(data_dir);
+    prefs.user_name = name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
     write(data_dir, &prefs)
 }
 
@@ -242,6 +275,40 @@ mod tests {
         let p = load(dir.path());
         assert_eq!(p.ai_profile, Some(Profile::Efficient));
         assert!(p.remote_provider.is_some());
+    }
+
+    #[test]
+    fn a_name_survives_a_relaunch_and_a_blank_one_clears_it() {
+        // The blank half is the one worth pinning: an emptied text field is how
+        // the answer is withdrawn, and `Some("")` would be a name as far as
+        // every caller is concerned.
+        let dir = tempfile::tempdir().expect("temp dir");
+        assert_eq!(load(dir.path()).user_name, None, "never asked");
+
+        set_user_name(dir.path(), Some("  Sachin  ".into())).expect("write");
+        assert_eq!(load(dir.path()).user_name.as_deref(), Some("Sachin"));
+
+        set_user_name(dir.path(), Some("   ".into())).expect("write");
+        assert_eq!(load(dir.path()).user_name, None);
+
+        set_user_name(dir.path(), Some("Sachin".into())).expect("write");
+        set_user_name(dir.path(), None).expect("clear");
+        assert_eq!(load(dir.path()).user_name, None);
+    }
+
+    #[test]
+    fn naming_yourself_does_not_disturb_the_other_settings() {
+        // Same read-modify-write guard as the provider test above. This one is
+        // written by a different card on the same page.
+        let dir = tempfile::tempdir().expect("temp dir");
+        set_ai_profile(dir.path(), Profile::Efficient);
+        set_generator_model(dir.path(), Some("qwen3.5-4b-mlx-q4".into())).expect("write");
+        set_user_name(dir.path(), Some("Sachin".into())).expect("write");
+
+        let p = load(dir.path());
+        assert_eq!(p.ai_profile, Some(Profile::Efficient));
+        assert_eq!(p.generator_model_id.as_deref(), Some("qwen3.5-4b-mlx-q4"));
+        assert_eq!(p.user_name.as_deref(), Some("Sachin"));
     }
 
     #[test]

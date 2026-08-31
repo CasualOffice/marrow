@@ -112,6 +112,8 @@ fn main() {
             commands::set_generator_model,
             commands::download_model,
             commands::delete_model,
+            commands::user_name,
+            commands::set_user_name,
             commands::cancel_model_download,
             commands::dismiss_model_download,
             commands::provider_settings,

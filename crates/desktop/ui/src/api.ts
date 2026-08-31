@@ -742,6 +742,25 @@ export function setGeneratorModel(modelId: string | null): Promise<ModelsSnapsho
  *
  * The page could start a 3.1 GB download and offer no way back.
  */
+/* ── the user ─────────────────────────────────────────────────────────────── */
+
+/**
+ * What to call the user, if they have said. `null` is "never answered".
+ *
+ * The only thing Marrow knows about the person. Deliberately not inferred from
+ * the OS account, the Git author, or anything read out of their files — a name
+ * derived from indexed content would be a fact about a person with evidence
+ * and provenance behind it, and a preferences file records none of the three.
+ */
+export function userName(): Promise<string | null> {
+  return call<string | null>("user_name", {});
+}
+
+/** Record — or clear — it. Resolves with what was actually stored. */
+export function setUserName(name: string | null): Promise<string | null> {
+  return call<string | null>("set_user_name", { name });
+}
+
 export function deleteModel(modelId: string): Promise<ModelsSnapshot> {
   return call<ModelsSnapshot>("delete_model", { modelId });
 }

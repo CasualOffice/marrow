@@ -35,6 +35,27 @@ import type {
   WorkspaceRow,
 } from "../api";
 
+/**
+ * What `getVersion()` would answer.
+ *
+ * The About section reads the version out of the bundle rather than out of a
+ * constant, so in a plain browser — where there is no bundle — it has to come
+ * from somewhere. Kept equal to `tauri.conf.json`'s `version` by hand, which is
+ * the same hand-mirroring rule the rest of this file already lives under.
+ */
+export const APP_VERSION = "0.1.0";
+
+/**
+ * What the user is called, in dev.
+ *
+ * `set_user_name` and `user_name` are **not registered commands yet** —
+ * `prefs::set_user_name` is written and nothing calls it. The pair below is
+ * what makes the Settings field reviewable in `pnpm dev` before the Rust half
+ * is wired; in the real app the field reports itself as not wired instead of
+ * pretending to save, which is the distinction this file exists to preserve.
+ */
+let devUserName: string | null = "Sachin";
+
 
 /**
  * Models. Shaped to exercise the three cases that must look different:
@@ -808,6 +829,17 @@ export async function mockInvoke<T>(
     case "set_ai_profile": {
       devProfile = String((args as { profile?: unknown }).profile ?? "balanced");
       return devModels() as T;
+    }
+    case "user_name":
+      return devUserName as T;
+    case "set_user_name": {
+      // Mirrors `prefs::set_user_name`: blank is cleared, not a person called
+      // "". A fixture that stored the empty string would let the UI render a
+      // greeting the real thing never produces.
+      const given = args?.["name"];
+      const trimmed = typeof given === "string" ? given.trim() : "";
+      devUserName = trimmed === "" ? null : trimmed;
+      return devUserName as T;
     }
     case "start_semantic_backfill":
     case "stop_semantic_backfill":

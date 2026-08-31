@@ -146,7 +146,12 @@ Citations API is the only production system that extracts `cited_text`
 mechanically, so a pointer cannot dangle — and even that guarantees pointer
 validity, not support. kotaemon gets closest in open source (§12.1).
 `crates/desktop/src/ask.rs` renders the retrieval result as the citation list;
-nothing checks that an `[E1]` in the answer names a real block, or that the
+nothing checks that an `[E1]` in the answer names a real block — **no longer
+true: `crates/desktop/ui/src/lib/markdown.ts` gates linking on
+`known.has(id)`, so an unknown marker renders as inert text rather than a live
+link, and it runs on sanitised HTML so a `[E1]` inside a code fence is left
+alone. Onyx reached the same code-fence insight by parity-counting.** What is
+still unchecked is whether the
 claim it decorates is supported.
 
 ---
@@ -448,7 +453,7 @@ benchmark against; omlx is the project to read.
 | **Marrow — `search`** | **Yes.** No model, no key, no service |
 | **Marrow — `ask`** | Yes *after* a manual Python venv and `pip install mlx-lm` — which needs a network once and is not in the README's stack table |
 | AnythingLLM desktop | Yes — bundled MiniLM + LanceDB, telemetry opt-out |
-| Khoj | Yes — `USE_EMBEDDED_DB=true --anonymous-mode`, vendored Postgres |
+| Khoj | Search only — `USE_EMBEDDED_DB=true --anonymous-mode`, vendored Postgres. **Local *chat* was removed**: `processor/conversation/offline/` no longer exists on `master` and only `anthropic/`, `google/` and `openai/` remain, with Ollama reached as an OpenAI-compatible base URL. Verified 2026-09-01 |
 | cognee | Yes for search; `cognify()` ingestion always needs an LLM |
 | Onyx | Yes, but ten containers, and "lite" disables RAG |
 | RAGFlow | Yes — 16 GB RAM, 50 GB disk |
@@ -609,12 +614,25 @@ graph but **not** the embeddings, recomputing only for nodes on the search path;
 
 Read against the code, not the docs.
 
-**13.1 "Citations to the exact page, cell or line."** Only `Bytes` and `Lines`
-have producers. `Page` is marked *"Deferred (M0 F3)"*, `Cells` has no writer,
-PDF is dropped (D4), XLSX is unbuilt. The README's own example —
-`contract.pdf p17, ¶Renewal` — cannot happen today. The schema carries the
-claim; the parsers do not. §12.2's first row is the cheapest route to making it
-true.
+**13.1 "Citations to the exact page, cell or line."** ~~Only `Bytes` and
+`Lines` have producers. `Page` is marked *"Deferred (M0 F3)"*, `Cells` has no
+writer, PDF is dropped (D4), XLSX is unbuilt.~~ **Every clause of that is now
+false.** `crates/parse/src/pdf.rs:248` emits `Page { page, bbox }` from PDFKit
+character bounds (D54 reversed D4) and `crates/parse/src/xlsx.rs` emits
+`Cells`. The README's example can happen.
+
+What replaced it is narrower and still real. The box is produced, persisted,
+and then **dropped at the citation surface**: the only consumer of
+`SourceSpan::Page` outside parsing is `crates/mcp/src/server.rs:1111`,
+`format!("{path}:p{page}")`, and `Citation` carries `line` and no bbox. And
+`merge_spans` (`crates/parse/src/chunk.rs:665`) falls through to `_ =>
+a.clone()` for `Page`, so a chunk built from six paragraphs cites the first
+box and discards five. The comment there says "narrow, never wrong", which is
+true of `Cells` across sheets and not true of a page.
+
+Corrected 2026-09-01 by reading the parsers. The audit above was written
+against an earlier build and nothing re-ran it — the same drift this document
+exists to catch.
 
 **13.2 Hard rule #1 and the tracker disagree.** `IrNode.span` is `SourceSpan`,
 not `Option<SourceSpan>`, which is genuinely the right enforcement. But TRACKER

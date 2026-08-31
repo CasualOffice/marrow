@@ -441,6 +441,18 @@ Build these as fixtures. The set only grows — every security bug found adds a 
 
 Ideas that came up but aren't scheduled. Move to a milestone or delete — don't let this grow.
 
+### Found by reading Khoj, Onyx, RAGFlow, LlamaIndex and Docling — 2026-09-01
+
+Filed, not scheduled. Every one was read at source; see [docs/RESEARCH_ARCHITECTURE.md](docs/RESEARCH_ARCHITECTURE.md).
+
+- **`merge_spans` discards every `Page` box but the first.** `crates/parse/src/chunk.rs:665` falls through to `_ => a.clone()`, so a chunk built from six PDF paragraphs cites paragraph one and drops five. The comment says "narrow, never wrong" — true of `Cells` across sheets, false of a page. Docling's answer is a *list* (`DocMeta.doc_items`, `min_length=1`) excluded from embed and LLM text, so it costs nothing. **Highest-value item found in the whole comparison**, and the one place Marrow is behind on its own central claim.
+- **The bbox never reaches the reader.** It is produced (`pdf.rs:248`), persisted, and then thrown away at the citation surface — the only consumer outside parsing is `mcp/src/server.rs:1111`, `format!("{path}:p{page}")`. RAGFlow renders a crop of the source region in its citation popover; Marrow gets the box free from PDFKit where RAGFlow needs a vision detector, and still shows less. Take the crop, refuse the index-time JPEG-to-object-storage half.
+- **`ir_nodes` has no writer.** In the schema since M1; ingest parses straight to chunks. That is the prerequisite for the span list above, and it is worth naming before it is rediscovered a third time.
+- **`on_token: &mut dyn FnMut(Token)` is the wrong shape for provider #4.** A callback has nowhere to put finish-with-usage, a mid-stream warning ("I ignored your `reasoning_effort`"), or a mid-stream error. Vercel's `LanguageModelV3` has stayed two methods across three majors and put every bit of growth into *payload types*; rig added a third method only for `capabilities()`. The trait is not too thin — the stream is. Every mature multi-provider codebase reports this as the change that cannot be retrofitted.
+- **A hash comparison has a real counterexample.** Onyx gates re-indexing on *either* an advancing `doc_updated_at` **or** a changed content hash, because a sync client can rewrite bytes whose hash-relevant content is identical — their comment names GDrive in-place image replacement. Marrow's `pipeline.rs` is hash-first with size+mtime only as a fallback when hashing is forbidden, which is the inverse priority and has no note on this case.
+- **Fail-open on every optional stage, as a stated convention.** Onyx does it at six LLM call sites — unparseable, empty, out-of-range or thrown all return the un-enhanced result. `search_hybrid` already does exactly this for the vector branch and says so; it is one branch's comment rather than a rule, and it should be a rule.
+- **Invariant numbers disagree with themselves across the repo.** `origin = SELF` is cited as **#9** in `crates/tools/` (matching CLAUDE.md) and as **#13** in `crates/core/`, `crates/ingest/` and `api.ts` (matching Part 7 §126's longer list). Placeholder hydration is #3 in CLAUDE.md and #5 in the README's bullet list. At least one citation is wrong under any numbering, and nothing can catch it. Pick one canonical list, or cite rules by name.
+
 - **Hydration path** ([D51](DECISIONS.md)) — opt-in, size shown, rate-limited, cancellable, battery/metered aware. Not M1; the indexer never hydrates regardless.
 - Wire `PathId`/`ParseId`/`DeviceId` through `marrow-store` (currently raw `Ulid` at two call sites).
 - `integrity_check` on unclean shutdown — belongs with the CLI `status` work.

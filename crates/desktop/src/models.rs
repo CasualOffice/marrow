@@ -1140,6 +1140,24 @@ impl Hub {
         Ok(())
     }
 
+    /// What to call the user, if they have said.
+    pub fn user_name(&self) -> Option<String> {
+        prefs::load(&self.data_dir).user_name
+    }
+
+    /// Record — or clear — the user's name. Returns what was stored.
+    pub fn set_user_name(&self, name: Option<String>) -> marrow_core::Result<Option<String>> {
+        prefs::set_user_name(&self.data_dir, name).map_err(|e| {
+            marrow_core::Error::new(
+                marrow_core::Code::FsPermissionDenied,
+                "Your name could not be saved, so it will be forgotten when Marrow closes. \
+                 The preferences file could not be written.",
+            )
+            .with_source(e)
+        })?;
+        Ok(prefs::load(&self.data_dir).user_name)
+    }
+
     /// The pinned model, if one is set. `None` means "whatever fits".
     pub fn pinned_model(&self) -> Option<String> {
         self.pinned.lock().ok().and_then(|p| p.clone())

@@ -8,11 +8,96 @@
   background: var(--sheet);
 }
 
+/* The group list beside the group. Two columns rather than one long scroll:
+   the list is the map, and a map that scrolls away with the territory is a
+   list you have to scroll back to before you can use it. */
+.columns {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.nav {
+  flex: 0 0 auto;
+  width: 168px;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--sp-12) var(--sp-5) var(--sp-16) var(--sp-8);
+  box-shadow: inset -1px 0 0 var(--line);
+}
+
+/* Four ordinary buttons. No roving tabindex and no key handler: every one is
+   its own tab stop, which is the property that must not regress. */
+.navItem {
+  display: flex;
+  align-items: center;
+  min-height: var(--ctl-h-lg);
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-ctrl);
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--fg2);
+  text-align: left;
+}
+
+.navItem:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.navItemOn,
+.navItemOn:hover {
+  background: var(--selected);
+  color: var(--fg);
+}
+
 .scroll {
   flex: 1 1 0;
+  min-width: 0;
   min-height: 0;
   overflow-y: auto;
   padding: var(--sp-12) var(--sp-12) var(--sp-16);
+}
+
+/* The group in one line, above its content. Set apart from the headings below
+   it, because it describes the whole group rather than starting it. */
+.groupBlurb {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--fg3);
+  max-width: var(--prose-measure);
+}
+
+/* Below the two-column width the list becomes a row above the content. It
+   stays a `<nav>` of the same buttons — only the axis changes. */
+@media (max-width: 720px) {
+  .columns {
+    flex-direction: column;
+  }
+
+  .nav {
+    width: auto;
+    flex-direction: row;
+    gap: 2px;
+    overflow-x: auto;
+    overflow-y: visible;
+    padding: var(--sp-6) var(--sp-8) var(--sp-5);
+    box-shadow: inset 0 -1px 0 var(--line);
+  }
+
+  .navItem {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .scroll {
+    padding: var(--sp-8) var(--sp-8) var(--sp-16);
+  }
 }
 
 /* A reading width. Settings is prose with controls in it, and prose set to the
@@ -129,6 +214,18 @@
 .absent {
   color: var(--fg3);
   font-weight: 400;
+}
+
+/* A fact whose value is a sentence rather than a number. It takes the whole
+   row and wraps, because the alternative in a 120px column is an ellipsis
+   eating the half of the machine summary that says which machine. */
+.factWide {
+  grid-column: 1 / -1;
+}
+
+.factWide .factValue {
+  white-space: normal;
+  overflow: visible;
 }
 
 /* ── roots ────────────────────────────────────────────────────────────────── */
@@ -314,6 +411,127 @@
   gap: var(--sp-3);
   font-size: var(--fs-body);
   color: var(--fg);
+}
+
+/* One field with its Save beside it, rather than the `.fieldRow` grid: two
+   equal columns would set a name box at half the measure with the button
+   floating in the empty half, and a name is short. `.segmented` sets
+   `align-self: flex-start` for its usual home in a column, which here would
+   hang the button off the top of the label instead of level with the box. */
+.nameRow {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-4);
+}
+
+.nameField {
+  flex: 0 1 320px;
+  min-width: 0;
+}
+
+.nameRow .segmented {
+  align-self: flex-end;
+}
+
+/* ── about ────────────────────────────────────────────────────────────────── */
+
+/* A heading inside a section, for the two divisions About makes. Set below
+   `--fs-title` and above body so it groups without starting a new section —
+   these belong to "About Marrow", not beside it. */
+.subheading {
+  margin: var(--sp-4) 0 0;
+  font-family: var(--tight);
+  font-size: var(--fs-body);
+  font-weight: 600;
+  letter-spacing: var(--ls-tight);
+  color: var(--fg);
+}
+
+/* The granted folders again, by name and count rather than by path. The paths
+   are already listed under "Where it lives"; what this section is answering is
+   how much is in each one. */
+.grants {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  /* Held to the same measure as the prose beside it. Pushed to the full column
+     the count ends up a hand's width from the name it counts, and the pair
+     stops reading as one row. */
+  max-width: var(--prose-measure);
+}
+
+.grant {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  min-height: var(--ctl-h);
+  padding: 0 var(--sp-3);
+  min-width: 0;
+}
+
+.grantName {
+  font-size: var(--fs-body);
+  font-weight: 500;
+  color: var(--fg);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.grantCount {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: var(--fs-xs);
+  color: var(--fg3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* One claim per row: a short handle on the left, the statement on the right.
+   Same two-column shape as `.cannotItem`, because it is the same kind of list —
+   a fact with a name you can scan for — and a second layout for the same job
+   would only be another thing to keep aligned. */
+.claims {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.claim {
+  display: grid;
+  grid-template-columns: 116px minmax(0, 1fr);
+  column-gap: var(--sp-6);
+  padding: var(--sp-4) 0;
+  box-shadow: inset 0 -1px 0 var(--line);
+}
+
+.claim:last-child {
+  box-shadow: none;
+}
+
+.claimKey {
+  font-size: var(--fs-xs);
+  color: var(--fg3);
+  padding-top: 2px;
+}
+
+.claimText {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--fg2);
+  max-width: var(--prose-measure);
+}
+
+/* Below the measure the handle column has nowhere to go without squeezing the
+   sentence it labels, so it becomes a line above it. */
+@media (max-width: 560px) {
+  .claim {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 2px;
+  }
 }
 
 .grow {

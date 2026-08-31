@@ -658,6 +658,8 @@ const COMMAND_NAMES: &[&str] = &[
     "set_generator_model",
     "download_model",
     "delete_model",
+    "user_name",
+    "set_user_name",
     "cancel_model_download",
     "dismiss_model_download",
     "ask",
@@ -839,7 +841,10 @@ mod tests {
         // deliberately: weights are a download pinned to a digest, re-fetchable
         // with a progress bar, and nothing the user wrote is reachable from it
         // — which is the line hard rule 8 draws between derived and precious.
-        assert_eq!(COMMAND_NAMES.len(), 34);
+        // 36 with `user_name` and `set_user_name`: one field of
+        // `preferences.json`, and the only thing this app knows about the
+        // person using it. Neither reads anything of theirs.
+        assert_eq!(COMMAND_NAMES.len(), 36);
         for n in COMMAND_NAMES {
             if DELIBERATE_MUTATIONS.contains(n) {
                 continue;
@@ -924,6 +929,33 @@ pub async fn set_generator_model(
         Ok(hub.snapshot())
     })
     .await
+}
+
+/// What to call the user, if they have said. `None` is "never answered".
+///
+/// **Deliberately the only thing Marrow knows about the person.** A name is
+/// for addressing them; it is not inferred from the OS account, the Git
+/// author, or anything read out of their files. A name derived from indexed
+/// content would be a *fact about a person* with evidence and provenance
+/// behind it, and `preferences.json` records none of the three.
+#[tauri::command]
+pub async fn user_name(hub: State<'_, Arc<crate::models::Hub>>) -> Result<Option<String>, UiError> {
+    let hub = Arc::clone(&hub);
+    blocking(move || Ok(hub.user_name())).await
+}
+
+/// Record — or clear — the user's name.
+///
+/// Returns what was actually stored rather than what was typed: the value is
+/// trimmed and blank clears it, so the field can render the kept value instead
+/// of assuming its own input survived.
+#[tauri::command]
+pub async fn set_user_name(
+    hub: State<'_, Arc<crate::models::Hub>>,
+    name: Option<String>,
+) -> Result<Option<String>, UiError> {
+    let hub = Arc::clone(&hub);
+    blocking(move || hub.set_user_name(name)).await
 }
 
 /// Remove an installed model's weights from disk. Returns the bytes freed.
