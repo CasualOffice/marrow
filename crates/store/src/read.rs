@@ -1379,6 +1379,13 @@ pub struct NewChunk {
     pub text_hash: ContentHash,
     pub chunker_version: String,
     pub provenance_class: String,
+    /// Where in the file this chunk came from, as JSON.
+    ///
+    /// **Canonical, because a rebuild has to be able to cite.** It used to be
+    /// reachable only through `root_node_id → ir_nodes`, which has never had a
+    /// writer — so `rebuild_from` recovered every chunk's text and gave every
+    /// chunk `SourceSpan::Whole`. `None` only for rows written before v7.
+    pub source_span: Option<String>,
 }
 
 /// Replace a version's chunks.
@@ -1401,8 +1408,9 @@ pub fn replace_chunks(conn: &Connection, version_id: VersionId, chunks: &[NewChu
         .prepare_cached(
             "INSERT INTO chunks
                 (chunk_id, version_id, chunk_kind, text, context_prefix,
-                 token_count, text_hash, chunker_version, provenance_class)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                 token_count, text_hash, chunker_version, provenance_class,
+                 source_span)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
         )
         .map_err(|e| crate::map_sqlite(e, "preparing chunk insert"))?;
     for c in chunks {
@@ -1416,6 +1424,7 @@ pub fn replace_chunks(conn: &Connection, version_id: VersionId, chunks: &[NewChu
             c.text_hash.to_hex(),
             c.chunker_version,
             c.provenance_class,
+            c.source_span,
         ])
         .map_err(|e| crate::map_sqlite(e, "inserting a chunk"))?;
     }

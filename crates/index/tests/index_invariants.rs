@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use marrow_core::{
-    ChunkId, Code, ContentHash, FileId, NodeId, Origin, ProvenanceClass, Result, SourceSpan,
-    TierState, Timestamp, VersionId, WorkspaceId,
+    ChunkId, Code, ContentHash, FileId, Origin, ProvenanceClass, Result, SourceSpan, TierState,
+    Timestamp, VersionId, WorkspaceId,
 };
 use marrow_index::fts5::{self, Fts5Index, StoreChunkSource};
 use marrow_index::literal::{literal_search, LiteralQuery, LiteralTarget, StopReason};
@@ -189,31 +189,30 @@ impl Fixture {
 /// The canonical rows behind one index document: an IR node carrying the
 /// `source_span` (the rule that every IR node carries one) and the chunk that
 /// points at it.
+/// A chunk exactly as ingest writes one.
+///
+/// **This used to write an `ir_nodes` row and point `root_node_id` at it**,
+/// which is a world production has never produced: `ir_nodes` has no writer,
+/// and on a real index it holds 0 rows against 171,000 chunks with every
+/// `root_node_id` NULL. So `derived_index_is_rebuildable_from_canonical`
+/// passed by constructing the one precondition that makes the rebuild work,
+/// while the shipped path fell back to `SourceSpan::Whole` for every chunk —
+/// the text recovered, the citation gone. A fixture that models a state the
+/// program cannot reach is a test that cannot fail for the reason it exists.
 fn insert_chunk_row(conn: &Connection, doc: &TextDoc) -> Result<()> {
-    let node = NodeId::new();
     conn.execute(
-        "INSERT INTO ir_nodes (node_id, version_id, kind, ordinal, source_span, trust)
-         VALUES (?1, ?2, 'paragraph', 0, ?3, 'UNTRUSTED_CONTENT')",
-        params![
-            node.to_string(),
-            doc.version_id.to_string(),
-            serde_json::to_string(&doc.span).expect("span json"),
-        ],
-    )
-    .map_err(|e| map_sqlite(e, "test: insert ir node"))?;
-    conn.execute(
-        "INSERT INTO chunks (chunk_id, version_id, root_node_id, chunk_kind, text,
+        "INSERT INTO chunks (chunk_id, version_id, chunk_kind, text,
                              context_prefix, token_count, text_hash, chunker_version,
-                             provenance_class, extraction_method, status)
-         VALUES (?1, ?2, ?3, 'TEXT', ?4, ?5, ?6, ?7, 'test-1', 'EXACT', 'NATIVE', 'ACTIVE')",
+                             provenance_class, extraction_method, status, source_span)
+         VALUES (?1, ?2, 'TEXT', ?3, ?4, ?5, ?6, 'test-1', 'EXACT', 'NATIVE', 'ACTIVE', ?7)",
         params![
             doc.chunk_id.to_string(),
             doc.version_id.to_string(),
-            node.to_string(),
             doc.body,
             doc.title,
             doc.body.split_whitespace().count() as i64,
             ContentHash::of(doc.body.as_bytes()).to_hex(),
+            serde_json::to_string(&doc.span).expect("span json"),
         ],
     )
     .map_err(|e| map_sqlite(e, "test: insert chunk"))?;
@@ -345,14 +344,20 @@ fn derived_index_is_rebuildable_from_canonical() {
     }
 
     let queries = ["refresh token", "claims", "cats", "token"];
-    let before: Vec<Vec<(ChunkId, String)>> = queries
+    let before: Vec<Vec<(ChunkId, String, marrow_core::SourceSpan)>> = queries
         .iter()
         .map(|q| {
             index
                 .search(&TextQuery::new(*q))
                 .expect("search")
                 .into_iter()
-                .map(|h| (h.chunk_id, h.snippet.text))
+                // **The span, not only the text.** This compared
+                // `(chunk_id, snippet)` and passed while every rebuilt chunk
+                // came back with `SourceSpan::Whole` — the words recovered and
+                // the citation lost, on the one property this product is for.
+                // "Rebuildable" has to mean the answer is the same, and a
+                // citation to a whole file is not the same answer.
+                .map(|h| (h.chunk_id, h.snippet.text, h.span))
                 .collect()
         })
         .collect();
@@ -377,16 +382,16 @@ fn derived_index_is_rebuildable_from_canonical() {
 
     assert_eq!(index.doc_count().expect("count"), 3);
     for (q, want) in queries.iter().zip(&before) {
-        let got: Vec<(ChunkId, String)> = index
+        let got: Vec<(ChunkId, String, marrow_core::SourceSpan)> = index
             .search(&TextQuery::new(*q))
             .expect("search")
             .into_iter()
-            .map(|h| (h.chunk_id, h.snippet.text))
+            .map(|h| (h.chunk_id, h.snippet.text, h.span))
             .collect();
         assert_eq!(&got, want, "rebuilt index answers {q:?} differently");
     }
 
-    // And the spans came back through the IR node, not as a shrug.
+    // And the spans came back from the chunks themselves, not as a shrug.
     let hit = &index.search(&TextQuery::new("claims")).expect("search")[0];
     assert!(
         hit.span.is_precise(),

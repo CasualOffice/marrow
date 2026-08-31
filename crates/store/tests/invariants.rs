@@ -852,6 +852,7 @@ fn the_chunk_count_excludes_what_search_can_no_longer_return() {
         text_hash: ContentHash::of(b"the renewal clause"),
         chunker_version: "test".into(),
         provenance_class: "EXACT".into(),
+        source_span: None,
     };
     fx.store
         .writer()

@@ -1214,6 +1214,10 @@ fn extract(
             text_hash: marrow_core::ContentHash::of(d.body.as_bytes()),
             chunker_version: marrow_parse::CHUNKER_VERSION.into(),
             provenance_class: format!("{:?}", d.provenance).to_uppercase(),
+            // The same span the index document gets, kept canonically too —
+            // otherwise a rebuild reads it back as `Whole` and the citation is
+            // gone while the text survives.
+            source_span: serde_json::to_string(&d.span).ok(),
         })
         .collect();
 

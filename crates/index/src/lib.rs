@@ -58,9 +58,9 @@ pub const MIGRATIONS: &[marrow_store::migrate::Migration] = &[fts5::MIGRATION, v
 ///
 /// Distinct from [`marrow_core::SCHEMA_VERSION`], which is only what
 /// `marrow-store` alone would apply. The two agree whenever the store holds the
-/// highest number in the chain, which it does at 6; they part again the next
+/// highest number in the chain, which it does at 7; they part again the next
 /// time this crate takes one.
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 pub use fts5::{Fts5Index, StoreChunkSource};
 pub use literal::{

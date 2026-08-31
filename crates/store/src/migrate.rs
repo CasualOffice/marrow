@@ -67,6 +67,12 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "m6_table_ir",
         up: schema::SCHEMA_V6,
     },
+    // Seven, by the same rule: neither crate has claimed it.
+    Migration {
+        version: 7,
+        name: "m7_chunk_source_span",
+        up: schema::SCHEMA_V7,
+    },
 ];
 
 /// The schema version this build writes.

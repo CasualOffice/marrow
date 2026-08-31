@@ -858,7 +858,14 @@ pub const CHUNK_SOURCE_SQL: &str = "
     SELECT c.chunk_id, f.file_id, fv.version_id, f.workspace_id,
            COALESCE(f.current_path, fv.path_at_observation),
            COALESCE(c.context_prefix, ''), c.text,
-           n.source_span, c.provenance_class, f.origin, fv.mtime_ms
+           -- The chunk's own span first. This read `n.source_span` alone, and
+           -- `ir_nodes` has never had a writer — 0 rows against 171,000 chunks
+           -- on a real index — so every row came back NULL and every rebuilt
+           -- chunk fell back to `SourceSpan::Whole`. The rebuild recovered the
+           -- text and lost the citation, which is the half that matters.
+           -- `ir_nodes` stays in the COALESCE for the day it has one.
+           COALESCE(c.source_span, n.source_span),
+           c.provenance_class, f.origin, fv.mtime_ms
       FROM chunks c
       JOIN file_versions fv ON fv.version_id = c.version_id
       JOIN files f          ON f.file_id     = fv.file_id

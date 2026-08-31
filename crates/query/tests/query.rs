@@ -137,6 +137,7 @@ impl Corpus {
             text_hash: ContentHash::of(d.body.as_bytes()),
             chunker_version: "test-chunker/1".into(),
             provenance_class: provenance_sql(d.provenance).into(),
+            source_span: None,
         }];
         self.store
             .writer()

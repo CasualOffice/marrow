@@ -841,6 +841,7 @@ mod indexed {
                             text_hash: hash,
                             chunker_version: "test".into(),
                             provenance_class: "EXACT".into(),
+                            source_span: None,
                         }],
                     )
                 })

@@ -560,6 +560,30 @@ CREATE TABLE table_cells (
 CREATE INDEX idx_cells_table ON table_cells(table_id, row_idx);
 "#;
 
+/// **v7 — a chunk carries its own source span.**
+///
+/// The span was reachable only through `chunks.root_node_id → ir_nodes`, and
+/// **`ir_nodes` has never had a writer**: 0 rows against 171,000 chunks on a
+/// real index, every `root_node_id` NULL. Ingest passes the span straight into
+/// `text_index_docs.source_span`, so live search cites correctly — but
+/// `CHUNK_SOURCE_SQL`'s `LEFT JOIN ir_nodes` yields NULL for every row, and
+/// `doc_from_canonical_row` falls back to `SourceSpan::Whole`.
+///
+/// So **a rebuild recovered every chunk's text and lost every chunk's
+/// citation.** "Derived indexes are rebuildable" is a hard rule, and it was
+/// true of the words and false of the thing this product exists for. Nothing
+/// failed; the rebuilt index just cites whole files.
+///
+/// Nullable, because 171,000 existing rows have no span to give and a
+/// `NOT NULL` here would either fail the migration or invent `Whole` for all
+/// of them — which is the lossy state dressed as a real one. `CHUNKER_VERSION`
+/// moves with this instead, so the next sweep re-cuts every chunk and fills
+/// the column from the parser rather than from a default.
+pub const SCHEMA_V7: &str = r#"
+ALTER TABLE chunks ADD COLUMN source_span TEXT
+    CHECK (source_span IS NULL OR json_valid(source_span));
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;

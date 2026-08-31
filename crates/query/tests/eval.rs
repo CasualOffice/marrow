@@ -469,6 +469,7 @@ impl Corpus {
                     text_hash: ContentHash::of(block.text.as_bytes()),
                     chunker_version: "eval-blocks/1".into(),
                     provenance_class: provenance_sql(provenance).into(),
+                    source_span: None,
                 });
                 docs.push(TextDoc {
                     chunk_id,

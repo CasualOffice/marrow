@@ -32,7 +32,11 @@ use crate::ir::{IrKind, IrNode, ParsedArtifact};
 /// `2`: band lines are driven by a table's cells rather than by its bounding
 /// box, so the text of a chunk from a sparse or very wide sheet is different
 /// from what `1` wrote.
-pub const CHUNKER_VERSION: &str = "2";
+///
+/// `3`: a chunk's `source_span` is persisted canonically (schema v7). The text
+/// is unchanged; the bump exists to re-cut every chunk so the new column is
+/// filled from the parser rather than left NULL for ever.
+pub const CHUNKER_VERSION: &str = "3";
 
 /// Sizing policy.
 ///
