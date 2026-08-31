@@ -15,3 +15,9 @@ tracing.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+# For `tests/eval.rs` only. The eval's corpus manifest, golden query set and
+# committed baseline are TOML so that a person can re-grade a document or add a
+# query without touching Rust — and TOML rather than JSON because half the value
+# of a judgement file is the comment saying who decided it and why.
+# Already in the workspace lockfile via `marrow-tools`; no new crate is pulled.
+toml = "0.8"

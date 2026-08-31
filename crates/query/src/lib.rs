@@ -67,7 +67,26 @@
 //!   bar it from evidence (the `origin = SELF` rule). See [`search::Hit::can_support_a_claim`].
 //! - Anything short of `ProvenanceClass::Exact` is down-weighted (CONV-005).
 //!
+//! # Ranking changes are measured, not argued
+//!
+//! The tests next door are correctness tests, and correctness is not quality:
+//! nothing in them can tell you whether changing [`search::RRF_K`], the
+//! [`search::SEMANTIC_WEIGHT`]/[`search::LEXICAL_WEIGHT`] ratio or
+//! `marrow_index::FieldWeights` made results better or worse. `tests/eval.rs`
+//! can. It scores a committed fixture corpus (`eval/`) against a golden query
+//! set and fails on a drop beyond a stated tolerance — [Part 6 §113.4]'s
+//! tuning protocol, with something to actually run.
+//!
+//! **Touch any of those numbers and run it.** It needs no model, no GPU and no
+//! network, and it takes about five seconds:
+//!
+//! ```text
+//! cargo test -p marrow-query --test eval
+//! MARROW_EVAL_SHOW=q06 cargo test -p marrow-query --test eval -- --nocapture
+//! ```
+//!
 //! [Part 6 §113.3]: ../../../docs/Part_6_Engineering_Reference.md
+//! [Part 6 §113.4]: ../../../docs/Part_6_Engineering_Reference.md
 
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
@@ -76,6 +95,8 @@ pub mod catalog;
 pub mod explain;
 pub mod intelligence;
 pub mod search;
+/// Arithmetic over a spreadsheet range, computed here rather than by a model.
+pub mod table;
 
 pub use explain::{
     citable, explain, origin_is_citable, summarize, BranchExplanation, Explanation, HitExplanation,

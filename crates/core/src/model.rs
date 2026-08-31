@@ -168,6 +168,16 @@ impl SourceSpan {
     /// alone. A byte offset is not a location a person can act on, and the
     /// other three have no reader yet; inventing a notation for them here
     /// would be a claim about precision that nothing behind it supports.
+    /// Read a span back from the JSON it is persisted as.
+    ///
+    /// `None` for anything that will not parse. Callers are asking "where does
+    /// this point", and a malformed span answers that with "nowhere I can
+    /// tell" rather than with an error nobody can act on — the row is already
+    /// written and a query is not the place to discover it is corrupt.
+    pub fn from_json(json: &str) -> Option<Self> {
+        serde_json::from_str(json).ok()
+    }
+
     pub fn locate(&self, path: &str) -> String {
         match self {
             Self::Lines { start, .. } => format!("{path}:{start}"),

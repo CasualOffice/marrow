@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
+pub mod a1;
 pub mod error;
 pub mod id;
 pub mod model;

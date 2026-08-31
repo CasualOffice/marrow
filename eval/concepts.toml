@@ -1,0 +1,133 @@
+# The stub embedder, as data.
+#
+# WHAT THIS IS. Marrow's semantic branch needs an embedding model. The eval is
+# not allowed one: hard rule 10 says search works with no LLM, no GPU and no
+# network, and that is also the only way this harness runs in CI. So the eval
+# ships a *deterministic stub embedder* whose vocabulary is this file.
+#
+# Each `[concepts]` key is one dimension. A chunk's (or a query's) vector is
+# the count of its lower-cased tokens falling in each concept, normalized to
+# unit length by `Embedding::new`. Cosine similarity between two texts is
+# therefore "how much concept mass do they share", which is a crude but honest
+# model of what a real embedder does — and, crucially, it makes a document
+# retrievable by a query that shares **no words with it at all**, which is the
+# one behaviour a hash-of-words stub could never reproduce and the one the
+# semantic branch exists for.
+#
+# WHAT THIS IS NOT. These numbers do not measure embedding quality. Swapping
+# in a real model would change every semantic figure in `baseline.toml`. What
+# the harness measures with this stub is the *fusion pipeline* — RRF, the
+# weights, the multipliers, hydration of semantic-only candidates — given an
+# embedder whose behaviour is known exactly. A regression in `hybrid` metrics
+# with this file unchanged is a regression in fusion, not in the model.
+#
+# WHO WROTE IT. The words are all drawn from `eval/corpus/` by hand. A concept
+# was added only when a judged query needed a bridge that lexical matching
+# could not cross; the rest of the vocabulary exists to give the distractor
+# files somewhere to sit, so that the relevant documents are not the only ones
+# with a vector.
+#
+# A query whose tokens hit no concept has no embedding at all. The harness
+# then runs lexically and *says so* in its report rather than quietly
+# reporting a hybrid number that had no semantic branch in it.
+
+[concepts]
+
+tenancy = [
+  "agreement", "tenancy", "tenant", "landlord", "lease", "rent", "rental",
+  "flat", "letting", "occupier", "property", "deposit", "scheme", "inventory",
+]
+
+renewal = [
+  "renew", "renews", "renewal", "renewals", "rolls", "roll", "over", "extend",
+  "extends", "automatic", "automatically", "continue", "continues", "term",
+  "expires", "further", "twelve",
+]
+
+notice = [
+  "notice", "serve", "serves", "served", "serving", "ending", "end", "ends",
+  "terminate", "surrender", "quit", "written", "dispute",
+]
+
+money = [
+  "revenue", "invoice", "total", "totals", "paid", "payable", "subscriptions",
+  "cost", "quoted", "price", "charge", "tax", "transfer", "figures", "net",
+  "refunds", "quarter", "strongest",
+]
+
+months = [
+  "january", "february", "march", "april", "june", "july", "august",
+  "september", "october", "november", "december", "month", "monthly",
+  "quarterly",
+]
+
+deployment = [
+  "deploy", "deploys", "deploying", "deployment", "release", "migration",
+  "migrations", "runbook", "rollback", "router", "workers", "snapshot", "tag",
+  "procedure", "redeploy", "zone", "health", "endpoint",
+]
+
+database = [
+  "database", "replica", "replication", "promote", "promoting", "promotion",
+  "failover", "lag", "brain", "fence", "postgres", "schema", "writes",
+]
+
+oncall = [
+  "call", "rota", "escalation", "page", "incident", "downtime", "support",
+  "rotation", "lead", "schedule", "platform",
+]
+
+recovery = [
+  "physiotherapist", "physiotherapy", "joint", "knee", "stairs", "load",
+  "impact", "exercise", "exercises", "swelling", "heel", "slides", "raises",
+  "squat", "jog", "jogging", "run", "running", "walk", "rehabilitation",
+  "rehab", "bear", "sets",
+]
+
+duration = [
+  "long", "week", "weeks", "fortnight", "soon", "until", "before", "later",
+  "expects",
+]
+
+travel = [
+  "trip", "nights", "guesthouse", "harbour", "breakfast", "drive", "coast",
+  "road", "tunnel", "lagoon", "peninsula", "geothermal", "forecast", "lights",
+  "booking", "booked", "town", "harbourside",
+]
+
+gear = [
+  "packing", "pack", "layer", "layers", "wool", "fleece", "shell",
+  "windproof", "boots", "sole", "microspikes", "spikes", "swimming",
+]
+
+cold = [
+  "cold", "freezing", "ice", "icy", "wind", "warm", "weather", "winter",
+  "unbearable", "overnight",
+]
+
+baking = [
+  "sourdough", "starter", "hydration", "dough", "flour", "yeast", "bake",
+  "baking", "oven", "prove", "fold", "feed", "feeds", "rosemary", "focaccia",
+  "tin", "dimple", "acetone",
+]
+
+auth = [
+  "token", "tokens", "refresh", "rotates", "rotate", "session", "sessions",
+  "credential", "credentials", "revoke", "revoked", "revokes", "replay",
+  "reuse", "reused", "access", "validates",
+]
+
+meeting = [
+  "standup", "present", "blockers", "blocked", "minutes", "reviewing",
+  "finished", "picking", "tomorrow", "checkout", "flaky", "skew", "agents",
+]
+
+home = [
+  "boiler", "heating", "pressure", "bar", "warranty", "engineer", "serviced",
+  "service", "network", "passphrase", "password", "channel", "gateway",
+  "admin", "wifi", "congested", "loop", "unit",
+]
+
+dental = [
+  "dentist", "hygienist", "filling", "appointment", "check", "teeth",
+]

@@ -1,9 +1,14 @@
 //! Marrow store — the canonical SQLite state.
 //!
 //! Everything Marrow knows that cannot be re-derived from the user's files
-//! lives here. Derived indexes (Tantivy, vectors) are rebuildable and live
-//! elsewhere; this database is the one that must not be lost, which is why
+//! lives here. This database is the one that must not be lost, which is why
 //! every migration is preceded by a backup (hard rule 8).
+//!
+//! **The derived indexes are in this same file, not elsewhere.** This said
+//! "Tantivy, vectors ... live elsewhere" and was wrong twice: D3 replaced
+//! Tantivy with SQLite FTS5, and the whole point of that choice is that an
+//! index row commits in the same transaction as the canonical row it derives
+//! from. Rebuildable, still — just not separate.
 //!
 //! ```text
 //!            ┌──────────────┐  submit(op)   ┌────────────────────────┐

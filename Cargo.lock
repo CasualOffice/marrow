@@ -2691,6 +2691,7 @@ dependencies = [
  "marrow-store",
  "serde",
  "tempfile",
+ "toml 0.8.2",
  "tracing",
 ]
 

@@ -5,13 +5,19 @@
 //! user already thinks in, which is what makes [`SourceSpan::Cells`] a citation
 //! a person can be *taken to* rather than a number they have to trust.
 //!
-//! Small enough to be obvious, shared because three modules need it to agree:
-//! [`crate::xlsx`] writes the addresses, [`crate::table`] renders named ranges,
-//! and [`crate::chunk`] widens a band's span across the rows it covers. Two
-//! implementations of "which column is `AA`" would eventually disagree, and the
-//! one that is wrong would be wrong in a citation.
+//! Small enough to be obvious, shared because several modules need it to
+//! agree: the XLSX parser writes the addresses, the table layer renders named
+//! ranges, the chunker widens a band's span across the rows it covers, and
+//! `marrow-query` computes over a range the user typed. Two implementations of
+//! "which column is `AA`" would eventually disagree, and the one that is wrong
+//! would be wrong in a citation.
+//!
+//! **In `marrow-core` because `SourceSpan::Cells` is.** It lived in
+//! `marrow-parse` while only parsers needed it; the first non-parser caller
+//! would otherwise have pulled tree-sitter, calamine and the PDFKit bindings
+//! into a crate that wanted string arithmetic.
 
-use marrow_core::SourceSpan;
+use crate::SourceSpan;
 
 /// Excel's own limits. Anything outside them is a malformed file rather than a
 /// big one, and clamping is what stops a crafted `r="1048577000"` from

@@ -1,0 +1,266 @@
+# Golden query set — the ground truth the retrieval eval scores against.
+#
+# WHO DECIDED THESE. Every judgement here was made by the agent that built this
+# harness (Claude, September 2026), by writing the fixture corpus first and the
+# judgements second, from the corpus text alone. There is no user study behind
+# them and no second opinion; that is the honest state of a solo project's
+# ground truth, and it is written down because an eval whose judgements nobody
+# can justify is worse than no eval at all.
+#
+# ON WHAT BASIS. Each fixture file was written to make one retrieval case
+# concrete, and the query set was written to probe those cases — not to make
+# today's ranker look good. Several judgements below are known to be *failed*
+# by the current build; they were left as written rather than softened, because
+# the first thing an eval is for is telling you where you stand.
+#
+# HOW TO DISAGREE. Change a grade, add a query, add a file to `eval/corpus/`.
+# Then re-bless the baseline:
+#
+#     MARROW_EVAL_BLESS=1 cargo test -p marrow-query --test eval
+#
+# and commit `eval/baseline.toml` in the same change, with the reason in the
+# commit message. A baseline re-blessed without a reason is a regression that
+# was written down as an improvement.
+#
+# GRADES
+#   2  Answers the query. A person who read only this file would be done.
+#   1  Genuinely related and worth a slot in the results. Does not answer it.
+#   0  Everything not listed. Retrieving it is a precision cost.
+#
+# EXTRA CHECKS, scored pass/fail rather than graded
+#   never_citable  The file may be found and rendered, and `can_support_a_claim`
+#                  must be false wherever it appears (the `origin = SELF` rule).
+#   ranked_below   `file` must rank strictly below `below` whenever both are
+#                  returned. Superseded content and Marrow's own writing must
+#                  never outrank the document they came from.
+#
+# Either check may carry `known_failure = "why"`. That does not soften the
+# judgement — it records that the current build fails it, and the test then
+# asserts the failure *persists*. Fix the ranking and the eval breaks, telling
+# you to delete the marker. A rule whose files never come back at all is also a
+# failure: an assertion that can only pass is how an eval rots into decoration.
+#
+# MODES are Marrow's own match modes: "terms" (every term must appear, the CLI
+# default), "any" (BM25 ranks; the mode a natural-language question needs),
+# "phrase", "prefix".
+
+# --------------------------------------------------------------- the lease
+
+[[query]]
+id = "q01"
+text = "tenancy renewal"
+mode = "any"
+why = """
+The plain keyword case, and the one where Marrow's own summary sits directly
+behind the source document with near-identical wording. BM25 cannot separate
+them; only the SELF multiplier can.
+"""
+relevant = [
+  { file = "lease/tenancy-agreement.md", grade = 2 },
+  { file = "lease/notice-to-quit.md", grade = 1 },
+]
+never_citable = [{ file = "agent/lease-summary.md" }]
+ranked_below = [{ file = "agent/lease-summary.md", below = "lease/tenancy-agreement.md" }]
+
+[[query]]
+id = "q02"
+text = "does the flat rental roll over automatically"
+mode = "any"
+why = """
+The same fact asked as a question. "rental" and "roll over" are the user's
+words; the agreement says "rent" and "rolls over ... unless either party gives
+notice". A near miss lexically, which is what makes it a fusion test.
+"""
+relevant = [
+  { file = "lease/tenancy-agreement.md", grade = 2 },
+  { file = "lease/notice-to-quit.md", grade = 1 },
+]
+never_citable = [{ file = "agent/lease-summary.md" }]
+ranked_below = [{ file = "agent/lease-summary.md", below = "lease/tenancy-agreement.md" }]
+
+[[query]]
+id = "q15"
+text = "deposit protection scheme"
+mode = "any"
+why = """
+Two lease documents mention the deposit; only one is about protecting it. The
+grade-1 file is a real near-miss rather than a distractor, so this query is
+where a ranker that cannot tell "mentions" from "is about" shows up.
+"""
+relevant = [
+  { file = "lease/deposit-protection.md", grade = 2 },
+  { file = "lease/tenancy-agreement.md", grade = 1 },
+]
+
+# ------------------------------------------- filename vs content asymmetry
+
+[[query]]
+id = "q03"
+text = "reykjavik"
+mode = "terms"
+why = """
+The term is in the filename and nowhere in the bytes: the file talks about the
+guesthouse, the harbour and the northern lights and never names the city. If
+the path field is not searched, this query returns nothing.
+"""
+relevant = [{ file = "travel/reykjavik.md", grade = 2 }]
+
+[[query]]
+id = "q12"
+text = "wifi password"
+mode = "terms"
+why = """
+The mirror image, and harder: "wifi" appears only in the path and "password"
+only in the body, so the two terms have to be satisfied from different fields
+of the same row. A ranker that ANDs within a column returns nothing.
+"""
+relevant = [{ file = "home/wifi-router.md", grade = 2 }]
+
+[[query]]
+id = "q04"
+text = "sourdough starter hydration"
+mode = "terms"
+why = """
+The reverse asymmetry: the filename is a date and carries no signal at all, so
+every term has to come from the body. Deliberately easy — a gate needs cases
+that are stable as well as cases that are hard.
+"""
+relevant = [{ file = "notes/2024-03-11.md", grade = 2 }]
+
+# ------------------------------------------------- semantic-only retrieval
+
+[[query]]
+id = "q06"
+text = "how long until I can jog again"
+mode = "any"
+why = """
+THE case for the semantic branch. The physiotherapy note shares no content
+word with this query — not "jog", not "run", not "again", not "until". Lexical
+retrieval cannot reach it at any k, so this query is expected to score zero
+under the lexical-only configuration and that zero is a true measurement, not
+a harness bug.
+"""
+relevant = [{ file = "health/knee-rehab.md", grade = 2 }]
+
+# -------------------------------------------------- superseded and duplicate
+
+[[query]]
+id = "q07"
+text = "deploy runbook"
+mode = "terms"
+why = """
+Two runbooks, one retired. The retired one says SUPERSEDED in its first line
+and is older by a year, and Marrow has no other signal. Grading it 0 asserts
+that the current procedure must win; if it does not, that is the finding.
+"""
+relevant = [{ file = "runbooks/deploy.md", grade = 2 }]
+ranked_below = [
+  { file = "runbooks/deploy-2023.md", below = "runbooks/deploy.md", known_failure = """
+FOUND BY THIS EVAL ON ITS FIRST RUN, 2026-09-01. Lexical retrieval gets this
+right. Fusion gets it wrong: the semantic branch cannot tell two documents
+about the same procedure apart, both runbooks land high in it, and RRF then
+promotes the retired one to rank 1 in the hybrid configuration.
+
+Left as a judged failure rather than softened, because the judgement is
+correct and the build is not. §113.3 has the multiplier that would fix it —
+evidence STALE, x0.3 — and nothing implements it; there is no supersession
+signal in the index at all. Deleting this marker is what a fix looks like.
+""" },
+]
+
+[[query]]
+id = "q09"
+text = "flaky checkout test"
+mode = "any"
+why = """
+Near-duplicate documents. Two standups four fifths identical; only Tuesday's
+records the blocker. Monday's is graded 1 because it is the same thread and a
+reader would want it, but it must not displace the one that answers.
+"""
+relevant = [
+  { file = "minutes/standup-2024-05-07.md", grade = 2 },
+  { file = "minutes/standup-2024-05-06.md", grade = 1 },
+]
+never_citable = [{ file = "agent/weekly-digest.md" }]
+ranked_below = [{ file = "agent/weekly-digest.md", below = "minutes/standup-2024-05-07.md" }]
+
+# ------------------------------------------------------------ tables, scans
+
+[[query]]
+id = "q05"
+text = "june revenue"
+mode = "any"
+why = """
+A number that lives in a table band, with a near-duplicate table one quarter
+later as the distractor. Only Q2 has a June row; Q3 matches "revenue" just as
+strongly and must lose.
+"""
+relevant = [{ file = "finance/q2-revenue.md", grade = 2 }]
+never_citable = [{ file = "agent/weekly-digest.md" }]
+ranked_below = [{ file = "finance/q3-revenue.md", below = "finance/q2-revenue.md" }]
+
+[[query]]
+id = "q13"
+text = "invoice 4417"
+mode = "terms"
+why = """
+The DEGRADED-provenance file, standing in for a scan. CONV-005 down-weights it
+and does not bar it: with no competitor it must still come back first, and it
+must still be citable.
+"""
+relevant = [{ file = "finance/invoice-4417.md", grade = 2 }]
+
+# ---------------------------------------------------- ordinary lookups
+
+[[query]]
+id = "q08"
+text = "who is on call for the database failover"
+mode = "any"
+why = """
+A natural-language question whose answer really is lexically present. The
+stopwords in it are the point: "any" mode lets every document containing "is"
+or "the" into the candidate pool, so this measures whether ranking survives a
+question rather than a keyword.
+"""
+relevant = [{ file = "runbooks/postgres-failover.md", grade = 2 }]
+
+[[query]]
+id = "q10"
+text = "refresh token rotation"
+mode = "terms"
+why = """
+Code and its README both match every term. The code is the answer; the README
+describes it. A ranker that prefers prose to the symbol gets this backwards.
+"""
+relevant = [
+  { file = "code/token_refresh.rs", grade = 2 },
+  { file = "code/README.md", grade = 1 },
+]
+
+[[query]]
+id = "q11"
+text = "boiler service"
+mode = "terms"
+why = "Unambiguous single-answer lookup. Stability ballast for the gate."
+relevant = [{ file = "home/boiler-service.md", grade = 2 }]
+
+[[query]]
+id = "q14"
+text = "focaccia dough"
+mode = "terms"
+why = "Unambiguous single-answer lookup. Stability ballast for the gate."
+relevant = [{ file = "recipes/focaccia.md", grade = 2 }]
+
+[[query]]
+id = "q16"
+text = "packing for a cold trip"
+mode = "any"
+why = """
+Two travel documents, neither of which uses the query's words much. The
+packing list answers it; the trip notes are the context a person would want
+next. Judged 2/1 rather than 2/0 because both are genuinely useful here.
+"""
+relevant = [
+  { file = "travel/packing-list.md", grade = 2 },
+  { file = "travel/reykjavik.md", grade = 1 },
+]

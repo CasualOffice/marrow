@@ -192,6 +192,23 @@ enum Cmd {
         /// Workspace name. Omit to watch every workspace.
         name: Option<String>,
     },
+    /// Add up a range of spreadsheet cells
+    ///
+    /// Computed here, not read out by a model. A model handed forty numbers as
+    /// text will usually add them correctly and cannot tell you when it did
+    /// not; this uses the typed values the parser recorded and says which
+    /// cells it skipped and why.
+    ///
+    ///   marrow table sum ~/q2.xlsx 'Q2!B4:B18'
+    Table {
+        /// sum · mean · min · max · count
+        op: String,
+        /// The spreadsheet. Must already be indexed.
+        path: String,
+        /// The range, as the spreadsheet writes it: `B4:B18`, or `Q2!B4:B18`
+        /// to name the sheet. Required when the workbook has more than one.
+        range: String,
+    },
     /// Serve the index over MCP on stdio
     ///
     /// Point an agent front-end at this. Protocol traffic uses stdout, so
@@ -407,6 +424,7 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
             embed::run(&store, &data_dir()?, cli.json, style, out)
         }
         Cmd::Status => status(cli.json, style, out),
+        Cmd::Table { op, path, range } => table(op, path, range, cli.json, style, out),
         Cmd::Watch { name } => watch(name.as_deref(), cli.json, style, out),
         Cmd::Mcp => {
             let store = open_store()?;
@@ -782,6 +800,147 @@ fn ids_for(
         root.parse()
             .map_err(|_| Error::invariant("bad root id in database"))?,
     ))
+}
+
+/// `marrow table sum <path> '<range>'` — arithmetic, not a reading of it.
+///
+/// **The whole value is that no model is involved.** "Deterministic before
+/// probabilistic" is the first line of the design and a sum is its clearest
+/// case: a model given forty numbers as text will usually add them correctly
+/// and has no way to tell you when it did not.
+///
+/// So the output leads with the number and then says what it is a number *of*.
+/// A total over eighteen cells where three held text is not a total over
+/// eighteen cells, and this repository keeps finding the same defect — a
+/// figure accurate about what the code did, shown where a reader takes it as a
+/// fact about their data.
+fn table(
+    op: &str,
+    path: &str,
+    range: &str,
+    json: bool,
+    style: Style,
+    out: &mut impl Write,
+) -> Result<()> {
+    let op = marrow_query::table::Op::parse(op).ok_or_else(|| {
+        Error::new(
+            marrow_core::Code::CfgInvalid,
+            format!("`{op}` is not something this can compute. Use sum, mean, min, max or count."),
+        )
+    })?;
+
+    let store = open_store()?;
+    let conn = store.reader()?;
+
+    // Indexed files only, and by the same rule every other read obeys: this is
+    // not a general spreadsheet tool, and a path that is not in the index is a
+    // file nobody granted.
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
+    let version: Option<String> = conn
+        .query_row(
+            "SELECT f.current_version_id FROM files f
+              WHERE f.current_path = ?1 AND f.status = 'ACTIVE' LIMIT 1",
+            [canonical.to_string_lossy().as_ref()],
+            |r| r.get(0),
+        )
+        .ok();
+    let Some(version) = version.and_then(|v| v.parse().ok()) else {
+        return Err(Error::new(
+            marrow_core::Code::FsNotFound,
+            format!(
+                "`{path}` is not indexed, so there are no cells to add up.                  Run `marrow index` first, or check the path."
+            ),
+        ));
+    };
+
+    let computed = marrow_query::table::compute(&conn, version, op, range)?;
+
+    if json {
+        writeln!(
+            out,
+            "{}",
+            serde_json::json!({
+                "op": computed.op.as_str(),
+                "value": computed.value,
+                "sheet": computed.sheet,
+                "range": computed.range,
+                "contributing_cells": computed.contributing,
+                "skipped": computed.skipped.iter().map(|s| serde_json::json!({
+                    "cell": s.reference,
+                    "text": s.raw_text,
+                    "reason": s.reason,
+                })).collect::<Vec<_>>(),
+            })
+        )?;
+        return Ok(());
+    }
+
+    match computed.value {
+        Some(v) => writeln!(out, "{}", style.bold(&fmt_number(v)))?,
+        // `min` of nothing has no answer, and printing 0 would be one.
+        None => writeln!(out, "{}", style.dim("no cells in that range held a number"))?,
+    }
+    writeln!(
+        out,
+        "{}",
+        style.dim(&format!(
+            "{} over {} cell{} in {}!{}",
+            computed.op.as_str(),
+            computed.contributing,
+            if computed.contributing == 1 { "" } else { "s" },
+            computed.sheet,
+            computed.range,
+        ))
+    )?;
+
+    // Never a bare count. "3 skipped" sends a reader looking; naming them is
+    // the difference between a caveat and an errand.
+    if computed.is_partial() {
+        writeln!(out)?;
+        writeln!(
+            out,
+            "{}",
+            style.warn(&format!(
+                "{} cell{} in that range did not count:",
+                computed.skipped.len(),
+                if computed.skipped.len() == 1 { "" } else { "s" },
+            ))
+        )?;
+        for s in computed.skipped.iter().take(10) {
+            // Collapsed and clipped. A cell holding a paragraph — or a
+            // newline, which spreadsheets allow — otherwise breaks one row of
+            // this list across four lines and the list stops being scannable.
+            let shown = if s.raw_text.trim().is_empty() {
+                String::new()
+            } else {
+                let flat = s.raw_text.split_whitespace().collect::<Vec<_>>().join(" ");
+                let clipped = if flat.chars().count() > 60 {
+                    format!("{}…", flat.chars().take(59).collect::<String>())
+                } else {
+                    flat
+                };
+                format!(" — {clipped}")
+            };
+            writeln!(out, "  {}  {}{}", s.reference, s.reason, shown)?;
+        }
+        if computed.skipped.len() > 10 {
+            writeln!(
+                out,
+                "  {}",
+                style.dim(&format!("… and {} more", computed.skipped.len() - 10))
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// A number a person reads, not a float's debug form.
+fn fmt_number(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 {
+        format!("{}", v as i64)
+    } else {
+        format!("{v:.2}")
+    }
 }
 
 fn status(json: bool, style: Style, out: &mut impl Write) -> Result<()> {

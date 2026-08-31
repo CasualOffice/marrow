@@ -1,6 +1,6 @@
 # Tracker
 
-**Current milestone:** M3 — desktop shell shipped, PDFs done, **tables not started** · Part 8 S1–S5 and S7 done; S5b, S6 and S8's confirmation prompt are what is left
+**Current milestone:** M3 — desktop shell shipped, PDFs done, tables read from CSV, Markdown, HTML, XLSX and DOCX with a span per cell, and `marrow table sum` computes over a range; **PDF ruled tables and unit extraction are what is left** · Part 8 S1–S5 and S7 done; S5b, S6 and S8's confirmation prompt are what is left
 **Last updated:** 2026-08-31
 
 > This is the file that actually gets updated. [ROADMAP.md](ROADMAP.md) is the plan; this is the state.
@@ -26,9 +26,12 @@ tick was wrong in substance too.** The vectors are built, but for a long time
 the vector index had exactly **one** consumer in the repo — the desktop's Ask
 path — so a 2¼-hour backfill changed nothing on any other surface. `marrow
 search` gained a semantic branch in the same pass as this correction. The
-desktop **Search** view (`Core::search`) and the MCP `search` tool still open
-only `Fts5Index`. `[~]` until every surface that says it searches can use what
-`marrow embed` built.
+desktop **Search** view now passes an embedding into `Core::search_semantic`,
+so it fuses. The MCP `search` tool goes through the same `search_hybrid` as
+every other surface — which is what gave it the §113.3 multipliers it never
+had — but passes `None` for vectors: the semantic branch needs an embedder and
+that is a stdio server which must start instantly. It reports `branches` so a
+caller is not left to assume. `[~]` until MCP can reach an embedder too.
 
 ### Part 8 — model runtime ([§150](docs/Part_8_Model_Runtime.md))
 
@@ -441,9 +444,44 @@ Build these as fixtures. The set only grows — every security bug found adds a 
 
 Ideas that came up but aren't scheduled. Move to a milestone or delete — don't let this grow.
 
+### Found by the retrieval eval, the first time it ran — 2026-09-01
+
+`crates/query/tests/eval.rs` over `eval/`: 24 hand-written documents, 16
+queries, 22 graded judgements, no model and no network, 5.6 s. None of these
+was visible before it existed, and the third is a case where adding the
+semantic branch made results **worse**.
+
+- **A semantic-only hit cannot beat a lexical hit ranked in the top 16. This is
+  arithmetic, not tuning.** `SEMANTIC_WEIGHT 0.8` and `RRF_K 60` put a
+  semantic-only rank-1 hit at `0.8/61 = 0.013115`, and a lexical-only hit at
+  rank *r* at `1/(60+r)`; they cross between r=16 and r=17 — verified. With
+  `CANDIDATE_DEPTH` at 100, the semantic branch is structurally pinned below
+  the first sixteen lexical results however good its match is. The eval's `q06`
+  shows it: the only document that answers the question is ranked first by the
+  semantic branch and lands at **position 5**, behind four documents that each
+  matched one stopword.
+- **`MatchMode::Any` degenerates into stopword ranking.** No stopword list, no
+  minimum-should-match. For "does the flat rental roll over automatically" the
+  top lexical hit is a **deploy runbook** — it matched "the" fourteen times,
+  while "rental" and "automatically" matched nothing anywhere. Short documents
+  then win on BM25 length normalisation. This is also what *causes* the item
+  above: stopword junk occupies the RRF ranks that pin the semantic branch.
+- **Fusion promotes a superseded document over the one that replaced it.** For
+  "deploy runbook" the lexical branch is right; hybrid puts `deploy-2023.md` —
+  which says SUPERSEDED in its first line — at rank 1. §113.3 specifies the
+  multiplier that would fix it (evidence `STALE`, ×0.3); nothing implements it,
+  and there is no supersession signal in the index at all.
+- **Recall@10 without the semantic branch is 0.9375, not 1.0.** §113.4 makes
+  Recall@10 the merge gate, so it is worth stating that on a machine with no
+  model the gate does not sit where the spec assumes.
+
+The harness fails when a `never_citable` or `ranked_below` rule is **never
+exercised**, and again when a `known_failure` starts passing — an assertion
+that can only pass is how an eval decays into decoration.
+
 ### Found by reading Khoj, Onyx, RAGFlow, LlamaIndex and Docling — 2026-09-01
 
-Filed, not scheduled. Every one was read at source; see [docs/RESEARCH_ARCHITECTURE.md](docs/RESEARCH_ARCHITECTURE.md).
+Filed, not scheduled. Every one was read at source; see [docs/RESEARCH_LANDSCAPE.md](docs/RESEARCH_LANDSCAPE.md).
 
 - **`merge_spans` discards every `Page` box but the first.** `crates/parse/src/chunk.rs:665` falls through to `_ => a.clone()`, so a chunk built from six PDF paragraphs cites paragraph one and drops five. The comment says "narrow, never wrong" — true of `Cells` across sheets, false of a page. Docling's answer is a *list* (`DocMeta.doc_items`, `min_length=1`) excluded from embed and LLM text, so it costs nothing. **Highest-value item found in the whole comparison**, and the one place Marrow is behind on its own central claim.
 - **The bbox never reaches the reader.** It is produced (`pdf.rs:248`), persisted, and then thrown away at the citation surface — the only consumer outside parsing is `mcp/src/server.rs:1111`, `format!("{path}:p{page}")`. RAGFlow renders a crop of the source region in its citation popover; Marrow gets the box free from PDFKit where RAGFlow needs a vision detector, and still shows less. Take the crop, refuse the index-time JPEG-to-object-storage half.

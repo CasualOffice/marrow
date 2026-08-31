@@ -84,7 +84,10 @@
 #![deny(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
-pub mod a1;
+/// A1 addressing. Moved to [`marrow_core::a1`] when `marrow-query` needed it
+/// to compute over a range; re-exported so the parsers' call sites did not all
+/// have to move with it.
+pub use marrow_core::a1;
 pub mod budget;
 pub mod chunk;
 pub mod code;

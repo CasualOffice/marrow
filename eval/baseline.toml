@@ -1,0 +1,59 @@
+# Committed retrieval baseline. Regenerate with:
+#
+#     MARROW_EVAL_BLESS=1 cargo test -p marrow-query --test eval
+#
+# A re-bless is a claim that the numbers below are the new truth. Say why
+# in the commit message, or it is a regression filed as an improvement.
+#
+# `lexical` is `search` — the branch that answers with no model, no GPU and
+# no network. `hybrid` is `search_hybrid` fused with the stub embedder in
+# `eval/concepts.toml`, so it measures the fusion pipeline and not any real
+# embedding model.
+
+[lexical]
+p_at_5 = 0.2625
+recall_at_10 = 0.9375
+mrr = 0.9062
+ndcg_at_10 = 0.9150
+
+[lexical.per_query_ndcg]
+q01 = 1.0000
+q02 = 0.6399
+q03 = 1.0000
+q04 = 1.0000
+q05 = 1.0000
+q06 = 0.0000
+q07 = 1.0000
+q08 = 1.0000
+q09 = 1.0000
+q10 = 1.0000
+q11 = 1.0000
+q12 = 1.0000
+q13 = 1.0000
+q14 = 1.0000
+q15 = 1.0000
+q16 = 1.0000
+
+[hybrid]
+p_at_5 = 0.2750
+recall_at_10 = 1.0000
+mrr = 0.9187
+ndcg_at_10 = 0.9386
+
+[hybrid.per_query_ndcg]
+q01 = 1.0000
+q02 = 1.0000
+q03 = 1.0000
+q04 = 1.0000
+q05 = 1.0000
+q06 = 0.3869
+q07 = 0.6309
+q08 = 1.0000
+q09 = 1.0000
+q10 = 1.0000
+q11 = 1.0000
+q12 = 1.0000
+q13 = 1.0000
+q14 = 1.0000
+q15 = 1.0000
+q16 = 1.0000

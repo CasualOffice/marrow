@@ -1,0 +1,45 @@
+# Eval corpus manifest — the facts about a fixture file that are not in the
+# file's own bytes.
+#
+# The corpus itself is plain text under `eval/corpus/`, hand-written and meant
+# to be read. Everything Marrow needs that text cannot carry — who wrote the
+# file, how lossy the conversion was, when it was last touched — lives here so
+# that neither the harness nor the fixture bodies have to encode it.
+#
+# Defaults, applied to every file not listed below:
+#
+#   origin     = "USER"
+#   provenance = "EXACT"
+#   modified   = 1717200000000   (2024-06-01T00:00:00Z, epoch ms, UTC)
+#
+# Only deviations are listed. That is deliberate: a manifest that repeats the
+# default 24 times hides the four rows that matter.
+
+[[file]]
+path = "agent/lease-summary.md"
+origin = "SELF"
+# Marrow wrote this from `lease/tenancy-agreement.md`. Near-verbatim, so BM25
+# cannot tell it apart from the source — the `origin = SELF` rule is the only
+# thing that can. It must stay findable and must never be citable.
+
+[[file]]
+path = "agent/weekly-digest.md"
+origin = "SELF"
+# Same rule, different shape: a digest that touches five unrelated topics, so
+# it is a plausible near-miss for several queries at once rather than for one.
+
+[[file]]
+path = "finance/invoice-4417.md"
+provenance = "DEGRADED"
+# Stands in for a scanned invoice that came through a lossy conversion path.
+# CONV-005 says it ranks below an EXACT hit and stays perfectly citable.
+
+[[file]]
+path = "runbooks/deploy-2023.md"
+modified = 1677628800000        # 2023-03-01T00:00:00Z
+# Superseded by `runbooks/deploy.md`. The file says so in its first line; the
+# index has no other signal, which is the point of judging it at grade 0.
+
+[[file]]
+path = "travel/reykjavik.md"
+modified = 1709251200000        # 2024-03-01T00:00:00Z
