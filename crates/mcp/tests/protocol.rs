@@ -939,6 +939,32 @@ mod indexed {
     /// A mode this build does not have must not quietly become the default.
     /// Silently running a different query than the caller asked for is how a
     /// caller believes it constrained a search that it did not.
+    /// **`search` goes through the same retrieval every other surface uses.**
+    ///
+    /// It called `index.search` directly and numbered the raw FTS5 order, so
+    /// the §113.3 multipliers never applied here: an agent-written file came
+    /// back flagged `citable: false` and still ranked wherever BM25 put it,
+    /// and a degraded-provenance chunk outranked an exact one. The CLI and the
+    /// desktop both down-weight those, so the same query against the same
+    /// index came back in a different order depending on which surface asked.
+    ///
+    /// `branches` is the cheap proof that it now goes through `search_hybrid`:
+    /// nothing else populates it. The multipliers themselves are tested where
+    /// they live, in `marrow-query`.
+    #[test]
+    fn a_search_says_which_branches_ran_because_it_goes_through_the_shared_path() {
+        let (_d, s) = lease();
+        let out = call(&s, "search", json!({ "query": "lease" }));
+        let payload: Value =
+            serde_json::from_str(out["result"]["content"][0]["text"].as_str().expect("text"))
+                .expect("json");
+        // Lexical only, and it says so: the semantic branch needs an embedder
+        // and this is a stdio server that must start instantly. A caller that
+        // assumed fusion because the product advertises it elsewhere would be
+        // drawing a conclusion this run does not support.
+        assert_eq!(payload["branches"], json!(["lexical"]));
+    }
+
     #[test]
     fn an_unknown_match_mode_is_refused_and_names_the_ones_that_exist() {
         let (_d, s) = lease();

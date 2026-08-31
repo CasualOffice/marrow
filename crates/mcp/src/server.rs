@@ -3,7 +3,7 @@
 use std::io::{BufRead, Write};
 
 use marrow_core::{Code, Error, Result, TierState};
-use marrow_index::{Fts5Index, TextIndex};
+use marrow_index::Fts5Index;
 use marrow_store::Store;
 use serde_json::{json, Value};
 use tracing::{debug, warn};
@@ -164,34 +164,51 @@ impl Server {
         // Filters go INTO the query, not onto its results. Filtering afterwards
         // means the index applies `limit` first and the filter then discards
         // most of what came back — so a filter can report zero matches while
-        // matching documents sit just past the cut. The port takes `Filters`
-        // for exactly this reason.
-        let mut filters = marrow_index::Filters::default();
+        // matching documents sit just past the cut.
+        let mut filters = marrow_query::search::SearchFilters::default();
         if let Some(ext) = args.get("extension").and_then(Value::as_str) {
-            filters.extensions = vec![ext.trim_start_matches('.').to_lowercase()];
+            filters.extension = Some(ext.to_owned());
         }
         if let Some(sub) = args.get("path_contains").and_then(Value::as_str) {
             // GLOB, so the substring has to be wrapped rather than passed raw.
             filters.path_glob = Some(format!("*{sub}*"));
         }
         if let Some(name) = args.get("workspace").and_then(Value::as_str) {
-            filters.workspace = Some(self.workspace_by_name(name)?);
+            // Resolved here as well as by `search_hybrid`, because this tool
+            // must fail with "no workspace called X" rather than silently
+            // return everything — a caller that mistypes a workspace and gets
+            // the whole corpus draws the wrong conclusion from it.
+            self.workspace_by_name(name)?;
+            filters.workspace = Some(name.to_owned());
         }
 
+        // **The same retrieval every other surface uses.** This called
+        // `index.search` directly and numbered the raw FTS5 order, so the
+        // §113.3 multipliers never applied: an agent-written file was flagged
+        // `citable: false` in the payload and still ranked where BM25 put it,
+        // and a degraded-provenance chunk outranked an exact one. The CLI and
+        // the desktop both down-weight those. The same query, against the same
+        // index, came back in a different order depending on which surface
+        // asked — which is the whole argument for one implementation.
+        //
+        // `vectors: None`: the semantic branch needs an embedder and this is a
+        // stdio server that must start instantly. It stays lexical, and
+        // `branches` says so rather than implying a fusion that did not run.
         let mode = match_mode(args)?;
-        let q = marrow_index::TextQuery::new(query)
+        let request = marrow_query::search::SearchRequest::new(query)
             .mode(mode)
             .limit(limit)
-            .with_filters(filters);
-        let hits = self.index.search(&q)?;
+            .filters(filters);
+        let found = marrow_query::search::search_hybrid(&self.store, &self.index, None, &request)?;
         let roots = self.roots()?;
 
-        let results: Vec<Value> = hits
+        let results: Vec<Value> = found
+            .hits
             .iter()
-            .enumerate()
-            .map(|(i, h)| {
+            .map(|hit| {
+                let h = &hit.hit;
                 json!({
-                    "rank": i + 1,
+                    "rank": hit.rank,
                     "path": h.path,
                     "relative_path": relative(&h.path, &roots),
                     "location": location(&h.path, &h.span),
@@ -199,10 +216,11 @@ impl Server {
                     "breadcrumb": h.title,
                     "excerpt": h.snippet.text,
                     "provenance": lower(&h.provenance),
-                    // The `origin = SELF` rule, surfaced in the payload rather than left
-                    // for the caller to infer.
+                    // The `origin = SELF` rule, surfaced in the payload rather
+                    // than left for the caller to infer — and now also applied
+                    // to the ranking rather than only reported.
                     "origin": lower(&h.origin),
-                    "citable": h.origin == marrow_core::Origin::User,
+                    "citable": hit.can_support_a_claim,
                     "file_id": h.file_id.to_string(),
                     "modified_ms": h.modified.as_millis(),
                 })
@@ -222,6 +240,12 @@ impl Server {
             // twenty matches from one with thousands, and "these are the
             // results" is a different claim from "these are the first twenty".
             "more_available": results.len() == limit,
+            // Which retrieval actually ran. Reported rather than assumed, for
+            // the same reason `--explain` reports it: this server is lexical
+            // today, and a caller that assumes fusion because the product
+            // advertises it elsewhere is drawing a conclusion the run does not
+            // support.
+            "branches": found.branches,
             "results": results,
         }))
     }
