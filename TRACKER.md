@@ -390,8 +390,23 @@ wrong.
 - [ ] Structural edits: JSON/YAML/TOML/Markdown/code
 - [ ] E1 recipe DAG: no loops, no dynamic code, resolves before executing
 - [ ] Recipe re-resolves targets on every run
-- [ ] **Adversarial corpus in CI — zero escapes** ⚠️ (must precede any write tool shipping)
-- [ ] Expose write tools over MCP behind confirmation
+- [x] **Adversarial corpus in CI — zero escapes** ⚠️ (must precede any write tool
+      shipping) — `every_adversarial_case_produces_its_expected_refusal` and
+      `the_corpus_only_ever_grows` are both in `check.sh`'s named-invariant list
+      and CI runs `check.sh`, so the gate has been green for as long as the
+      creation tools have been exposed. **Ticked 2026-09-01 after verifying it,
+      not after doing it** — it was already done and the box was never crossed.
+- [ ] Expose write tools over MCP behind confirmation — **still open, and worth
+      being precise about what that does and does not mean.** The three creation
+      tools are exposed unconditionally (`TOOLS.iter().chain(WRITE_TOOLS.iter())`)
+      with no server-side prompt. What stands between them and a bad write is
+      not nothing: a write lands only inside a workspace root the user granted;
+      `Expect` defaults to `New` and has deliberately no "just overwrite"
+      variant, so replacing anything requires the digest of content the caller
+      has actually read; symlink escape is re-checked at operation time; and
+      everything written is `origin = SELF` and uncitable. A blind overwrite is
+      not reachable through this surface. The missing piece is a person saying
+      yes, which today only the MCP *client* asks for.
 
 ---
 
