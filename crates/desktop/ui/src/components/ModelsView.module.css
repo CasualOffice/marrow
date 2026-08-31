@@ -727,7 +727,15 @@
   opacity: 0.55;
 }
 
-.answering .note {
+/* Its own class, not `.note`. `.note` is `display: flex` because it pairs an
+   icon with text, and reusing it here turned the `<strong>` holding the model
+   id into a flex item — `qwen3.5-4b-mlx-q4` wrapped into a 60px column beside
+   its own sentence. Prose is prose. */
+.answeringNote {
   flex: 1 1 100%;
   margin: 0;
+  max-width: var(--prose-measure);
+  color: var(--fg2);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-body);
 }

@@ -16,9 +16,17 @@
 }
 
 /* A reading width. Settings is prose with controls in it, and prose set to the
-   full width of a 1180px window is prose nobody finishes. */
+   full width of a 1180px window is prose nobody finishes.
+ *
+ * **Centred, and it was not.** The cap is right and where it sat was not: 560px
+ * pinned to the left edge of a 1231px sheet left 54% of the window empty on one
+ * side, which reads as a page that failed to load rather than as a measured
+ * column. Every settings page worth copying centres it. The cap also lifts a
+ * little — 560 is a *paragraph* measure and this column holds stat grids and
+ * control rows, which have no reason to be that narrow. */
 .measure {
-  max-width: var(--card-measure);
+  max-width: 720px;
+  margin-inline: auto;
   display: flex;
   flex-direction: column;
   gap: var(--sp-16);

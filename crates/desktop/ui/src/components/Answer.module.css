@@ -111,7 +111,13 @@
 
 /* A citation is navigation inside the app, not a link out. */
 .prose :global(.cite) {
+  /* Padding on both sides put a visible gap between the chip and the
+     punctuation after it — "never plaintext [E1] ." — because a citation
+     almost always lands immediately before a full stop or a comma. The chip
+     keeps its left padding and pays for the right one with a negative margin,
+     so the gap the reader sees is the space *before* the chip only. */
   padding: 0 4px;
+  margin-right: -2px;
   border-radius: var(--r-chip);
   background: var(--accent-soft);
   color: var(--accent-text);

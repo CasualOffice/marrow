@@ -224,8 +224,18 @@
 .spaces {
   flex: 0 1 auto;
   min-height: 0;
-  max-height: 33%;
+  /* **A third was a floor as well as a ceiling.** The conversation list above
+     takes all remaining space, so with two conversations it sat 80% empty
+     while six workspaces scrolled inside their third — and the row clipped at
+     the top of that scroll read as a broken list rather than a scrollable one.
+     Half still keeps conversations the larger half of a full column, and lets
+     an ordinary number of workspaces simply fit. */
+  max-height: 50%;
   overflow-y: auto;
+  /* So a list that *is* scrolled says so. A row sliced by an invisible edge is
+     the thing that looked broken; a fade is the affordance every scroll area
+     of this shape uses. */
+  mask-image: linear-gradient(to bottom, transparent 0, #000 8px, #000 calc(100% - 8px), transparent 100%);
 }
 
 .wsRow {

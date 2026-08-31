@@ -643,7 +643,7 @@ function Answering({
           </option>
         ))}
       </select>
-      <p className={styles.note}>
+      <p className={styles.answeringNote}>
         {remote ? (
           <>
             <strong>{snapshot.activeModel}</strong> answers, because a remote endpoint is
