@@ -662,8 +662,46 @@ fn merge_spans(a: &SourceSpan, b: &SourceSpan) -> SourceSpan {
         (SourceSpan::Cells { .. }, SourceSpan::Cells { .. }) => {
             crate::a1::union_cells(a, b).unwrap_or_else(|| a.clone())
         }
+        // **A page's boxes union like any other rectangle.** This used to fall
+        // through to `_ => a.clone()`, so a chunk built from six paragraphs on
+        // one page cited the first paragraph's box and silently discarded five
+        // — on the format the whole page+bbox claim exists for. The comment
+        // below it said "narrow, never wrong", which is true of two ranges on
+        // different sheets and was never true of this.
+        //
+        // Only within one page. A chunk that crosses a page boundary has no
+        // single `Page` that describes it, and inventing one — page 3 with a
+        // box covering half of page 4 — would be a location that resolves to
+        // the wrong place rather than to a coarse one. First wins there, which
+        // is the honest lossy answer and the reason a span *list* is still
+        // worth having; that needs an index migration and is filed.
+        (SourceSpan::Page { page: p1, bbox: b1 }, SourceSpan::Page { page: p2, bbox: b2 })
+            if p1 == p2 =>
+        {
+            SourceSpan::Page {
+                page: *p1,
+                bbox: union_bbox(*b1, *b2),
+            }
+        }
         _ => a.clone(),
     }
+}
+
+/// The smallest rectangle containing both, in PDF points.
+///
+/// `None` when either side has none: a box that covers one paragraph and
+/// claims to cover two is worse than admitting the chunk has no box, because a
+/// reader shown a highlight trusts it.
+fn union_bbox(a: Option<[f32; 4]>, b: Option<[f32; 4]>) -> Option<[f32; 4]> {
+    let (a, b) = (a?, b?);
+    // PDF origin is bottom-left, so [x0, y0, x1, y1] with y0 < y1. Taking min
+    // of the mins and max of the maxes is orientation-agnostic either way.
+    Some([
+        a[0].min(b[0]),
+        a[1].min(b[1]),
+        a[2].max(b[2]),
+        a[3].max(b[3]),
+    ])
 }
 
 #[cfg(test)]
@@ -1061,6 +1099,67 @@ mod tests {
             merge_spans(&a, &b),
             SourceSpan::Bytes { start: 10, end: 40 }
         );
+    }
+
+    #[test]
+    fn two_boxes_on_one_page_become_the_box_that_covers_both() {
+        // This fell through to "keep the first and discard the second", so a
+        // chunk built from six paragraphs on one page cited paragraph one's
+        // rectangle — on the format the entire page+bbox claim exists for.
+        let a = SourceSpan::Page {
+            page: 17,
+            bbox: Some([72.0, 600.0, 300.0, 640.0]),
+        };
+        let b = SourceSpan::Page {
+            page: 17,
+            bbox: Some([72.0, 540.0, 520.0, 590.0]),
+        };
+        assert_eq!(
+            merge_spans(&a, &b),
+            SourceSpan::Page {
+                page: 17,
+                bbox: Some([72.0, 540.0, 520.0, 640.0])
+            },
+            "the merged box must contain both, not just the first"
+        );
+    }
+
+    #[test]
+    fn a_box_is_dropped_rather_than_guessed_when_one_side_has_none() {
+        // A rectangle that covers one paragraph while claiming to cover two is
+        // worse than no rectangle: a reader shown a highlight trusts it.
+        let boxed = SourceSpan::Page {
+            page: 3,
+            bbox: Some([10.0, 10.0, 20.0, 20.0]),
+        };
+        let bare = SourceSpan::Page {
+            page: 3,
+            bbox: None,
+        };
+        assert_eq!(
+            merge_spans(&boxed, &bare),
+            SourceSpan::Page {
+                page: 3,
+                bbox: None
+            }
+        );
+    }
+
+    #[test]
+    fn a_chunk_that_crosses_a_page_keeps_the_first_page_rather_than_inventing_one() {
+        // No single `Page` describes it. Page 3 carrying a box that covers half
+        // of page 4 would resolve to the wrong place rather than to a coarse
+        // one — the honest lossy answer, and the reason a span *list* is still
+        // worth having.
+        let a = SourceSpan::Page {
+            page: 3,
+            bbox: Some([10.0, 10.0, 20.0, 20.0]),
+        };
+        let b = SourceSpan::Page {
+            page: 4,
+            bbox: Some([30.0, 30.0, 40.0, 40.0]),
+        };
+        assert_eq!(merge_spans(&a, &b), a);
     }
 
     #[test]
