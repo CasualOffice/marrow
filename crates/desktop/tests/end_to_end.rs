@@ -230,6 +230,7 @@ fn asking_for_a_page_built_from_the_evidence_produces_one_rather_than_a_refusal(
         "Generate an HTML page pitching this lease to a client.",
         &[],
         false,
+        false,
         None,
         &Cancel::new(),
         &mut |e| {
@@ -285,6 +286,7 @@ fn a_question_about_real_files_is_answered_from_them_with_a_citation() {
         "conversation-1",
         "When does the lease renew and what is the rent?",
         &[],
+        false,
         false,
         None,
         &Cancel::new(),
@@ -351,7 +353,7 @@ fn the_runtime_tells_the_model_what_it_is_rather_than_leaving_it_to_the_corpus()
         &[],
         &mut convo,
         None,
-        None,
+        ask::RuntimeFacts::default(),
         None,
     )
     .expect("assemble");
@@ -367,7 +369,12 @@ fn the_runtime_tells_the_model_what_it_is_rather_than_leaving_it_to_the_corpus()
         &[],
         &mut convo,
         None,
-        Some("You are Marrow, running Qwen 3.5 4B (`qwen3.5-4b-mlx-q4`) locally.".into()),
+        ask::RuntimeFacts {
+            identity: Some(
+                "You are Marrow, running Qwen 3.5 4B (`qwen3.5-4b-mlx-q4`) locally.".into(),
+            ),
+            resuming: false,
+        },
         None,
     )
     .expect("assemble");
@@ -431,7 +438,7 @@ fn a_scoped_question_is_answered_only_from_that_subtree() {
         &[],
         &mut convo,
         None,
-        None,
+        ask::RuntimeFacts::default(),
         Some("services/stt"),
     )
     .expect("assemble");
@@ -480,7 +487,7 @@ fn evidence_is_bounded_so_the_answer_still_has_room() {
         &[],
         &mut convo,
         None,
-        None,
+        ask::RuntimeFacts::default(),
         None,
     )
     .expect("assemble");
@@ -516,7 +523,7 @@ fn the_second_turns_prompt_shares_its_preamble_with_the_first() {
         &[],
         &mut convo,
         None,
-        None,
+        ask::RuntimeFacts::default(),
         None,
     )
     .expect("assemble one");
@@ -524,10 +531,12 @@ fn the_second_turns_prompt_shares_its_preamble_with_the_first() {
         ask::PriorTurn {
             role: "user".into(),
             text: "When does the lease renew?".into(),
+            truncated: false,
         },
         ask::PriorTurn {
             role: "assistant".into(),
             text: "31 December 2031 [E1].".into(),
+            truncated: false,
         },
     ]);
     let (second, _, _) = ask::assemble(
@@ -536,7 +545,7 @@ fn the_second_turns_prompt_shares_its_preamble_with_the_first() {
         &turns,
         &mut convo,
         None,
-        None,
+        ask::RuntimeFacts::default(),
         None,
     )
     .expect("assemble two");
@@ -630,6 +639,7 @@ fn a_workspace_that_forbids_the_boundary_is_refused_before_a_single_file_is_read
         "When does the lease renew?",
         &[],
         false,
+        false,
         None,
         &Cancel::new(),
         &mut |e| events.push(e),
@@ -674,6 +684,7 @@ fn a_workspace_that_permits_the_boundary_gets_as_far_as_the_endpoint() {
         "conversation-permitted",
         "When does the lease renew?",
         &[],
+        false,
         false,
         None,
         &Cancel::new(),
@@ -749,6 +760,7 @@ fn a_follow_up_reuses_the_prompt_and_keeps_the_thread() {
         "When does the lease renew?",
         &[],
         false,
+        false,
         None,
         &Cancel::new(),
         &mut |e| {
@@ -763,10 +775,12 @@ fn a_follow_up_reuses_the_prompt_and_keeps_the_thread() {
         ask::PriorTurn {
             role: "user".into(),
             text: "When does the lease renew?".into(),
+            truncated: false,
         },
         ask::PriorTurn {
             role: "assistant".into(),
             text: first.clone(),
+            truncated: false,
         },
     ];
     let turns = ask::turns_from(&history);
@@ -778,6 +792,7 @@ fn a_follow_up_reuses_the_prompt_and_keeps_the_thread() {
         convo,
         "And what is the rent?",
         &turns,
+        false,
         false,
         None,
         &Cancel::new(),
@@ -942,6 +957,7 @@ fn a_long_answer_is_not_silently_cut_off() {
         "Summarise every clause of the lease in detail, one numbered paragraph \
          each, and then explain what each one means for the tenant.",
         &[],
+        false,
         false,
         None,
         &Cancel::new(),

@@ -343,8 +343,15 @@ export function AskView() {
       const history: PriorTurn[] = turns.flatMap((t) =>
         t.answer
           ? [
-              { role: "user" as const, text: t.question },
-              { role: "assistant" as const, text: t.answer },
+              { role: "user" as const, text: t.question, truncated: false },
+              {
+                role: "assistant" as const,
+                text: t.answer,
+                // Sent, not just drawn. Without it the model reads its own
+                // half-finished answer as finished and "continue" writes a
+                // fresh introduction instead of resuming.
+                truncated: t.usage?.stopReason === "length",
+              },
             ]
           : [],
       );

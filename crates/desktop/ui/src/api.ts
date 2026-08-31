@@ -812,6 +812,14 @@ export type AskEvent =
 export interface PriorTurn {
   readonly role: "user" | "assistant";
   readonly text: string;
+  /**
+   * Whether this answer stopped at its token limit rather than finishing.
+   *
+   * The window has always known — it is what draws "cut off at the token
+   * limit" under the answer — and it was never sent back, so the model saw a
+   * truncated turn as a complete one and "continue" started over.
+   */
+  readonly truncated: boolean;
 }
 
 export async function ask(

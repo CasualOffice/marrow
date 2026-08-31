@@ -1041,12 +1041,14 @@ pub async fn ask(
             cancel.cancel();
         }
         let turns = crate::ask::turns_from(&history);
+        let resuming = crate::ask::resuming(&history);
         crate::ask::run(
             &core,
             &hub,
             &conversation,
             &question,
             &turns,
+            resuming,
             thorough,
             scope.as_deref(),
             &cancel,

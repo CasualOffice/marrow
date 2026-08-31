@@ -183,6 +183,32 @@ pub struct PriorTurn {
     /// words, which is the conservative reading.
     pub role: String,
     pub text: String,
+    /// Whether this answer stopped because it ran out of budget rather than
+    /// because it was finished.
+    ///
+    /// The runtime has always known: `stop_reason` is computed, sent to the
+    /// window, and printed in the footer the user reads — "cut off at the token
+    /// limit". It was then dropped on the floor. The next turn carried the
+    /// truncated text with nothing marking it as truncated, so the model read
+    /// its own half-finished answer as a finished one, and "continue" produced
+    /// a fresh preamble and started the whole thing again. Three times in a
+    /// row, in the reported case, each one cut off at the same place.
+    ///
+    /// `default` because conversations persisted before this existed have no
+    /// such field, and the safe reading of an unknown answer is "complete".
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+/// Whether this question is resuming an answer that was cut off.
+///
+/// True only when the turn immediately before it is an assistant turn that ran
+/// out of budget. Anything earlier is history the model has already moved past,
+/// and a truncation three questions ago is not what "continue" means.
+pub fn resuming(history: &[PriorTurn]) -> bool {
+    history
+        .last()
+        .is_some_and(|t| t.role == "assistant" && t.truncated)
 }
 
 /// Convert what the window sent into envelope turns.
@@ -225,6 +251,26 @@ pub struct Excluded {
     pub reason: String,
 }
 
+/// What the runtime knows about itself, as FACT blocks.
+///
+/// These go in as facts rather than as evidence because they are deterministic
+/// knowledge this program has about its own state. The evidence blocks are the
+/// user's files, which describe *their* projects and not this program — which
+/// is why "what model are you using?" was once answered out of the corpus, with
+/// GPT-4 and Llama-3 offered as guesses while the footer named the real one.
+///
+/// Grouped because they are one idea and because two more loose parameters on
+/// `assemble` is how a signature stops being readable.
+#[derive(Clone, Debug, Default)]
+pub struct RuntimeFacts {
+    /// What this runtime is: the model answering, and where it runs.
+    pub identity: Option<String>,
+    /// The answer before this one stopped at its token limit. The model cannot
+    /// know this — from inside the history a truncated turn looks exactly like
+    /// a finished one — so the runtime has to say it.
+    pub resuming: bool,
+}
+
 /// Retrieve, assemble, and hand back the envelope plus what the UI must show.
 ///
 /// Separated from generation so the whole assembly — including the ordering
@@ -235,11 +281,7 @@ pub fn assemble(
     history: &[Turn],
     convo: &mut Conversation,
     embedding: Option<&marrow_index::Embedding>,
-    // `identity`: what this runtime is. Goes in as a FACT, not as evidence —
-    // it is deterministic knowledge the runtime has about itself, where the
-    // evidence blocks are the user's files, which describe their projects and
-    // not this program.
-    identity: Option<String>,
+    runtime: RuntimeFacts,
     // `scope`: a subtree, relative to the workspace root, the answer is
     // confined to. A workspace is routinely one folder holding many unrelated
     // projects, and there was no way to say which one a question was about.
@@ -261,10 +303,29 @@ pub fn assemble(
     let chunks = carry_forward(&mut convo.sent, fresh);
 
     let mut builder = Builder::new(SYSTEM, question);
-    if let Some(text) = identity {
+    let mut facts = 0;
+    if let Some(text) = runtime.identity {
+        facts += 1;
         builder = builder.fact(Fact {
-            id: "F1".into(),
+            id: format!("F{facts}"),
             text,
+            source: "the running system".into(),
+            span: None,
+        });
+    }
+    if runtime.resuming {
+        // The model cannot tell from inside that its last turn was cut off: a
+        // truncated answer and a finished one look identical in the history. So
+        // it read its own half-written page as complete, and "continue"
+        // produced another introduction and started over — three times, each
+        // stopping at the same place.
+        facts += 1;
+        builder = builder.fact(Fact {
+            id: format!("F{facts}"),
+            text: "Your previous answer stopped because it reached its token limit, not \
+                   because it was complete. Resume from exactly where it stopped. Do not \
+                   re-introduce the topic, restate what you already wrote, or begin again."
+                .into(),
             source: "the running system".into(),
             span: None,
         });
@@ -447,6 +508,8 @@ pub fn run(
     conversation: &str,
     question: &str,
     history: &[Turn],
+    // The previous answer ran out of budget. See `assemble`.
+    resuming: bool,
     thorough: bool,
     // A subtree the answer is confined to, relative to the workspace root.
     scope: Option<&str>,
@@ -511,7 +574,10 @@ pub fn run(
         history,
         &mut convo,
         embedding.as_ref(),
-        Some(hub.identity(&generator, thorough)),
+        RuntimeFacts {
+            identity: Some(hub.identity(&generator, thorough)),
+            resuming,
+        },
         scope,
     );
     hub.keep_session(conversation, convo);
@@ -682,6 +748,38 @@ mod tests {
     }
 
     #[test]
+    fn a_truncated_answer_is_carried_into_the_next_turn() {
+        // The reported bug, three times over: an answer stopped at the token
+        // limit, "continue" was asked, and the model wrote a fresh
+        // introduction and started again — stopping at the same place each
+        // time. From inside the history a truncated turn and a finished one are
+        // identical, so nothing told it there was anything to resume. The
+        // runtime knew: it is what prints "cut off at the token limit" under
+        // the answer.
+        let cut = |truncated| PriorTurn {
+            role: "assistant".into(),
+            text: "half an answer".into(),
+            truncated,
+        };
+        let ask = PriorTurn {
+            role: "user".into(),
+            text: "continue".into(),
+            truncated: false,
+        };
+
+        assert!(resuming(&[cut(true)]), "a cut-off answer is resumable");
+        assert!(!resuming(&[cut(false)]), "a finished answer is not");
+        assert!(!resuming(&[]), "a first question resumes nothing");
+
+        // Only the turn immediately before. A truncation the user has already
+        // moved past is history, not something "continue" refers to.
+        assert!(
+            !resuming(&[cut(true), ask]),
+            "a truncation two turns back is not what continue means"
+        );
+    }
+
+    #[test]
     fn an_unknown_role_is_read_as_the_models_own_words() {
         // The conservative direction: an assistant turn cannot support a
         // claim, so mislabelling one as `user` would promote it.
@@ -689,14 +787,17 @@ mod tests {
             PriorTurn {
                 role: "user".into(),
                 text: "q".into(),
+                truncated: false,
             },
             PriorTurn {
                 role: "assistant".into(),
                 text: "a".into(),
+                truncated: false,
             },
             PriorTurn {
                 role: "wat".into(),
                 text: "?".into(),
+                truncated: false,
             },
         ]);
         assert_eq!(turns[0].role, Role::User);
