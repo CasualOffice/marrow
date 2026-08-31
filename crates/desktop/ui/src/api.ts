@@ -608,6 +608,10 @@ export interface SemanticStatus {
 }
 
 export interface ModelsSnapshot {
+  /** Which local model the user pinned, or null for "whatever fits". */
+  readonly pinnedModelId: string | null;
+  /** What would answer a question right now, local or remote. */
+  readonly activeModel: string | null;
   readonly machine: string;
   readonly tierHeadline: string;
   readonly unifiedMemory: boolean;
@@ -719,6 +723,17 @@ export function refreshModelDetection(): Promise<ModelsSnapshot> {
 
 export function setAiProfile(profile: string): Promise<ModelsSnapshot> {
   return call<ModelsSnapshot>("set_ai_profile", { profile });
+}
+
+/**
+ * Pin which installed local model answers, or `null` to choose automatically.
+ *
+ * There was no way to choose at all: the largest installed model that fitted
+ * free memory won, so the choice moved with whatever else was running and
+ * nothing named it until the answer's footer.
+ */
+export function setGeneratorModel(modelId: string | null): Promise<ModelsSnapshot> {
+  return call<ModelsSnapshot>("set_generator_model", { modelId });
 }
 
 export function downloadModel(modelId: string): Promise<ModelsSnapshot> {

@@ -265,6 +265,8 @@ const DEV_MODELS: readonly ModelRow[] = [
 
 function devModels(): ModelsSnapshot {
   return {
+    pinnedModelId: null,
+    activeModel: "qwen3.5-4b-mlx-q4",
     machine: "17 GB unified · 10 cores · Mac16,12",
     tierHeadline: "Comfortable up to about 8B at 4-bit.",
     unifiedMemory: true,

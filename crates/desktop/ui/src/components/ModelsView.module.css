@@ -686,3 +686,43 @@
   overflow-x: auto;
   user-select: text;
 }
+
+/* Which model answers — the control that used to not exist. Sits above the
+   cards because it is a decision about them, not another one of them. */
+.answering {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-5);
+  padding: var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-surf);
+  background: var(--surface-2, var(--surface));
+}
+
+.answeringLabel {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.answeringSelect {
+  flex: 0 1 auto;
+  min-width: 220px;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-ctl, 6px);
+  background: var(--surface);
+  color: var(--ink-1);
+  font-size: var(--fs-sm);
+}
+
+.answeringSelect:disabled {
+  opacity: 0.55;
+}
+
+.answering .note {
+  flex: 1 1 100%;
+  margin: 0;
+}

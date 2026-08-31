@@ -636,6 +636,7 @@ const COMMAND_NAMES: &[&str] = &[
     "models_overview",
     "refresh_model_detection",
     "set_ai_profile",
+    "set_generator_model",
     "download_model",
     "cancel_model_download",
     "dismiss_model_download",
@@ -795,7 +796,11 @@ mod tests {
         // to the user's disk; when one does it needs a deliberate addition.
         // `reindex` is the closest — it re-reads granted folders and rewrites
         // Marrow's own derived index, which is rebuildable by definition.
-        assert_eq!(COMMAND_NAMES.len(), 31);
+        //
+        // 32 since `set_generator_model`, which writes one field of
+        // `preferences.json` in Marrow's own data directory — the same reach
+        // `set_ai_profile` already had, and nothing of the user's.
+        assert_eq!(COMMAND_NAMES.len(), 32);
         for n in COMMAND_NAMES {
             if DELIBERATE_MUTATIONS.contains(n) {
                 continue;
@@ -857,6 +862,26 @@ pub async fn set_ai_profile(
                  Balanced, Larger local model or Cloud.",
             )
         })?;
+        Ok(hub.snapshot())
+    })
+    .await
+}
+
+/// Pin which installed local model answers questions, or `None` for automatic.
+///
+/// **There was no way to choose at all.** `local_generator` took the largest
+/// installed model that fitted the memory free at that instant, so the choice
+/// moved with whatever else was running and nothing named it until the answer's
+/// footer. Downloading a second model gave the user two models and no way to
+/// say which one to use.
+#[tauri::command]
+pub async fn set_generator_model(
+    hub: State<'_, Arc<crate::models::Hub>>,
+    model_id: Option<String>,
+) -> Result<crate::models::ModelsSnapshot, UiError> {
+    let hub = Arc::clone(&hub);
+    blocking(move || {
+        hub.set_generator_model(model_id)?;
         Ok(hub.snapshot())
     })
     .await

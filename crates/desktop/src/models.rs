@@ -134,6 +134,14 @@ pub struct ModelsSnapshot {
     /// True when the sampler has stopped reporting. The page says so rather
     /// than showing a stale number as though it were current (HW-015).
     pub sample_stale: bool,
+    /// Which local model the user pinned, if any. `None` is "whatever fits" —
+    /// shown as such, so an automatic choice is visible as a choice rather
+    /// than looking like the only model there is.
+    pub pinned_model_id: Option<String>,
+    /// Which model would answer a question right now, local or remote. The
+    /// page had no way to say this: a user with two models installed could not
+    /// tell which one they were about to use.
+    pub active_model: Option<String>,
     /// How much of the index semantic search actually covers.
     ///
     /// Shown because the alternative is a user whose results are quietly worse
@@ -296,6 +304,10 @@ pub struct Hub {
     /// 4B and the things around it, and juggling two would spend the budget
     /// the whole tiering exists to protect (§139.5).
     loaded: Mutex<Option<Loaded>>,
+    /// Which local model the user pinned, if they did. `None` is "whatever
+    /// fits", which is the old behaviour kept as the default rather than as
+    /// the only option.
+    pinned: Mutex<Option<String>>,
     /// Answers in flight, so Escape reaches the right one.
     asks: Mutex<BTreeMap<String, Cancel>>,
     /// The embedder, resident once loaded.
@@ -423,6 +435,7 @@ impl Hub {
             .unwrap_or_else(|| default_profile(&machine));
         Self {
             remote: Mutex::new(saved.remote_provider),
+            pinned: Mutex::new(saved.generator_model_id),
             // Constructing this touches nothing: `keyring` opens the keychain
             // on the first read, and the first read happens only when a remote
             // provider actually answers a question.
@@ -755,6 +768,32 @@ impl Hub {
             .conditions(SAMPLE_INTERVAL * 4)
             .min_available_bytes;
         let registry = self.registry.lock().ok()?;
+
+        // **A pin wins, if it is still installed.** Not filtered by `offerable`
+        // — that is a memory assessment made at this instant, and letting it
+        // veto an explicit choice would put the automatic behaviour back
+        // whenever a browser happened to be open. Admission and the memory
+        // budget both still apply downstream; what this decides is *which*
+        // model, not whether there is room, and a user who pinned a model
+        // should get that model or a clear failure rather than a quiet
+        // substitution.
+        //
+        // An id that is no longer installed is ignored: models are deleted from
+        // the Models page, and a stale preference must not stop questions being
+        // answered.
+        if let Some(pinned) = self.pinned.lock().ok().and_then(|p| p.clone()) {
+            if registry
+                .iter()
+                .any(|e| e.id == pinned && e.installed && !e.capabilities.embedding)
+            {
+                return Some(pinned);
+            }
+            tracing::info!(
+                model = %pinned,
+                "the pinned model is not installed; choosing automatically"
+            );
+        }
+
         let mut candidates: Vec<(f64, String)> = registry
             .iter()
             .filter(|e| e.installed && !e.capabilities.embedding)
@@ -1100,6 +1139,41 @@ impl Hub {
     ///
     /// Both, together: leaving a key in the keychain for a provider the user
     /// has removed is exactly the kind of thing nobody goes back and cleans up.
+    /// Pin a local model, or return to choosing automatically with `None`.
+    ///
+    /// Refuses an id that is not installed rather than storing it: a
+    /// preference that silently does nothing is how "there is no way to choose
+    /// a model" and "I chose one and it ignored me" become the same bug report.
+    pub fn set_generator_model(&self, model_id: Option<String>) -> marrow_core::Result<()> {
+        if let Some(id) = &model_id {
+            let ok = self
+                .registry
+                .lock()
+                .map_err(|_| poisoned())?
+                .iter()
+                .any(|e| &e.id == id && e.installed && !e.capabilities.embedding);
+            if !ok {
+                return Err(marrow_core::Error::new(
+                    marrow_core::Code::ModNotInstalled,
+                    format!(
+                        "`{id}` is not an installed model that can answer questions. \
+                         Download it from the Models page first."
+                    ),
+                ));
+            }
+        }
+        *self.pinned.lock().map_err(|_| poisoned())? = model_id.clone();
+        if let Err(e) = prefs::set_generator_model(&self.data_dir, model_id) {
+            tracing::warn!(error = %e, "could not save the model choice; it applies until Marrow is closed");
+        }
+        Ok(())
+    }
+
+    /// The pinned model, if one is set. `None` means "whatever fits".
+    pub fn pinned_model(&self) -> Option<String> {
+        self.pinned.lock().ok().and_then(|p| p.clone())
+    }
+
     pub fn clear_remote_provider(&self) -> marrow_core::Result<ProviderStatus> {
         *self.remote.lock().map_err(|_| poisoned())? = None;
         self.forget_provider_status();
@@ -1450,6 +1524,20 @@ impl Hub {
             .unwrap_or_default();
 
         ModelsSnapshot {
+            pinned_model_id: self.pinned_model(),
+            // What would actually answer. A remote provider wins over any
+            // local pin, which is the one thing a page showing a pinned local
+            // model must not hide.
+            //
+            // Read from the stored endpoint rather than by calling
+            // `generator()`: that constructs an `OpenAiProvider`, which
+            // resolves the host to decide its boundary, and this page refetches
+            // every four seconds. A label is not worth a DNS lookup on a timer.
+            active_model: if remote.configured && remote.enabled {
+                Some(format!("{} · {}", remote.label, remote.model))
+            } else {
+                self.local_generator()
+            },
             machine: self.machine.summary(),
             tier_headline: self.machine.tier.headline().to_string(),
             unified_memory: self.machine.unified_memory,

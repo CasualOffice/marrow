@@ -26,6 +26,8 @@ import {
   cancelModelDownload,
   dismissModelDownload,
   downloadModel,
+  setGeneratorModel,
+  type ModelsSnapshot,
   refreshModelDetection,
   setAiProfile,
   startSemanticBackfill,
@@ -553,6 +555,11 @@ export function ModelsView() {
 
             <section className={styles.section}>
               <h2 className={styles.heading}>Models</h2>
+              <Answering
+                snapshot={s}
+                busy={busy}
+                onPin={(id) => void act(() => setGeneratorModel(id), "")}
+              />
               <ul className={styles.cards}>
                 {s.models.map((m) => (
                   <ModelCard
@@ -570,6 +577,76 @@ export function ModelsView() {
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * Which model answers, and the control that decides it.
+ *
+ * **There was no way to choose one.** The largest installed model that fitted
+ * the memory free at that instant won, so the choice moved with whatever else
+ * happened to be running, nothing named it until the answer's footer, and
+ * downloading a second model gave the user two models and no way to say which.
+ *
+ * "Whatever fits" stays the default and is shown as a choice rather than as an
+ * absence, because an automatic decision the user cannot see is the thing that
+ * made this confusing in the first place. A configured remote endpoint wins
+ * over any local pin, and says so — a page showing a pinned local model while
+ * a cloud endpoint answers would be lying about where the question goes.
+ */
+function Answering({
+  snapshot,
+  busy,
+  onPin,
+}: {
+  snapshot: ModelsSnapshot;
+  busy: boolean;
+  onPin: (id: string | null) => void;
+}) {
+  const usable = snapshot.models.filter((m) => m.installed && m.role !== "embedder");
+  const remote = snapshot.remote.configured && snapshot.remote.enabled;
+
+  return (
+    <div className={styles.answering}>
+      <label className={styles.answeringLabel} htmlFor="answering-with">
+        Answering with
+      </label>
+      <select
+        id="answering-with"
+        className={styles.answeringSelect}
+        value={snapshot.pinnedModelId ?? ""}
+        disabled={busy || remote || usable.length === 0}
+        onChange={(e) => onPin(e.target.value === "" ? null : e.target.value)}
+      >
+        <option value="">Whatever fits this machine</option>
+        {usable.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.displayName}
+          </option>
+        ))}
+      </select>
+      <p className={styles.note}>
+        {remote ? (
+          <>
+            <strong>{snapshot.activeModel}</strong> answers, because a remote endpoint is
+            configured and switched on in Settings. Turn it off there to use a local model.
+          </>
+        ) : usable.length === 0 ? (
+          "No local model is installed yet, so there is nothing to choose between."
+        ) : snapshot.pinnedModelId ? (
+          <>
+            <strong>{snapshot.activeModel}</strong> answers every question, whatever else is
+            running.
+          </>
+        ) : (
+          <>
+            <strong>{snapshot.activeModel ?? "None"}</strong> would answer right now. Left on
+            automatic this can change with the memory that happens to be free, so pin one if
+            you want the same model every time.
+          </>
+        )}
+      </p>
+    </div>
   );
 }
 

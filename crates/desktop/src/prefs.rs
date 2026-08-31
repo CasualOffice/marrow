@@ -48,6 +48,19 @@ pub struct Preferences {
     /// value that `default_profile` happens to return today: the hardware
     /// default may move, and it should keep moving until someone decides.
     pub ai_profile: Option<Profile>,
+    /// Which installed local model answers questions.
+    ///
+    /// `None` means "whatever fits", which is what this always did and never
+    /// said: `local_generator` picked the largest installed model that fitted
+    /// the memory free at that instant. That is a reasonable default and a
+    /// terrible only-option — the choice moved with the machine's load, nothing
+    /// reported which model had been chosen until the answer's footer, and
+    /// there was no way to pin one.
+    ///
+    /// An id that is not installed is ignored rather than an error: models are
+    /// deleted from the Models page, and a stale preference must not be able to
+    /// stop questions being answered.
+    pub generator_model_id: Option<String>,
     /// The one remote endpoint, when the user has configured one.
     ///
     /// **The key is not here and cannot be** (LLM-030): [`RemoteProvider`]
@@ -109,6 +122,13 @@ pub fn set_ai_profile(data_dir: &Path, profile: Profile) {
         // better than a silent no-op.
         tracing::warn!(error = %e, "could not save the AI preference; it applies until Marrow is closed");
     }
+}
+
+/// Pin a local model, or return to choosing automatically.
+pub fn set_generator_model(data_dir: &Path, model_id: Option<String>) -> std::io::Result<()> {
+    let mut prefs = load(data_dir);
+    prefs.generator_model_id = model_id;
+    write(data_dir, &prefs)
 }
 
 /// Record — or clear — the remote provider.
