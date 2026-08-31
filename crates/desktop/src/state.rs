@@ -25,52 +25,6 @@ pub struct Core {
     data_dir: std::path::PathBuf,
 }
 
-/// Words too common to help, and common enough to hurt.
-///
-/// BM25 already gives them almost no weight, so this is not about scoring —
-/// it is about the term cap: a long question full of "the" and "of" can hit
-/// the index's limit and be refused outright, and the words it drops for that
-/// are the ones that mattered.
-const STOPWORDS: &[&str] = &[
-    "a", "an", "the", "and", "or", "but", "if", "of", "in", "on", "at", "to", "for", "with", "is",
-    "are", "was", "were", "be", "been", "am", "do", "does", "did", "have", "has", "had", "what",
-    "when", "where", "who", "whom", "which", "why", "how", "that", "this", "these", "those", "it",
-    "its", "as", "by", "from", "my", "our", "me", "i", "you", "your", "can", "could", "would",
-    "should", "will", "shall", "may", "might", "about", "please", "tell",
-    // What is left of a contraction after the apostrophe splits it. "What's"
-    // becomes "what" and "s", and the "s" retrieves nothing but noise.
-    "s", "t", "d", "m", "ll", "re", "ve",
-];
-
-/// A question, reduced to the words worth retrieving on.
-///
-/// Not a router — that comes later and will rewrite the query properly
-/// (ASK-001). This is the floor beneath it, and the floor has to work on its
-/// own, because ASK-004 says a broken router degrades to the product that
-/// already worked.
-///
-/// It lives here rather than in the caller because [`Core::retrieve`] is
-/// disjunctive: unreduced, "when does **the** lease renew?" matches every
-/// document that contains "the", which is all of them. A caller that forgot to
-/// reduce would get a result set that looks full and means nothing, and only
-/// one caller remembering is not a rule.
-pub fn retrieval_terms(question: &str) -> String {
-    let kept: Vec<&str> = question
-        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
-        // `--` splits into a token of hyphens under this rule; a term with no
-        // letter or digit in it is punctuation, and the index refuses those.
-        .filter(|w| w.chars().any(|c| c.is_alphanumeric()))
-        .filter(|w| !STOPWORDS.contains(&w.to_ascii_lowercase().as_str()))
-        .collect();
-    // A question made entirely of stopwords is still a question. Searching for
-    // nothing would refuse; searching for the original at least tries.
-    if kept.is_empty() {
-        question.to_string()
-    } else {
-        kept.join(" ")
-    }
-}
-
 /// A chunk on its way into an evidence block.
 ///
 /// Deliberately not a [`SearchHit`]: a result row wants two lines and a
@@ -228,7 +182,7 @@ impl Core {
     ) -> Result<Vec<RetrievedChunk>> {
         // Reduced here, not by the caller: the lexical branch is disjunctive,
         // so an unreduced question matches every document containing "the".
-        let reduced = retrieval_terms(question);
+        let reduced = marrow_query::search::retrieval_terms(question);
         let trimmed = reduced.trim();
         if trimmed.is_empty() {
             return Ok(Vec::new());
@@ -1416,7 +1370,8 @@ fn hydrate_chunk(
 
 #[cfg(test)]
 mod retrieval_tests {
-    use super::{retrieval_terms, scope_fragment};
+    use super::scope_fragment;
+    use marrow_query::search::retrieval_terms;
 
     #[test]
     fn a_scope_is_a_subtree_however_the_caller_spelled_it() {

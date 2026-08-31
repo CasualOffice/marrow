@@ -108,6 +108,68 @@ impl SearchFilters {
     }
 }
 
+/// Words too common to help, and common enough to hurt.
+///
+/// BM25 already gives them almost no weight, so this is not about scoring —
+/// it is about the term cap: a long question full of "the" and "of" can hit
+/// the index's limit and be refused outright, and the words it drops for that
+/// are the ones that mattered.
+const STOPWORDS: &[&str] = &[
+    "a", "an", "the", "and", "or", "but", "if", "of", "in", "on", "at", "to", "for", "with", "is",
+    "are", "was", "were", "be", "been", "am", "do", "does", "did", "have", "has", "had", "what",
+    "when", "where", "who", "whom", "which", "why", "how", "that", "this", "these", "those", "it",
+    "its", "as", "by", "from", "my", "our", "me", "i", "you", "your", "can", "could", "would",
+    "should", "will", "shall", "may", "might", "about", "please", "tell",
+    // What is left of a contraction after the apostrophe splits it. "What's"
+    // becomes "what" and "s", and the "s" retrieves nothing but noise.
+    "s", "t", "d", "m", "ll", "re", "ve",
+];
+
+/// A question, reduced to the words worth retrieving on.
+///
+/// Not a router — that comes later and will rewrite the query properly
+/// (ASK-001). This is the floor beneath it, and the floor has to work on its
+/// own, because ASK-004 says a broken router degrades to the product that
+/// already worked.
+///
+/// It lives here rather than in the caller because [`Core::retrieve`] is
+/// disjunctive: unreduced, "when does **the** lease renew?" matches every
+/// document that contains "the", which is all of them. A caller that forgot to
+/// reduce would get a result set that looks full and means nothing, and only
+/// one caller remembering is not a rule.
+/// A question, reduced to the words worth retrieving on.
+///
+/// **In this crate because "only one caller remembering is not a rule" — and
+/// only one caller was remembering.** This lived in the desktop's `state.rs`
+/// and its own doc comment stated the principle it was breaking: the Ask path
+/// called it, and Search, the CLI and MCP did not. The retrieval eval showed
+/// what that costs. For "does the flat rental roll over automatically" the top
+/// lexical hit was a **deploy runbook**, which matched "the" fourteen times
+/// while "rental" and "automatically" matched nothing anywhere; short
+/// documents then win on BM25 length normalisation.
+///
+/// Applied by [`search_hybrid`] for disjunctive modes, so no caller has to
+/// remember. Not a router — that comes later and will rewrite the query
+/// properly (ASK-001). This is the floor beneath it, and the floor has to work
+/// on its own, because ASK-004 says a broken router degrades to the product
+/// that already worked.
+pub fn retrieval_terms(question: &str) -> String {
+    let kept: Vec<&str> = question
+        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+        // `--` splits into a token of hyphens under this rule; a term with no
+        // letter or digit in it is punctuation, and the index refuses those.
+        .filter(|w| w.chars().any(|c| c.is_alphanumeric()))
+        .filter(|w| !STOPWORDS.contains(&w.to_ascii_lowercase().as_str()))
+        .collect();
+    // A question made entirely of stopwords is still a question. Searching for
+    // nothing would refuse; searching for the original at least tries.
+    if kept.is_empty() {
+        question.to_string()
+    } else {
+        kept.join(" ")
+    }
+}
+
 /// One search.
 #[derive(Clone, Debug)]
 pub struct SearchRequest {
@@ -550,13 +612,61 @@ pub fn search_hybrid(
     let filters = resolve_filters(&req.filters, &spaces)?;
     let workspace_filter = filters.workspace;
 
+    // **Stopwords go, but only when the query ORs its terms.** Under `Any`,
+    // "the" alone matches every document that contains it, which is all of
+    // them — and the eval showed the cost directly: a deploy runbook ranked
+    // first for a question about a lease rental, on fourteen occurrences of
+    // "the", with the words that mattered matching nothing anywhere.
+    //
+    // Left alone for `Terms`, `Phrase` and `Prefix`. Those AND their terms, so
+    // a stopword narrows rather than floods, and dropping one from a phrase
+    // would change what was asked for — `"the lease"` is not `"lease"`.
+    //
+    // Here rather than in each caller because only the Ask path was doing it,
+    // under a comment that said "only one caller remembering is not a rule".
+    let reduced = if req.mode == MatchMode::Any {
+        retrieval_terms(&req.text)
+    } else {
+        req.text.clone()
+    };
+    let depth = req.limit.max(CANDIDATE_DEPTH);
+
     // Retrieve deeper than the caller asked for, so the multipliers below have
     // something to reorder. See CANDIDATE_DEPTH.
-    let q = TextQuery::new(req.text.clone())
+    let q = TextQuery::new(reduced.clone())
         .mode(req.mode)
-        .with_filters(filters)
-        .limit(req.limit.max(CANDIDATE_DEPTH));
-    let text_hits = index.search(&q)?;
+        .with_filters(filters.clone())
+        .limit(depth);
+    let mut text_hits = index.search(&q)?;
+
+    // **Narrow first, then widen — rather than only narrowing.**
+    //
+    // Dropping stopwords under `Any` strictly shrinks the match set, because
+    // every removed term is a term nothing can match on any more. Measured on
+    // the eval: it lifted MRR from 0.906 to 0.938 and NDCG from 0.915 to 0.927
+    // — the right answer moved up — and cost Recall@10, from 0.938 to 0.906,
+    // because one document had matched only through a word that was removed.
+    // §113.4 makes Recall@10 the merge gate, so paying recall for precision is
+    // the wrong direction even when the precision is real.
+    //
+    // So the reduced query ranks, and the original tops up whatever is left of
+    // the depth. Nothing that used to come back stops coming back; it just
+    // comes back below the documents that matched a word the asker chose.
+    if reduced != req.text && text_hits.len() < depth {
+        let wide = TextQuery::new(req.text.clone())
+            .mode(req.mode)
+            .with_filters(filters)
+            .limit(depth);
+        let seen: std::collections::HashSet<_> = text_hits.iter().map(|h| h.chunk_id).collect();
+        for hit in index.search(&wide)? {
+            if text_hits.len() >= depth {
+                break;
+            }
+            if !seen.contains(&hit.chunk_id) {
+                text_hits.push(hit);
+            }
+        }
+    }
 
     let mut branches = vec![Branch {
         name: LEXICAL,
