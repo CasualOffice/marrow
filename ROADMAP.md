@@ -151,7 +151,7 @@ Build only what you miss. In rough order of likely value:
 | Local LLM for summaries | You want summaries without a cloud round-trip |
 | Knowledge graph + entities | **[D43](DECISIONS.md) — name three questions you actually asked that needed it** |
 | Chart rendering (G1) | You want to see a table, not read it |
-| Desktop UI | The CLI genuinely annoys you |
+| ~~Desktop UI~~ | **Moved out of M7+.** [D42](DECISIONS.md) reversed the deferral and the shell shipped under M3 — the desktop app is the product, so its work is not optional and does not wait for the CLI to annoy anyone. Open desktop work lives in [BUGS.md](BUGS.md) and the TRACKER parking lot, not here |
 | T3 sidecar (MarkItDown) | You hit formats you need and can't read |
 | Email, video, audio | You personally need them |
 
@@ -178,7 +178,7 @@ Don't build all 40 tables from [Part 6 §106](docs/Part_6_Engineering_Reference.
 
 1. **Ship M2 before anything clever.** An index you query daily teaches you more than planning does.
 2. **Add a parser the week you hit a file you wanted and couldn't read.** Never speculatively.
-3. **No UI until the CLI annoys you.**
+3. ~~**No UI until the CLI annoys you.**~~ Reversed by [D42](DECISIONS.md). The replacement rule is narrower and still says no to most things: **a desktop feature earns a place if it makes a citation easier to reach or easier to trust.** That is what separates inline document scoping (it stops one answer drawing on four unrelated services) from a tool catalogue or a calendar — see [docs/RESEARCH_LANDSCAPE.md](docs/RESEARCH_LANDSCAPE.md) §6.
 4. **No knowledge graph until [D43](DECISIONS.md) passes.** It's the highest-probability, highest-impact risk in the spec and the easiest thing to build badly.
 5. **No abstraction for platforms you don't run.** One OS.
 6. **No performance work without a benchmark** against your own corpus.
