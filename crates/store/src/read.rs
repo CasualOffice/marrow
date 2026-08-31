@@ -327,6 +327,46 @@ pub fn mark_reconciled(
     Ok(())
 }
 
+/// The routing fingerprint this root was last *fully* swept with.
+///
+/// `None` means no complete sweep has recorded one, which for an existing index
+/// is every root — so the first sweep after this ships reprocesses once and
+/// then settles.
+///
+/// Kept in `schema_meta`, keyed per root, because it is a fact about a sweep
+/// rather than about a file and needs no column of its own. That also means no
+/// migration, which mattered: on a real corpus each migration takes a
+/// `VACUUM INTO` backup of a 4.3 GB database.
+pub fn routing_fingerprint(conn: &Connection, root_id: RootId) -> Option<String> {
+    conn.query_row(
+        "SELECT value FROM schema_meta WHERE key = ?1",
+        [format!("parser_routing:{root_id}")],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+}
+
+/// Record the routing fingerprint for a root.
+///
+/// **Only ever after a complete sweep**, for the same reason `mark_unseen_deleted`
+/// is guarded: a run that saw an arbitrary prefix of the corpus has not
+/// reprocessed it, and claiming it had would leave the rest on whatever parser
+/// they had before, permanently — which is the exact bug this mechanism exists
+/// to end.
+pub fn set_routing_fingerprint(
+    conn: &Connection,
+    root_id: RootId,
+    fingerprint: &str,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO schema_meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        rusqlite::params![format!("parser_routing:{root_id}"), fingerprint],
+    )
+    .map_err(|e| crate::map_sqlite(e, "recording which parsers last swept a root"))?;
+    Ok(())
+}
+
 /// Record what the watcher can see, **without** claiming a reconciliation.
 ///
 /// These were one call, and conflating them recreated the bug they were written

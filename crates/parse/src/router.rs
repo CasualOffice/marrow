@@ -114,6 +114,38 @@ impl ParserRouter {
         self.parsers.iter().map(|p| p.id()).collect()
     }
 
+    /// A stable fingerprint of the whole chain: every parser's id and version,
+    /// in chain order.
+    ///
+    /// **`version_of` answers the wrong question on its own.** It asks whether
+    /// the parser that produced a result has changed, which never fires for a
+    /// file the chain *fell through* to the metadata fallback. So every file
+    /// indexed before a parser existed kept its metadata-only result for ever:
+    /// on a real corpus, 26 spreadsheets, 25 Word documents, 11 images and 18
+    /// OpenDocument files sat with no content and no tables, and `read_table`
+    /// truthfully reported "this file has no tables in it" about a spreadsheet
+    /// full of them.
+    ///
+    /// Re-routing every file on every sweep is not the fix — a `.xlsx` that is
+    /// really a zip would be claimed by name, refused on content, recorded as
+    /// metadata, and re-tried for ever. This fingerprint converges instead: it
+    /// changes exactly when the set of parsers changes, a sweep that sees a
+    /// different one reprocesses the corpus once, and the new value is recorded
+    /// only after that sweep completes.
+    ///
+    /// Order is included deliberately. The chain is sorted by tier and which
+    /// parser gets first refusal is part of the routing decision, so a
+    /// reordering is a change even when the membership is identical.
+    pub fn fingerprint(&self) -> String {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for p in &self.parsers {
+            p.id().hash(&mut h);
+            p.version().hash(&mut h);
+        }
+        format!("{:016x}", h.finish())
+    }
+
     /// What version of `id` this build carries, if it carries it at all.
     ///
     /// PAR-003 makes the parser's identity and version "the mechanism by which

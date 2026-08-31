@@ -228,6 +228,21 @@ pub fn ingest_root_with_index(
     let mut inflight: Vec<Pending<()>> = Vec::with_capacity(DRAIN_EVERY);
     let router = marrow_parse::ParserRouter::with_default_parsers();
 
+    // Whether the parser chain has changed since this root was last *fully*
+    // swept. Asked once, because it is a question about this build rather than
+    // about any file. See `ParserRouter::fingerprint` for why re-routing on
+    // every sweep would never converge.
+    let fingerprint = router.fingerprint();
+    let reroute = marrow_store::read::routing_fingerprint(&conn, root_id)
+        .is_none_or(|seen| seen != fingerprint);
+    if reroute {
+        tracing::info!(
+            root = %root_id,
+            fingerprint = %fingerprint,
+            "the parser chain has changed since this root was last swept; re-routing once"
+        );
+    }
+
     for h in rx_hash {
         if cancel.is_cancelled() {
             outcome.cancelled = true;
@@ -248,6 +263,7 @@ pub fn ingest_root_with_index(
             &h,
             &self_written,
             &router,
+            reroute,
             &mut inflight,
         ) {
             Ok((file_id, Some(ids))) => {
@@ -357,6 +373,17 @@ pub fn ingest_root_with_index(
     // safe, which is why it is checked before the set is even built.
     if !outcome.cancelled && outcome.failures.is_empty() {
         outcome.removed = mark_unseen_deleted(store, root_id, &seen)?;
+
+        // **And the same guard records the routing fingerprint.** A run that
+        // saw an arbitrary prefix of the corpus has not re-routed it, and
+        // claiming it had would strand every file it never reached on the
+        // parser it already had — permanently, which is the exact failure this
+        // mechanism exists to end. So it is written here, beside the other
+        // conclusion only a complete walk is allowed to draw.
+        let fp = fingerprint.clone();
+        store
+            .writer()
+            .submit(move |c| marrow_store::read::set_routing_fingerprint(c, root_id, &fp))?;
         store.flush()?;
     } else if outcome.cancelled {
         debug!("the sweep stopped early, so absent files were not reconciled");
@@ -454,6 +481,21 @@ pub fn apply_hints(
     let mut inflight: Vec<Pending<()>> = Vec::new();
     let router = marrow_parse::ParserRouter::with_default_parsers();
 
+    // Whether the parser chain has changed since this root was last *fully*
+    // swept. Asked once, because it is a question about this build rather than
+    // about any file. See `ParserRouter::fingerprint` for why re-routing on
+    // every sweep would never converge.
+    let fingerprint = router.fingerprint();
+    let reroute = marrow_store::read::routing_fingerprint(&conn, root_id)
+        .is_none_or(|seen| seen != fingerprint);
+    if reroute {
+        tracing::info!(
+            root = %root_id,
+            fingerprint = %fingerprint,
+            "the parser chain has changed since this root was last swept; re-routing once"
+        );
+    }
+
     for path in paths {
         if cancel.is_cancelled() {
             outcome.cancelled = true;
@@ -520,6 +562,7 @@ pub fn apply_hints(
             &h,
             &self_written,
             &router,
+            reroute,
             &mut inflight,
         ) {
             Ok((_, Some(ids))) => {
@@ -730,6 +773,9 @@ fn record(
     h: &Hashed,
     self_written: &HashSet<ContentHash>,
     router: &marrow_parse::ParserRouter,
+    // The parser chain has changed since this root was last fully swept, so
+    // every file is re-routed once. See `ParserRouter::fingerprint`.
+    reroute: bool,
     inflight: &mut Vec<Pending<()>>,
 ) -> Result<(FileId, Option<RecordedIds>)> {
     let now = Timestamp::now();
@@ -857,9 +903,26 @@ fn record(
     // because the bytes had not moved and the gate compared only content
     // hashes. The improvement applied to files indexed after it and to nothing
     // else, silently.
+    // **And a parser that did not exist has to reach them too.** `stale_parser`
+    // asks whether the parser that produced a result has changed. It cannot
+    // fire for a file the chain fell *through* to the metadata fallback: the
+    // row says `metadata`, the metadata parser has not moved, so nothing is
+    // stale. Every file indexed before a parser shipped therefore kept its
+    // metadata-only result for ever — on a real corpus, 26 spreadsheets, 25
+    // Word documents, 11 images and 18 OpenDocument files with no content and
+    // no tables, and `read_table` truthfully answering "this file has no tables
+    // in it" about a spreadsheet full of them.
+    //
+    // `reroute` is decided once per sweep from the chain's fingerprint rather
+    // than per file, because the question is about the build and not about the
+    // file, and asking it per file would mean re-routing on every sweep for
+    // ever: a `.xlsx` that is really a zip is claimed by name, refused on
+    // content, recorded as metadata, and would be retried endlessly.
     let stale = match &current {
         Some(c) if !changed && !unfinished => {
-            stale_parser(conn, router, c.version_id)? || stale_chunker(conn, c.version_id)?
+            reroute
+                || stale_parser(conn, router, c.version_id)?
+                || stale_chunker(conn, c.version_id)?
         }
         _ => false,
     };

@@ -638,6 +638,65 @@ fn a_file_is_rechunked_when_the_chunker_that_cut_it_has_moved_on() {
     );
 }
 
+/// **A parser that did not exist yet must still reach the files already indexed.**
+///
+/// The sibling of the two above, and the one they could not cover.
+/// `stale_parser` asks whether the parser that produced a result has changed.
+/// It cannot fire for a file the chain fell *through* to the metadata fallback:
+/// the row says `metadata`, the metadata parser has not moved, so nothing is
+/// stale. Every file indexed before a parser shipped therefore kept its
+/// metadata-only result for ever.
+///
+/// On the author's own corpus that was 26 spreadsheets, 25 Word documents, 11
+/// images and 18 OpenDocument files with no content and no tables — and
+/// `read_table` truthfully answering "this file has no tables in it" about a
+/// spreadsheet full of them, which reads as a broken parser and is a routing
+/// decision nobody ever revisited.
+///
+/// Simulated by ageing the recorded routing fingerprint, which is what a build
+/// carrying a new parser looks like from the next sweep's point of view.
+#[test]
+fn a_file_is_rerouted_when_the_parser_chain_has_changed() {
+    let f = setup();
+    let first = run(&f);
+    assert!(first.parsed > 0, "the fixture must parse something");
+
+    let second = run(&f);
+    assert_eq!(
+        second.parsed, 0,
+        "an unchanged corpus must not be re-parsed"
+    );
+
+    f.store
+        .writer()
+        .submit(|c| {
+            c.execute(
+                "UPDATE schema_meta SET value = 'ancient' WHERE key LIKE 'parser_routing:%'",
+                [],
+            )
+            .map(|_| ())
+            .map_err(|e| marrow_store::map_sqlite(e, "ageing the routing fingerprint"))
+        })
+        .unwrap();
+    f.store.flush().unwrap();
+
+    let third = run(&f);
+    assert!(
+        third.parsed > 0,
+        "the parser chain changed and nothing was re-routed, so a file that fell \
+         through to metadata keeps that result for ever"
+    );
+
+    // And it settles. Re-routing on every sweep is not the fix: a `.xlsx` that
+    // is really a zip is claimed by name, refused on content, recorded as
+    // metadata, and would be retried endlessly.
+    let fourth = run(&f);
+    assert_eq!(
+        fourth.parsed, 0,
+        "re-routing did not converge — every run would re-parse the corpus"
+    );
+}
+
 /// **A walk that could not read a directory has not established what is gone.**
 ///
 /// The guard on the bulk delete checks `outcome.failures.is_empty()`, and its
