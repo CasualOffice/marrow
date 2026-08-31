@@ -1,7 +1,9 @@
 name: pages
 
-# The site is a single static file with no build step, so there is nothing to
-# compile and nothing to go stale between the source and what ships.
+# The site is a handful of static files with no build step — plain HTML, one
+# stylesheet, no JavaScript and no CDN — so there is nothing to compile and
+# nothing to go stale between the source and what ships. `site/` is uploaded
+# verbatim; adding a build step here would reintroduce exactly that gap.
 on:
   push:
     branches: [main]

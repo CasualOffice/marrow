@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Add a cloud model when you have no GPU — Marrow guides</title>
+<meta name="description" content="Point Marrow at any OpenAI-compatible endpoint from Settings. The key goes into the macOS keychain and nowhere else, and every answer carries a label saying where it was written.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◗</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="brand-mark">◗</span> Marrow</a>
+    <div class="nav-links">
+      <a href="index.html">Home</a>
+      <a href="install.html">Install</a>
+      <a href="guides.html" aria-current="page">Guides</a>
+      <a href="docs.html">Docs</a>
+      <a href="https://github.com/CasualOffice/marrow">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+  <p class="crumbs"><a href="guides.html">Guides</a> / Add a cloud model when you have no GPU</p>
+</div>
+
+<header class="page-head">
+  <div class="wrap">
+    <p class="eyebrow">Guide 4</p>
+    <h1>Add a cloud model when you have no GPU</h1>
+    <p class="lede">
+      Local generation is MLX on Apple Silicon, and there is no CPU path to be
+      slow on — which would exclude a lot of machines entirely. So Marrow takes
+      one OpenAI-compatible endpoint instead, behind exactly the same interface.
+      <strong>Search never uses it either way.</strong>
+    </p>
+  </div>
+</header>
+
+<section class="section">
+  <div class="wrap">
+    <ol class="step-list">
+      <li>
+        <h3>Open Settings → Answering</h3>
+        <p>
+          Settings is grouped into four screens — General, Answering, Index and
+          About — so the endpoint is not something you scroll past index counts
+          to find. Choose <strong>Answering</strong>, then
+          <strong>Add an endpoint</strong>.
+        </p>
+        <figure>
+          <img src="img/endpoint.jpg" width="1280" height="663" loading="lazy" decoding="async"
+               alt="The Answering settings screen with the endpoint form open: fields for name, model, endpoint URL and key, then longest answer in tokens and a reasoning-effort selector set to not supported.">
+          <figcaption>
+            One endpoint, brought by you. Every field carries the sentence that
+            explains what it does to your data. Rendered against the
+            repository's development fixtures.
+          </figcaption>
+        </figure>
+      </li>
+
+      <li>
+        <h3>Fill in five fields</h3>
+        <div class="tw">
+          <table>
+            <thead><tr><th>Field</th><th>What to put in it</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><strong>name</strong></td>
+                <td>Whatever you want to see on the answer's label — <code>OpenAI</code>, <code>work vLLM</code>.</td>
+              </tr>
+              <tr>
+                <td><strong>model</strong></td>
+                <td>The model id the endpoint expects, exactly as it spells it.</td>
+              </tr>
+              <tr>
+                <td><strong>endpoint</strong></td>
+                <td>The base URL <em>up to but not including</em> <code>/chat/completions</code> — usually ending in <code>/v1</code>. Plain <code>http</code> is accepted only for a server on this machine or your own network.</td>
+              </tr>
+              <tr>
+                <td><strong>key</strong></td>
+                <td>Goes into your macOS keychain and nowhere else. A server you run yourself needs none.</td>
+              </tr>
+              <tr>
+                <td><strong>longest answer</strong></td>
+                <td>A token cap. It defaults to 2048.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          There is a sixth, <strong>reasoning effort</strong>, and its default is
+          <code>not supported</code> — because there is no portable way to ask an
+          OpenAI-compatible endpoint to think first. Left there,
+          <strong>Thorough</strong> is <em>refused</em> for this endpoint rather
+          than quietly answered as Fast. Set it only if you know your provider
+          honours it.
+        </p>
+      </li>
+
+      <li>
+        <h3>Know what leaves, because it does</h3>
+        <div class="warn">
+          <p>
+            Once an endpoint is configured, <strong>the question and every
+            excerpt it cites are sent there.</strong> Marrow never proxies
+            anything — requests go from your machine straight to the endpoint —
+            but what happens at the other end, including what they keep and for
+            how long, is governed by your own agreement with that provider.
+          </p>
+          <p>
+            The About screen states this in one sentence and changes that
+            sentence depending on what is actually configured. With no endpoint
+            it says answers are written here and nothing is sent anywhere; with
+            one it names the provider and the base URL. Neither branch is
+            assumed to be the safe one.
+          </p>
+        </div>
+        <p>
+          Every generation carries a boundary label, and it is computed from the
+          address the request actually resolved to, not from what you typed into
+          the field. Removing the endpoint under Answering puts you back on the
+          local path.
+        </p>
+      </li>
+    </ol>
+
+    <h2 style="margin-top:56px">What works</h2>
+    <div class="prose" style="margin-top:14px">
+      <p>
+        Anything OpenAI-compatible, which in practice is most things: OpenAI,
+        OpenRouter, Together, Groq, or a server you run yourself — vLLM, LM
+        Studio, llama.cpp, Ollama. Anthropic's models are reachable through
+        OpenRouter today; its native API is parked on the tracker rather than
+        built.
+      </p>
+      <p>
+        If you are running a local server on this machine, the Models page also
+        detects an Ollama or LM Studio instance if one is already listening, and
+        says which port it found it on.
+      </p>
+    </div>
+
+    <h2 style="margin-top:48px">What does not change</h2>
+    <div class="prose" style="margin-top:14px">
+      <p>
+        <strong>Search.</strong> Keyword and filename search work with no model,
+        no GPU and no network, and are meant to keep working that way. Matching
+        on meaning is added on top of matching on words; it never replaces it.
+      </p>
+      <p>
+        <strong>The evidence rules.</strong> Retrieved content is still wrapped
+        in the same labelled envelope before it reaches a remote model, files
+        Marrow wrote are still excluded from evidence, and citations still
+        resolve to a page, a cell or a line. The model is the replaceable part.
+      </p>
+    </div>
+
+    <p class="next">
+      <a href="guide-ask-and-cite.html">Back: ask a question and follow the citation →</a>
+      <a href="guides.html">All guides →</a>
+    </p>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="wrap">
+    <span>Marrow · Apache-2.0</span>
+    <a href="https://github.com/CasualOffice/marrow">GitHub</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/BUGS.md">Known issues</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/TRACKER.md">What is actually done</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/SECURITY.md">Security</a>
+    <span class="sp">Runs on your machine. Nothing leaves it unless you configure a provider or approve a host for <code>fetch_url</code>.</span>
+  </div>
+</footer>
+
+</body>
+</html>

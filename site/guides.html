@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Marrow guides</title>
+<meta name="description" content="Four short guides: index your first folder, ask a question and follow a citation, serve the index to an agent over MCP, and point Marrow at a cloud model when you have no GPU.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◗</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="brand-mark">◗</span> Marrow</a>
+    <div class="nav-links">
+      <a href="index.html">Home</a>
+      <a href="install.html">Install</a>
+      <a href="guides.html" aria-current="page">Guides</a>
+      <a href="docs.html">Docs</a>
+      <a href="https://github.com/CasualOffice/marrow">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="page-head">
+  <div class="wrap">
+    <p class="eyebrow">Guides</p>
+    <h1>Four things worth learning, in order.</h1>
+    <p class="lede">
+      Each one is short, and every command in them exists — they were written
+      against the <code>clap</code> definitions in
+      <code>crates/cli/src/main.rs</code> and the tool registry in
+      <code>crates/mcp/src/tools.rs</code> rather than from memory.
+    </p>
+  </div>
+</header>
+
+<section class="section">
+  <div class="wrap">
+    <div class="grid grid-2">
+      <a class="card" href="guide-first-index.html">
+        <h3>1 · Index your first folder</h3>
+        <p>
+          Grant a folder, index it, and read the two numbers people conflate —
+          how many files Marrow knows about, and the much smaller number whose
+          text can actually be quoted.
+        </p>
+        <span class="go">Read →</span>
+      </a>
+
+      <a class="card" href="guide-ask-and-cite.html">
+        <h3>2 · Ask a question, follow the citation</h3>
+        <p>
+          Getting from a sentence in an answer to the line in the file it came
+          from, in one click — plus what the sources header is telling you
+          before you open anything.
+        </p>
+        <span class="go">Read →</span>
+      </a>
+
+      <a class="card" href="guide-mcp.html">
+        <h3>3 · Use it from Claude Code or another agent</h3>
+        <p>
+          <code>marrow mcp</code> on stdio, the eleven tools it exposes, which
+          one to reach for, and the three fields in a result that change how the
+          answer should be read.
+        </p>
+        <span class="go">Read →</span>
+      </a>
+
+      <a class="card" href="guide-cloud-model.html">
+        <h3>4 · Add a cloud model when you have no GPU</h3>
+        <p>
+          One OpenAI-compatible endpoint, a key that goes into the macOS
+          keychain and nowhere else, and a boundary label on every answer that
+          came from off this machine.
+        </p>
+        <span class="go">Read →</span>
+      </a>
+    </div>
+
+    <p class="note">
+      <strong>Search first, model later.</strong> Guides 1 and 3 need no model,
+      no GPU and no network at all. Only guides 2 and 4 involve generation, and
+      guide 4 exists precisely so that a machine which cannot run a local model
+      is not shut out.
+    </p>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="wrap">
+    <span>Marrow · Apache-2.0</span>
+    <a href="https://github.com/CasualOffice/marrow">GitHub</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/BUGS.md">Known issues</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/TRACKER.md">What is actually done</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/SECURITY.md">Security</a>
+    <span class="sp">Runs on your machine. Nothing leaves it unless you configure a provider or approve a host for <code>fetch_url</code>.</span>
+  </div>
+</footer>
+
+</body>
+</html>

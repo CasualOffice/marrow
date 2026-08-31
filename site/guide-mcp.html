@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Use Marrow from Claude Code over MCP — Marrow guides</title>
+<meta name="description" content="Run marrow mcp on stdio, register it with Claude Code or any MCP client, and understand all eleven tools it exposes — including the three fields in a result that change how an answer should be read.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◗</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="brand-mark">◗</span> Marrow</a>
+    <div class="nav-links">
+      <a href="index.html">Home</a>
+      <a href="install.html">Install</a>
+      <a href="guides.html" aria-current="page">Guides</a>
+      <a href="docs.html">Docs</a>
+      <a href="https://github.com/CasualOffice/marrow">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+  <p class="crumbs"><a href="guides.html">Guides</a> / Use it from Claude Code or another agent</p>
+</div>
+
+<header class="page-head">
+  <div class="wrap">
+    <p class="eyebrow">Guide 3</p>
+    <h1>Serve your index to the agent you already use</h1>
+    <p class="lede">
+      <code>marrow mcp</code> speaks MCP over stdio and exposes eleven tools.
+      It is an adapter: it computes nothing the CLI cannot also reach, so
+      anything it tells an agent you can reproduce in a terminal.
+    </p>
+  </div>
+</header>
+
+<section class="section">
+  <div class="wrap">
+    <ol class="step-list">
+      <li>
+        <h3>Index something first</h3>
+        <p>
+          The server serves an index; it does not build one. If you have not
+          done it yet, <a href="guide-first-index.html">grant a folder and index
+          it</a> — one command each.
+        </p>
+      </li>
+
+      <li>
+        <h3>Register the server</h3>
+        <p>With Claude Code:</p>
+        <div class="snippet"><pre>claude mcp add marrow -- marrow mcp</pre></div>
+        <p>
+          With any client that takes an <code>mcpServers</code> block — Codex,
+          Cursor, and most others — this is the whole configuration:
+        </p>
+        <div class="snippet"><pre>{
+  "mcpServers": {
+    "marrow": {
+      "command": "marrow",
+      "args": ["mcp"]
+    }
+  }
+}</pre></div>
+        <p>
+          Use an absolute path to the binary if it is not on the
+          <code>PATH</code> your client inherits. The repository's own
+          <code>.mcp.json</code> points at
+          <code>./target/release/marrow</code> for exactly that reason.
+        </p>
+        <div class="warn">
+          <p>
+            <strong>Protocol traffic uses stdout, so nothing else may write
+            there.</strong> Marrow's own narration goes to stderr; if you wrap
+            the command in a shell script, make sure your script does too.
+          </p>
+        </div>
+      </li>
+
+      <li>
+        <h3>Know which tool to reach for</h3>
+        <p>
+          Seven tools answer questions about files that already exist. Four
+          either write a file or send a request off this machine, and they are
+          kept in a separate list in the source for that reason — the boundary
+          should be visible from <code>tools/list</code> without reading the
+          descriptions.
+        </p>
+
+        <h4 style="margin-top:26px">Read</h4>
+        <div class="tw">
+          <table>
+            <thead><tr><th>Tool</th><th>What it is for</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><code>search</code></td>
+                <td>Ranked excerpts with a path, a citable line span and a structural breadcrumb. Matches on words, not substrings. Hand it the question, not keywords — any word may match by default, and <code>match: "all"</code> or <code>"phrase"</code> tighten it. The mode that ran is echoed back.</td>
+              </tr>
+              <tr>
+                <td><code>search_literal</code></td>
+                <td>Scans the files themselves for an exact string or regex, ignoring the index. This is what finds <code>});</code> or <code>TODO(name)</code>. Slower, and it only sees files on this disk.</td>
+              </tr>
+              <tr>
+                <td><code>read_file</code></td>
+                <td>An indexed file, or one line range of it. Prefer a range: excerpts keep the answer citable and the context small.</td>
+              </tr>
+              <tr>
+                <td><code>read_table</code></td>
+                <td>Tables as structure — rows, columns, typed values, and the cell range every value came from. Use it instead of <code>read_file</code> on any spreadsheet or Markdown/HTML table.</td>
+              </tr>
+              <tr>
+                <td><code>file_info</code></td>
+                <td>Everything known about one file: stable identity, content hash, previous paths if it moved, version count, tier state, index status. The disk is checked, not just the index.</td>
+              </tr>
+              <tr>
+                <td><code>list_workspaces</code></td>
+                <td>The granted folders with their counts and freshness. <strong>Try this first when a search returns nothing</strong> — the answer is often that the folder was never granted.</td>
+              </tr>
+              <tr>
+                <td><code>index_status</code></td>
+                <td>Index health, and specifically the gap between "files indexed" and the much smaller "files searchable". A search that misses something is often explained here.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h4 style="margin-top:30px">Write, and reach outward</h4>
+        <div class="tw">
+          <table>
+            <thead><tr><th>Tool</th><th>What it is for</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><code>create_file</code></td>
+                <td>Writes a text file into a granted workspace, at a workspace-relative path.</td>
+              </tr>
+              <tr>
+                <td><code>create_diagram</code></td>
+                <td>Writes a Mermaid diagram. <code>.md</code> wraps it in a fenced block; <code>.mmd</code> writes the source bare. Refuses source that does not start with a diagram type, because prose in a diagram file renders as nothing at all.</td>
+              </tr>
+              <tr>
+                <td><code>create_page</code></td>
+                <td>Writes a self-contained HTML page. The title is escaped; the body is not, so it may carry markup.</td>
+              </tr>
+              <tr>
+                <td><code>fetch_url</code></td>
+                <td>Fetches one HTTPS page and returns its readable text. <strong>This sends a request off the machine.</strong></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </li>
+
+      <li>
+        <h3>Read three fields in every result</h3>
+        <ul>
+          <li>
+            <strong><code>provenance</code></strong> —
+            <code>exact</code>, <code>degraded</code> or <code>approximate</code>.
+            A value recovered from a degraded grid should not be quoted with the
+            confidence of one read out of a clean spreadsheet.
+          </li>
+          <li>
+            <strong><code>origin</code></strong> — a result marked
+            <code>self_written</code> was produced by an agent through these
+            tools and must not be cited as independent evidence.
+          </li>
+          <li>
+            <strong><code>coverage</code></strong>, on
+            <code>search_literal</code> — <code>complete: false</code> means the
+            scan did not look everywhere, so "no match found" is not the same as
+            "not present". Every skipped file is counted with its reason.
+          </li>
+        </ul>
+        <p>
+          Two more worth knowing. <code>read_table</code>'s
+          <code>header_row</code> may be null — a header is inferred, never
+          assumed to be the first row, and an ambiguous top row is reported as
+          having none rather than being given one; check
+          <code>header_confidence</code> before relying on column names. And
+          <code>reconstruction</code> says how well the grid came back:
+          <code>exact</code>, <code>degraded</code> or <code>failed</code>.
+        </p>
+      </li>
+    </ol>
+
+    <h2 style="margin-top:56px">What the server refuses</h2>
+    <div class="prose" style="margin-top:14px">
+      <p>
+        These are not overridable, and the refusal always names the reason:
+      </p>
+      <ul>
+        <li>
+          <strong>Cloud-only placeholder files are never opened.</strong> Not by
+          <code>read_file</code>, not by <code>read_table</code>, and
+          <code>search_literal</code> skips them <em>without</em> opening them —
+          because opening one downloads it.
+        </li>
+        <li>
+          <strong>A workspace name that does not exist is an error</strong>, not
+          an empty result. Empty is indistinguishable from a genuine miss.
+        </li>
+        <li>
+          <strong>Writes stay inside the workspace.</strong> A path that resolves
+          outside it, a protected or excluded subtree, or a name the filesystem
+          would mangle are all refused. Paths are canonicalised and re-checked at
+          write time, not only at validation time.
+        </li>
+        <li>
+          <strong>There is no unconditional overwrite.</strong> Every write tool
+          takes <code>expect</code>: <code>"new"</code> creates and refuses if
+          anything is there, or <code>{"replacing": "&lt;blake3 hex&gt;"}</code>
+          with the digest you got when you last read the file. The staleness
+          check runs immediately before the write, because you may have the file
+          open in your editor.
+        </li>
+        <li>
+          <strong>Everything written is marked as written by this system</strong>
+          and excluded from evidence. Search will find it; a later answer cannot
+          cite it as corroboration. Edit it yourself and it becomes yours again.
+        </li>
+        <li>
+          <strong><code>fetch_url</code> is fenced hard.</strong> Plain
+          <code>http</code> is refused, any port but 443 is refused, and any host
+          that <em>resolves</em> to loopback, a private range, link-local or
+          carrier-grade NAT is refused — checked on the resolved address and
+          re-checked on every redirect, because a hostname that resolves to
+          <code>127.0.0.1</code> is the whole attack. Only hosts you have already
+          allowed can be fetched: this surface has no way to ask, so consent is
+          pre-registered in <code>net-allow.txt</code> in Marrow's data
+          directory. A host that is not listed is refused, and the refusal names
+          the file and the line to add.
+        </li>
+      </ul>
+    </div>
+
+    <div class="warn">
+      <p>
+        <strong>The MCP <code>search</code> tool is keyword-only.</strong> It
+        goes through the same fusion and the same post-fusion multipliers as
+        every other surface, but it passes no vector index: the meaning-based
+        branch needs an embedder, and a stdio server has to start instantly.
+        <code>marrow search --semantic</code> and the desktop app both have it.
+        The result reports which branches actually ran, so a caller is never left
+        to assume.
+      </p>
+    </div>
+
+    <p class="next">
+      <a href="guide-cloud-model.html">Next: add a cloud model →</a>
+      <a href="guide-first-index.html">Back: index your first folder →</a>
+    </p>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="wrap">
+    <span>Marrow · Apache-2.0</span>
+    <a href="https://github.com/CasualOffice/marrow">GitHub</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/BUGS.md">Known issues</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/TRACKER.md">What is actually done</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/SECURITY.md">Security</a>
+    <span class="sp">Runs on your machine. Nothing leaves it unless you configure a provider or approve a host for <code>fetch_url</code>.</span>
+  </div>
+</footer>
+
+</body>
+</html>

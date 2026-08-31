@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Ask a question, follow the citation — Marrow guides</title>
+<meta name="description" content="Install a model, ask a question in the desktop app, read what the sources header is telling you, and get from a sentence to the line in the file it came from in one click.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◗</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="brand-mark">◗</span> Marrow</a>
+    <div class="nav-links">
+      <a href="index.html">Home</a>
+      <a href="install.html">Install</a>
+      <a href="guides.html" aria-current="page">Guides</a>
+      <a href="docs.html">Docs</a>
+      <a href="https://github.com/CasualOffice/marrow">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+  <p class="crumbs"><a href="guides.html">Guides</a> / Ask a question, follow the citation</p>
+</div>
+
+<header class="page-head">
+  <div class="wrap">
+    <p class="eyebrow">Guide 2</p>
+    <h1>Ask a question, follow the citation</h1>
+    <p class="lede">
+      Ask lives in the desktop app. It is retrieval plus a model: search your
+      index, take the top chunks, bound the evidence, and stream an answer in
+      which every claim carries a marker you can click.
+    </p>
+  </div>
+</header>
+
+<section class="section">
+  <div class="wrap">
+    <ol class="step-list">
+      <li>
+        <h3>Get a model</h3>
+        <p>
+          Open <strong>Models</strong>. The page reads this machine's actual
+          memory and core count and computes what fits, rather than applying a
+          rule of thumb keyed on parameter count — it accounts for weights, the
+          KV cache at the context length it will use, the runtime and an OS
+          reserve, and shows you that arithmetic.
+        </p>
+        <p>
+          Pick a size class — Efficient, Balanced, Larger, or Cloud — or pin a
+          specific model, which overrides the class. Each candidate shows its
+          licence and whether commercial use is established, its download size
+          and its repository. A model you no longer want has a
+          <strong>Remove</strong> button that says how much disk it frees; it can
+          be downloaded again later.
+        </p>
+        <figure>
+          <img src="img/models.jpg" width="1280" height="663" loading="lazy" decoding="async"
+               alt="The Models page: this machine's memory and core count, free memory and load, four size classes with Balanced selected, three role cards for Router, Answers and Search, a detected Ollama instance, and a semantic-search coverage bar.">
+          <figcaption>
+            Models. Three roles run at different sizes for different reasons —
+            the router is cheap because it runs once per file, the answerer is
+            loaded on demand, the embedder stays loaded because search is the
+            product. A local Ollama or LM Studio is detected if you already have
+            one. Rendered against the repository's development fixtures.
+          </figcaption>
+        </figure>
+        <p>
+          <strong>No GPU, or not a Mac?</strong> Skip all of this and
+          <a href="guide-cloud-model.html">point Marrow at an OpenAI-compatible
+          endpoint</a> instead. Search does not care either way.
+        </p>
+      </li>
+
+      <li>
+        <h3>Ask</h3>
+        <p>
+          Open <strong>Ask</strong> and type a question — the question, not
+          keywords. <strong>Fast</strong> answers straight; <strong>Thorough</strong>
+          lets the model reason first, and that reasoning is shown in a
+          collapsed block labelled as the model's working: not evidence, and
+          never cited.
+        </p>
+        <p>
+          While an answer is streaming you can type the next question and press
+          return. It is queued and sent when the current answer finishes, in the
+          same thread it was queued in — one, not a backlog you cannot see.
+        </p>
+        <p>
+          Conversations survive a quit and are searchable: the box above the
+          conversation list matches across them.
+        </p>
+      </li>
+
+      <li>
+        <h3>Read the sources header before you read the answer</h3>
+        <figure>
+          <img src="img/ask.jpg" width="1280" height="663" loading="lazy" decoding="async"
+               alt="An answer with its sources expanded: two numbered sources with paths and line numbers, one excluded source shown in grey, an answer containing bracketed citation markers, a rendered table, a diagram card and a generated-page card.">
+          <figcaption>
+            The header reads "2 sources · 1 not used · 4.8 KB of context", and
+            each of those three changes how the answer should be read.
+            Rendered against the repository's development fixtures.
+          </figcaption>
+        </figure>
+        <ul>
+          <li>
+            <strong>The count of sources</strong>, and how many of them are not
+            <code>exact</code>. A number recovered from a scan is not the same
+            kind of fact as one read out of a clean file, so an answer built on
+            inexact sources says so before you open anything.
+          </li>
+          <li>
+            <strong>What was excluded, and why.</strong> Files Marrow's own tools
+            wrote are listed greyed-out under the sources — found, and
+            deliberately not used, because a system that cites its own summary
+            back to you has invented corroboration. Silence there would look
+            like they were never found.
+          </li>
+          <li>
+            <strong>Where the model ran.</strong> A label on every generation
+            says whether it stayed on this device or went to a provider, and it
+            is computed from the address that actually resolved, not from what
+            you typed into the settings field.
+          </li>
+        </ul>
+      </li>
+
+      <li>
+        <h3>Follow a citation to its source</h3>
+        <p>
+          Click a marker like <code>[E1]</code> inside the answer: the source
+          list opens if it was collapsed and scrolls to that entry.
+        </p>
+        <p>
+          Then click the source itself. <strong>The citation opens the
+          file</strong> in whatever application owns it —
+          <strong>shift-click</strong> reveals it in Finder instead. The row
+          keeps its line, page or cell rendered separately from the path, so
+          truncation eats the directory and never the part that makes it a
+          citation.
+        </p>
+        <p>
+          In the <strong>Search</strong> view the same thing is on the keyboard:
+          arrow keys or <kbd>j</kbd>/<kbd>k</kbd> move the cursor and the preview
+          follows continuously, <kbd>↵</kbd> focuses the preview,
+          <kbd>⌘↵</kbd> hands the file to its default application, and
+          <kbd>⇧↵</kbd> reveals it in the file manager.
+        </p>
+      </li>
+
+      <li>
+        <h3>Diagrams and pages come out as files</h3>
+        <p>
+          An answer may contain a Mermaid diagram or a small generated HTML page.
+          Both open in a side panel. A diagram saves as <strong>SVG</strong> or
+          <strong>PNG</strong> (rasterised at 2× so it is not a worse copy of the
+          SVG); a generated page saves as <strong>HTML</strong>.
+        </p>
+        <p>
+          A generated page runs in a sealed frame with no same-origin access —
+          the panel says so on its face: no access to your files, your index or
+          the window around it.
+        </p>
+      </li>
+    </ol>
+
+    <h2 style="margin-top:56px">Do not ask a model to do arithmetic</h2>
+    <div class="prose" style="margin-top:14px">
+      <p>
+        A model handed forty numbers as text will usually add them correctly and
+        cannot tell you when it did not. For a spreadsheet range, compute it:
+      </p>
+      <div class="snippet"><pre>marrow table sum ~/Projects/q2.xlsx 'Q2!B4:B18'
+marrow table mean ~/Projects/q2.xlsx 'B4:B18'</pre></div>
+      <p>
+        <code>sum</code>, <code>mean</code>, <code>min</code>, <code>max</code>
+        and <code>count</code>. It uses the typed values the parser recorded and
+        says which cells it skipped and why. The sheet name is required when the
+        workbook has more than one; the file must already be indexed.
+      </p>
+    </div>
+
+    <h2 style="margin-top:48px">What the answer cannot do to you</h2>
+    <div class="prose" style="margin-top:14px">
+      <p>
+        Retrieved file content is assembled into a labelled envelope before it
+        reaches the model — a per-answer unpredictable delimiter, regenerated if
+        it collides with the content, with untrusted material never placed last.
+        That is the mechanism behind "retrieved content never grants authority",
+        and it is defence in depth: the refusals hold whether or not the model
+        complies.
+      </p>
+      <p>
+        It is worth knowing the shape of the thing it defends against. A poisoned
+        README in a repository you cloned is aimed at your home directory the
+        moment a write-capable agent is pointed at the same index. That is why
+        these defences are in a single-user project at all.
+      </p>
+    </div>
+
+    <p class="next">
+      <a href="guide-mcp.html">Next: serve the index to an agent over MCP →</a>
+      <a href="guide-cloud-model.html">Or: add a cloud model →</a>
+    </p>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="wrap">
+    <span>Marrow · Apache-2.0</span>
+    <a href="https://github.com/CasualOffice/marrow">GitHub</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/BUGS.md">Known issues</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/TRACKER.md">What is actually done</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/SECURITY.md">Security</a>
+    <span class="sp">Runs on your machine. Nothing leaves it unless you configure a provider or approve a host for <code>fetch_url</code>.</span>
+  </div>
+</footer>
+
+</body>
+</html>

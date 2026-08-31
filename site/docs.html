@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Marrow documentation index</title>
+<meta name="description" content="What each document in the Marrow repository is for, which one supersedes which, and where to look for a given question. The specification is nine parts; the tracker is the state.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◗</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="brand-mark">◗</span> Marrow</a>
+    <div class="nav-links">
+      <a href="index.html">Home</a>
+      <a href="install.html">Install</a>
+      <a href="guides.html">Guides</a>
+      <a href="docs.html" aria-current="page">Docs</a>
+      <a href="https://github.com/CasualOffice/marrow">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="page-head">
+  <div class="wrap">
+    <p class="eyebrow">Documentation</p>
+    <h1>Which document answers which question</h1>
+    <p class="lede">
+      The repository holds roughly 8,700 lines of design across nine parts, plus
+      a handful of files that record what was actually built and what went
+      wrong. They do not all agree, and the order in which they win is written
+      down.
+    </p>
+
+    <div class="warn">
+      <p>
+        <strong>The specification is the design. The tracker is the state.</strong>
+        The spec runs ahead of the build in most places and, in a few, the build
+        went the other way. Never conclude from a spec section that something is
+        implemented.
+      </p>
+    </div>
+  </div>
+</header>
+
+<section class="section" id="order">
+  <div class="wrap">
+    <h2>The supersession rule</h2>
+    <div class="prose intro">
+      <p>
+        Read it bottom-up. Where two documents disagree, the lower one wins:
+      </p>
+      <ol>
+        <li><strong>Parts 1–6</strong> — written in order, later parts superseding earlier ones.</li>
+        <li><strong>Part 7</strong> — re-scopes the whole thing from a commercial product to solo self-use, and supersedes Part 4 entirely.</li>
+        <li><strong>Parts 8 and 9</strong> — written after Part 7, and superseding it in their own areas (the model runtime, and what may leave the machine).</li>
+        <li><strong>The design documents</strong> — GUI, UX and LLD win over the spec for the surfaces they cover.</li>
+        <li><strong>DECISIONS.md</strong> — supersedes all of them. Where building it proved a part wrong, the decision is the answer and the spec text was deliberately left alone.</li>
+      </ol>
+      <p>
+        That last one matters more than it sounds. Five entries in DECISIONS
+        reverse things the spec still says: SQLite FTS5 rather than Tantivy,
+        PDFKit rather than PDFium, an MLX sidecar rather than Candle or Ollama,
+        a desktop app that had been refused, and an agent layer that had been
+        refused twice and got built anyway. Annotating rather than rewriting is
+        how supersession is recorded here.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="state">
+  <div class="wrap">
+    <h2>Start with these four</h2>
+    <p class="intro">
+      Everything else is design. These are the files that describe reality.
+    </p>
+    <div class="tw">
+      <table>
+        <thead><tr><th>Document</th><th>What it is for</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/ARCHITECTURE.md">ARCHITECTURE.md</a></td>
+            <td>How it is actually built, in under 200 lines: the fourteen crates and why the seams are where they are, where the data lives, how a file becomes a citable chunk, how a question becomes an answer, and a table of things deliberately not built. Written from the code. Start here.</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/TRACKER.md">TRACKER.md</a></td>
+            <td>The live checklist, and the file that actually gets updated. Current milestone at the top, a log entry whenever something surprised the author, and the adversarial corpus. If you want to know whether a feature exists, this is the answer.</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/DECISIONS.md">DECISIONS.md</a></td>
+            <td>Open and settled decisions, each with its reason. Supersedes every part of the spec. Also the record of decisions that were <em>reversed</em>, kept visible rather than tidied away.</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/BUGS.md">BUGS.md</a></td>
+            <td>Open findings — what is wrong right now, and specifically what each one misleads you into believing. The distinction between a wrong number and a number that is true about something other than what you assumed is most of this file.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid grid-3">
+      <a class="card" href="https://github.com/CasualOffice/marrow/blob/main/README.md">
+        <h3>README.md</h3>
+        <p>The overview: status, what it does, what it refuses, the stack with what each choice replaced, and the platform table.</p>
+        <span class="go">Read →</span>
+      </a>
+      <a class="card" href="https://github.com/CasualOffice/marrow/blob/main/ROADMAP.md">
+        <h3>ROADMAP.md</h3>
+        <p>Milestones M0–M7, each ending at something used daily — plus the scope rules and the stop rules that keep them from growing.</p>
+        <span class="go">Read →</span>
+      </a>
+      <a class="card" href="https://github.com/CasualOffice/marrow/blob/main/check.sh">
+        <h3>check.sh</h3>
+        <p>What is actually enforced on a commit, as opposed to what a document asks for. The shortest honest answer to "is that rule real?"</p>
+        <span class="go">Read →</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="spec">
+  <div class="wrap">
+    <h2>The specification, nine parts</h2>
+    <p class="intro">
+      Its own index and reading order live in
+      <a href="https://github.com/CasualOffice/marrow/blob/main/docs/README.md">docs/README.md</a>.
+      <strong>Read Part 7 first</strong> — Parts 1–6 were written for a
+      commercial multi-user product, and reading them without it will send you
+      building the wrong thing.
+    </p>
+    <div class="tw">
+      <table>
+        <thead><tr><th>Part</th><th>Covers</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/docs/Part_7_Solo_Rescope.md"><strong>7 · Solo re-scope</strong></a></td>
+            <td>§123–135. What was cut, and the fourteen things that must not be. The MCP-first inversion. <strong>§126 is the list of non-negotiables</strong> — the one to read if you are touching files, paths, evidence or execution.</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/docs/Part_1_Master_Specification.md">1 · Master specification</a></td>
+            <td>§1–43. Vision, requirements, trust model, architecture, data model, ingestion, retrieval, transactions, ADRs, threat model.</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/docs/Part_2_Gap_Closure.md">2 · Gap closure</a></td>
+            <td>§44–60. Cloud placeholders, watcher limits, verification, reversibility, SQLite writes, and an honest posture on sandboxing.</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/docs/Part_3_Conversion_Multimodal.md">3 · Conversion &amp; multimodal</a></td>
+            <td>§61–76. Parser tiers and provenance classes (§63), OCR, images, embedded metadata. Video and audio are deferred.</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/docs/Part_4_Commercial_Superseded.md">4 · Commercial</a></td>
+            <td>§77–92. SKUs, pricing, support, compliance. <strong>Superseded by Part 7 in full</strong>, and parked rather than deleted in case that ever changes.</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/docs/Part_5_Capabilities.md">5 · Capabilities</a></td>
+            <td>§93–104. Prior art, hardware probe, local LLM, execution tiers, file intelligence, and <strong>§99, tables</strong>. Amended by Part 7 on execution and hardware.</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/docs/Part_6_Engineering_Reference.md">6 · Engineering reference</a></td>
+            <td>§105–122. The one you build from: SQLite DDL, migrations, the error taxonomy, config, jobs, chunking, <strong>fusion (§113)</strong> and <strong>the context envelope (§114)</strong>.</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/docs/Part_8_Model_Runtime.md">8 · Model runtime</a></td>
+            <td>§136–150. Hardware probe and live sampling, the model registry, dynamic loading, the supervisor — admission, circuit breaker, queues — and cloud providers.</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/docs/Part_9_Egress.md">9 · Egress</a></td>
+            <td>§151+. What may leave the machine and the <code>fetch</code> tool, with the policy written before the implementation on purpose.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="design">
+  <div class="wrap">
+    <h2>Design documents and post-mortems</h2>
+    <p class="intro">
+      Written after the spec. For the surfaces they cover, they win over it.
+    </p>
+    <div class="tw">
+      <table>
+        <thead><tr><th>Document</th><th>What it is for</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/docs/GUI.md">GUI.md</a></td>
+            <td>The desktop app: stack, the Tauri boundary, information architecture, interaction, visual direction, performance budgets. <strong>§4 bounds what ships.</strong></td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/docs/UX.md">UX.md</a></td>
+            <td>The terminal and MCP surfaces: command shapes, how results render, error wording, machine-readable output, exit codes.</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/docs/LLD.md">LLD.md</a></td>
+            <td>Internals: layering, patterns used <em>and rejected</em>, concurrency, error strategy, seams, testing.</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/docs/Comparison.md">Comparison.md</a></td>
+            <td>Prior art on the safety axes — provenance, injection, write tools, egress, self-citation. Where the differentiators were argued for, and where "hybrid retrieval" was ruled out as one of them.</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/docs/RESEARCH_LANDSCAPE.md">RESEARCH_LANDSCAPE.md</a></td>
+            <td>Prior art on the product axis: what eight chat, RAG and agent products are actually like to use, and §6, a list of features refused with reasons.</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/docs/Decision_MLX_Runtime.md">Decision_MLX_Runtime.md</a></td>
+            <td>The long form behind the choice of a bundled MLX sidecar over Candle or Ollama.</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/docs/UI_AUDIT.md">UI_AUDIT.md</a></td>
+            <td>Four independent passes over the desktop app — shell, Ask, configurability, design system — with contrast ratios computed rather than estimated and every claim carrying a <code>file:line</code>.</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/blob/main/docs/LESSONS.md">LESSONS.md</a></td>
+            <td>Bug <em>shapes</em> that are not specific to this codebase — values nobody reads, checks that cannot fail, tests that look like coverage. Marrow supplied the evidence; the shapes are general.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="lookup">
+  <div class="wrap">
+    <h2>Where to look, by question</h2>
+    <div class="tw">
+      <table>
+        <thead><tr><th>If you are asking</th><th>Read</th></tr></thead>
+        <tbody>
+          <tr><td>Does this feature exist yet?</td><td>TRACKER.md — never the spec</td></tr>
+          <tr><td>Why is it built that way?</td><td>DECISIONS.md, then ARCHITECTURE.md</td></tr>
+          <tr><td>Schema, migrations, error codes, config</td><td>Part 6 §106–109</td></tr>
+          <tr><td>Chunking, retrieval fusion, the context envelope</td><td>Part 6 §112–114</td></tr>
+          <tr><td>Parser tiers and provenance classes</td><td>Part 3 §63</td></tr>
+          <tr><td>Tables</td><td>Part 5 §99</td></tr>
+          <tr><td>Anything touching files, paths, evidence or execution</td><td>Part 7 §126 — the non-negotiables</td></tr>
+          <tr><td>The desktop app's bounds</td><td>GUI.md §4 and §9</td></tr>
+          <tr><td>The model runtime, and what may leave the machine</td><td>Parts 8 and 9</td></tr>
+          <tr><td>What is enforced on a commit, rather than merely written down</td><td>check.sh</td></tr>
+          <tr><td>Reporting a security issue</td><td><a href="https://github.com/CasualOffice/marrow/blob/main/SECURITY.md">SECURITY.md</a></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="note">
+      Working in the repository with an agent? <a href="https://github.com/CasualOffice/marrow/blob/main/CLAUDE.md">CLAUDE.md</a>
+      is the file loaded every session: the hard rules, the scope discipline,
+      and a section on how to cite a rule — there are three numbered lists of
+      the non-negotiables in the repository and no two of them agree, so rules
+      are cited by name.
+    </p>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="wrap">
+    <span>Marrow · Apache-2.0</span>
+    <a href="https://github.com/CasualOffice/marrow">GitHub</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/BUGS.md">Known issues</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/TRACKER.md">What is actually done</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/SECURITY.md">Security</a>
+    <span class="sp">Runs on your machine. Nothing leaves it unless you configure a provider or approve a host for <code>fetch_url</code>.</span>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -3,264 +3,60 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Marrow - a local knowledge runtime with citations</title>
-<meta name="description" content="Marrow indexes folders you point it at and answers questions with citations to the exact page, cell or line. Runs on your machine. Open source, Apache-2.0.">
+<meta name="color-scheme" content="light dark">
+<title>Marrow — answers about your own files, cited to the line</title>
+<meta name="description" content="Marrow indexes folders you grant it and answers questions with a citation to the exact page, cell or line. Search works with no model, no GPU and no network. macOS on Apple Silicon. Apache-2.0.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◗</text></svg>">
+<link rel="stylesheet" href="style.css">
 
-<meta property="og:title" content="Marrow - a local knowledge runtime with citations">
-<meta property="og:description" content="Answers questions about your own files, cited to the exact page, cell or line. Search needs no model, no GPU and no network.">
+<meta property="og:title" content="Marrow — answers about your own files, cited to the line">
+<meta property="og:description" content="A local knowledge runtime. Answers cite the exact page, cell or line. Search needs no model, no GPU and no network.">
 <meta property="og:type" content="website">
-
-<style>
-/* ---------------------------------------------------------------------------
-   One accent, locked to the whole page. One radius scale: 12px for blocks,
-   8px for controls. System font stack rather than a webfont link, because this
-   is a static page with no build step and a font request is the slowest thing
-   on it.
-   --------------------------------------------------------------------------- */
-:root {
-  --bg: #fafafa;
-  --surface: #ffffff;
-  --surface-2: #f4f4f5;
-  --fg: #18181b;
-  --fg-2: #52525b;
-  --line: #e4e4e7;
-  --accent: #c2410c;
-  --accent-fg: #ffffff;
-  --shadow: 0 1px 2px rgb(24 24 27 / .05), 0 8px 24px -12px rgb(24 24 27 / .12);
-
-  --r: 12px;
-  --r-sm: 8px;
-  --measure: 62ch;
-
-  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0c0c0d;
-    --surface: #141416;
-    --surface-2: #19191c;
-    --fg: #f4f4f5;
-    --fg-2: #a1a1aa;
-    --line: #26262a;
-    --accent: #fb923c;
-    --accent-fg: #0c0c0d;
-    --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 8px 24px -12px rgb(0 0 0 / .6);
-  }
-}
-
-*, *::before, *::after { box-sizing: border-box; }
-
-html { -webkit-text-size-adjust: 100%; }
-
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--fg);
-  font-family: var(--sans);
-  font-size: 17px;
-  line-height: 1.6;
-  -webkit-font-smoothing: antialiased;
-}
-
-.wrap { width: 100%; max-width: 1120px; margin-inline: auto; padding-inline: 24px; }
-
-a { color: inherit; }
-a:focus-visible, button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
-  border-radius: var(--r-sm);
-}
-
-h1, h2, h3 { margin: 0; font-weight: 620; letter-spacing: -0.021em; line-height: 1.12; }
-h1 { font-size: clamp(2.1rem, 1.4rem + 2.6vw, 3.4rem); }
-h2 { font-size: clamp(1.55rem, 1.2rem + 1.3vw, 2.1rem); }
-h3 { font-size: 1.03rem; letter-spacing: -0.01em; }
-p  { margin: 0; }
-
-code, pre, .mono { font-family: var(--mono); font-size: 0.83em; }
-
-/* --------------------------------------------------------------- navigation */
-/* One line at desktop, 64px tall. */
-.nav {
-  position: sticky; top: 0; z-index: 10;
-  height: 64px; display: flex; align-items: center;
-  background: color-mix(in srgb, var(--bg) 86%, transparent);
-  backdrop-filter: saturate(180%) blur(12px);
-  border-bottom: 1px solid var(--line);
-}
-.nav .wrap { display: flex; align-items: center; gap: 28px; }
-.brand { display: flex; align-items: center; gap: 9px; font-weight: 640; letter-spacing: -0.02em; text-decoration: none; }
-.brand-mark { color: var(--accent); font-size: 1.15rem; line-height: 1; }
-.nav-links { margin-left: auto; display: flex; align-items: center; gap: 24px; font-size: 0.93rem; }
-.nav-links a { color: var(--fg-2); text-decoration: none; }
-.nav-links a:hover { color: var(--fg); }
-@media (max-width: 640px) { .nav-links .opt { display: none; } }
-
-/* -------------------------------------------------------------------- button */
-.btn {
-  display: inline-flex; align-items: center; justify-content: center;
-  white-space: nowrap;
-  height: 44px; padding-inline: 20px;
-  border-radius: var(--r-sm); border: 1px solid transparent;
-  font: inherit; font-size: 0.95rem; font-weight: 560; text-decoration: none;
-  cursor: pointer;
-  transition: background-color .15s ease, border-color .15s ease, transform .12s ease;
-}
-.btn-primary { background: var(--accent); color: var(--accent-fg); }
-.btn-primary:hover { background: color-mix(in srgb, var(--accent) 88%, black); }
-.btn-secondary { background: var(--surface); color: var(--fg); border-color: var(--line); }
-.btn-secondary:hover { background: var(--surface-2); }
-.btn:active { transform: translateY(1px); }
-@media (prefers-reduced-motion: reduce) { .btn { transition: none; } .btn:active { transform: none; } }
-
-/* ---------------------------------------------------------------------- hero */
-/* Asymmetric split: message left, real output right. */
-.hero { padding-block: clamp(48px, 7vw, 88px) clamp(40px, 6vw, 72px); }
-.hero-grid { display: grid; gap: 44px; align-items: start; }
-@media (min-width: 900px) { .hero-grid { grid-template-columns: 1.05fr 1fr; gap: 56px; } }
-
-.hero p.lede { margin-top: 20px; max-width: 46ch; color: var(--fg-2); font-size: 1.09rem; }
-.hero .cta { margin-top: 30px; display: flex; flex-wrap: wrap; gap: 12px; }
-
-.term {
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
-  box-shadow: var(--shadow); overflow: hidden;
-}
-.term-bar {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 14px; border-bottom: 1px solid var(--line);
-  color: var(--fg-2); font-family: var(--mono); font-size: 0.72rem;
-}
-.term pre {
-  margin: 0; padding: 16px 18px 18px; overflow-x: auto;
-  line-height: 1.62; color: var(--fg-2);
-  font-size: 0.785rem;
-}
-.term b { color: var(--fg); font-weight: 560; }
-.term .hl { color: var(--accent); }
-
-/* ------------------------------------------------------------------ sections */
-.section { padding-block: clamp(52px, 7vw, 92px); border-top: 1px solid var(--line); }
-.section > .wrap > h2 { max-width: 22ch; }
-.section .intro { margin-top: 16px; max-width: var(--measure); color: var(--fg-2); }
-
-/* Editorial single column, deliberately a different shape from the bento. */
-.prose { max-width: var(--measure); }
-.prose p + p { margin-top: 18px; }
-.prose strong { font-weight: 600; }
-
-/* Bento: five items, five cells, mixed sizes. */
-.bento { margin-top: 40px; display: grid; gap: 14px; }
-@media (min-width: 760px) {
-  .bento { grid-template-columns: repeat(6, 1fr); }
-  .b-wide { grid-column: span 4; }
-  .b-narrow { grid-column: span 2; }
-  .b-half { grid-column: span 3; }
-}
-.cell {
-  background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--r); padding: 22px 22px 24px;
-}
-.cell p { margin-top: 9px; color: var(--fg-2); font-size: 0.93rem; }
-.cell-tint {
-  background:
-    radial-gradient(120% 140% at 8% 0%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 62%),
-    var(--surface);
-}
-.cell-code { background: var(--surface-2); }
-.cell-code pre { margin: 12px 0 0; overflow-x: auto; color: var(--fg-2); font-size: 0.76rem; line-height: 1.6; }
-
-/* Citation strip: full width, its own shape. */
-.cite {
-  margin-top: 34px; background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--r); padding: 24px; box-shadow: var(--shadow);
-}
-.cite-q { font-size: 1.06rem; font-weight: 560; }
-.cite-a { margin-top: 14px; max-width: var(--measure); color: var(--fg-2); }
-.cite-src {
-  margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line);
-  display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: baseline;
-  font-family: var(--mono); font-size: 0.76rem; color: var(--fg-2);
-}
-.cite-src a { color: var(--accent); text-decoration: none; font-weight: 560; }
-
-/* Two grouped columns, not a ten-row hairline list. */
-.groups { margin-top: 38px; display: grid; gap: 32px; }
-@media (min-width: 760px) { .groups { grid-template-columns: 1fr 1fr; gap: 44px; } }
-.group h3 { color: var(--fg); }
-.group ul { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 11px; }
-.group li { position: relative; padding-left: 22px; color: var(--fg-2); font-size: 0.95rem; }
-.group li::before {
-  content: ""; position: absolute; left: 3px; top: 0.62em;
-  width: 9px; height: 1.5px; background: var(--accent); opacity: .75;
-}
-
-/* Install block. */
-.install { margin-top: 32px; display: grid; gap: 16px; max-width: 760px; }
-.snippet {
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
-  padding: 16px 18px; overflow-x: auto;
-}
-.snippet pre { margin: 0; line-height: 1.7; color: var(--fg-2); font-size: 0.8rem; }
-.snippet .c { color: color-mix(in srgb, var(--fg-2) 68%, transparent); }
-
-.note {
-  margin-top: 20px; max-width: var(--measure);
-  border-left: 2px solid var(--accent); padding: 4px 0 4px 16px;
-  color: var(--fg-2); font-size: 0.93rem;
-}
-
-/* ------------------------------------------------------------------- footer */
-.footer { border-top: 1px solid var(--line); padding-block: 40px 56px; color: var(--fg-2); font-size: 0.9rem; }
-.footer .wrap { display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: baseline; }
-.footer a { color: var(--fg-2); }
-.footer .sp { margin-left: auto; }
-</style>
 </head>
 
 <body>
 
 <nav class="nav">
   <div class="wrap">
-    <a class="brand" href="#top"><span class="brand-mark">◗</span> Marrow</a>
+    <a class="brand" href="index.html"><span class="brand-mark">◗</span> Marrow</a>
     <div class="nav-links">
-      <a class="opt" href="#what">What it does</a>
-      <a class="opt" href="#honest">What it will not do</a>
-      <a href="#install">Install</a>
+      <a href="index.html" aria-current="page">Home</a>
+      <a href="install.html">Install</a>
+      <a href="guides.html">Guides</a>
+      <a href="docs.html">Docs</a>
       <a href="https://github.com/CasualOffice/marrow">GitHub</a>
     </div>
   </div>
 </nav>
 
-<header class="hero" id="top">
-  <div class="wrap hero-grid">
-    <div>
-      <h1>Answers about your own files, cited to the line.</h1>
-      <p class="lede">
-        Marrow indexes folders you grant it and answers questions with a citation
-        to the exact page, cell or line. Everything stays on your machine.
-      </p>
-      <div class="cta">
-        <a class="btn btn-primary" href="#install">Install</a>
-        <a class="btn btn-secondary" href="https://github.com/CasualOffice/marrow">Read the source</a>
-      </div>
+<header class="page-head">
+  <div class="wrap">
+    <p class="eyebrow">Local knowledge runtime · v0.0.1</p>
+    <h1>Answers about your own files, cited to the line.</h1>
+    <p class="lede">
+      Marrow indexes folders you grant it and answers questions with a citation
+      to the exact page, cell or line. Search works with no model, no GPU and
+      no network. Everything stays on your machine unless you configure a
+      provider yourself.
+    </p>
+    <div class="cta">
+      <a class="btn btn-primary" href="install.html">Install</a>
+      <a class="btn btn-secondary" href="guides.html">Read the guides</a>
     </div>
 
-    <!-- Real output from `marrow search`, not a mock-up of a terminal. -->
-    <div class="term">
-      <div class="term-bar">marrow search "watcher health"</div>
-<pre><b>services/system/crates/desktop/src/watching.rs:452</b>   exact 54m
-  Health only. Stamping `last_reconciled_at` here would say
-  the index agrees with the disk because a watcher reported.
-
-<b>services/system/crates/scan/src/watch.rs:110</b>          exact 16h
-  What a watcher can tell you about itself (WATCH-008).
-
-<span class="hl">3 results · 1.1 s · lexical</span></pre>
-    </div>
+    <figure>
+      <img src="img/ask.jpg" width="1280" height="663" loading="eager" decoding="async"
+           alt="The Ask view: a question, an expanded list of two sources each showing a file path and line number, one source excluded because Marrow wrote it, and an answer whose sentences carry bracketed citation markers.">
+      <figcaption>
+        Ask, with its sources expanded. Every claim carries a marker; every
+        marker resolves to a file and a line you can click open. The greyed
+        line under the sources is a file Marrow wrote itself, listed so you can
+        see it was found and deliberately not used as evidence. Screenshots on
+        this site are the real interface rendered against the repository's
+        development fixtures (<code>crates/desktop/ui/src/dev/fixtures.ts</code>),
+        not anybody's real index.
+      </figcaption>
+    </figure>
   </div>
 </header>
 
@@ -270,19 +66,52 @@ code, pre, .mono { font-family: var(--mono); font-size: 0.83em; }
     <div class="prose intro">
       <p>
         Neither one can tell you where an answer came from, notice when the
-        source changed, or remember what you corrected last month.
+        source changed, or keep the distinction between something you wrote and
+        something a tool wrote for you.
       </p>
       <p>
-        Marrow keeps a provenance-backed index instead: files with stable
-        identities and path history, structure pulled from the file format
-        rather than inferred, and a span on every fragment. The model is
-        replaceable. <strong>The knowledge is not.</strong>
+        Marrow keeps a provenance-backed index instead. Files have stable
+        identities and path history, so a path is never an identity. Structure
+        comes out of the file format rather than being inferred from the text.
+        Every fragment carries the location it came from. The model is
+        replaceable; the index is the part worth keeping.
       </p>
       <p>
-        Two rules carry the design. Get facts deterministically before asking a
-        model to infer them. And text inside a file is data, even when it
-        contains instructions, so it can never grant authority.
+        Two rules carry the design. <strong>Deterministic before
+        probabilistic</strong> — get facts from the file format, the AST and the
+        filesystem before asking a model to infer them. And <strong>policy below
+        the model</strong> — text inside a file is data even when it contains
+        instructions, so it can never grant a tool authority.
       </p>
+
+      <h3>What is actually different, and what is not</h3>
+      <p>
+        Plenty of tools fuse a keyword branch with a vector branch and rerank
+        the result. Marrow does too, and <strong>that is not a differentiator</strong>
+        — claiming it would be the sort of overstatement this project keeps a
+        bug file about. Three things are unusual, and they are the reason to
+        use it:
+      </p>
+      <ul>
+        <li>
+          <strong>What a hit resolves to.</strong> Not a filename — a page and a
+          bounding box in a PDF, a sheet and a cell in a workbook, a byte range
+          in a text file.
+        </li>
+        <li>
+          <strong>Provenance classes.</strong> Every result and every citation is
+          <code>exact</code>, <code>degraded</code> or <code>approximate</code>.
+          A number recovered from a smudged scan does not get quoted with the
+          confidence of one read out of a clean spreadsheet.
+        </li>
+        <li>
+          <strong><code>origin = SELF</code>.</strong> Anything Marrow's own
+          tools wrote is marked at write time and excluded from evidence, so the
+          system cannot cite its own summary back to you as independent
+          corroboration. If you later edit that file yourself, it becomes yours
+          again and regains citability.
+        </li>
+      </ul>
     </div>
   </div>
 </section>
@@ -290,64 +119,101 @@ code, pre, .mono { font-family: var(--mono); font-size: 0.83em; }
 <section class="section" id="what">
   <div class="wrap">
     <h2>What it does</h2>
+    <p class="intro">
+      Three front ends over one core: a desktop app, a <code>marrow</code>
+      command line, and an MCP server on stdio for the agent you already use.
+    </p>
 
-    <div class="bento">
-      <div class="cell b-wide cell-tint">
+    <div class="grid grid-3">
+      <div class="card card-tint">
         <h3>Citations you can open</h3>
         <p>
-          Every fragment carries where it came from: a byte range in a text
-          file, a page and bounding box in a PDF, <code>Sheet1!B4</code> in a
-          workbook. A claim resolves to a location, not to a filename.
+          Click a source in an answer and the file opens in whatever
+          application owns it. Shift-click reveals it in Finder instead. The
+          citation keeps its line, page or cell — that is the part that makes it
+          a citation rather than a filename.
         </p>
       </div>
 
-      <div class="cell b-narrow">
+      <div class="card">
         <h3>Search without a model</h3>
         <p>
-          Lexical and filename search need no model, no GPU and no network.
-          That is a hard rule, not a fallback.
+          Keyword and filename search need no model, no GPU and no network.
+          That is a hard rule of the project, not a fallback path. Meaning-based
+          search is strictly additive and its absence is never an error.
         </p>
       </div>
 
-      <div class="cell b-narrow">
+      <div class="card">
         <h3>Tables, as tables</h3>
         <p>
-          CSV, Markdown, HTML, XLSX and DOCX arrive as one grid with a header
-          confidence and a span per cell.
+          CSV, Markdown, HTML, XLSX and DOCX come back as a grid with typed
+          values, a span for every cell, and a header row that is inferred and
+          reported with a confidence rather than assumed.
         </p>
       </div>
 
-      <div class="cell b-half cell-code">
-        <h3>Served to the agent you already use</h3>
-        <pre>$ marrow mcp   <span class="c"># Claude Code, Codex, Cursor</span>
-
-search · search_literal · read_file
-read_table · file_info · index_status
-list_workspaces · fetch_url · create_*</pre>
+      <div class="card">
+        <h3>Arithmetic that is computed</h3>
+        <p>
+          <code>marrow table sum</code> — also <code>mean</code>,
+          <code>min</code>, <code>max</code> and <code>count</code> — adds up a
+          spreadsheet range from the typed values the parser recorded, and says
+          which cells it skipped and why.
+        </p>
       </div>
 
-      <div class="cell b-half">
-        <h3>Local model, or none, or someone else's</h3>
+      <div class="card">
+        <h3>PDFs and images</h3>
         <p>
-          Answers come from a local model on Apple Silicon, or from any
-          OpenAI-compatible endpoint if this machine has no GPU. The boundary
-          is shown on every generation, computed from the address actually
-          resolved rather than from what you typed.
+          PDF text arrives with per-character boxes through PDFKit. Text inside
+          an image is read with Vision, with a box for every line. A PDF with
+          low text yield is flagged as probably scanned, never silently dropped.
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>Served over MCP</h3>
+        <p>
+          <code>marrow mcp</code> exposes eleven tools on stdio to Claude Code,
+          Codex, Cursor or anything else that speaks MCP. It is an adapter: it
+          computes nothing the CLI cannot also reach.
         </p>
       </div>
     </div>
 
-    <div class="cite">
-      <p class="cite-q">When does the lease renew, and what is the rent?</p>
-      <p class="cite-a">
-        The lease renews on 31 December 2031. Rent is 2,417 per calendar month,
-        payable in advance on the first working day, reviewed each January
-        against the published index with any increase capped at four per cent.
+    <figure>
+      <img src="img/search.jpg" width="1280" height="725" loading="lazy" decoding="async"
+           alt="The Search view: a query, a ranked result list where each row shows a path, a line number and a badge reading exact, semantic, path or approx, and a preview pane showing the matching lines of the selected file with its metadata beneath.">
+      <figcaption>
+        Search. Each row says why it matched — <code>exact</code>,
+        <code>semantic</code> or <code>path</code> — and rows whose provenance is
+        degraded or approximate say so. The row marked <code>[self]</code> was
+        written by Marrow and is ranked down accordingly.
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="section" id="who">
+  <div class="wrap">
+    <h2>Who it is for</h2>
+    <div class="prose intro">
+      <p>
+        Someone with years of accumulated files on one Mac — repositories,
+        contracts, spreadsheets, scanned paperwork, notes — who is tired of
+        knowing a fact is <em>somewhere</em> and being unable to point at it.
       </p>
-      <p class="cite-src">
-        <span>Answered from</span>
-        <a href="#what">lease.md:14</a>
-        <span>qwen3.5-4b · on this device · 12.8 s</span>
+      <p>
+        And someone who already lives in an agent front end and would rather
+        give it a real index than mount a folder and hope. <code>marrow mcp</code>
+        is a first-class surface, not an afterthought.
+      </p>
+      <p>
+        This is a personal, open-source project by one author, built in the open
+        and used daily. There is no company behind it, no account, no
+        telemetry, and no promise that any of it keeps working. Version
+        <code>v0.0.1</code> is genuinely the second release.
       </p>
     </div>
   </div>
@@ -355,10 +221,10 @@ list_workspaces · fetch_url · create_*</pre>
 
 <section class="section" id="honest">
   <div class="wrap">
-    <h2>What it will not do, and what is not built yet</h2>
+    <h2>What it refuses, and what is not built</h2>
     <p class="intro">
-      This is version 0.0.0 of a personal project built in the open. The
-      distinction between the two lists below is the point.
+      The distinction between the two lists is the point. The left column is
+      permanent; the right column is a to-do list.
     </p>
 
     <div class="groups">
@@ -366,56 +232,72 @@ list_workspaces · fetch_url · create_*</pre>
         <h3>Refusals, by design</h3>
         <ul>
           <li>Index anything you have not granted</li>
-          <li>Download a cloud placeholder to read it. That is your bandwidth and your disk</li>
+          <li>Download a cloud placeholder in order to read it — that is your bandwidth and your disk</li>
           <li>Let retrieved file text grant tool authority</li>
-          <li>Take a destructive action on its own</li>
-          <li>Treat an embedding as truth</li>
+          <li>Cite its own output as independent evidence</li>
+          <li>Fetch a URL you have not pre-approved, or reach a host that resolves to a private address</li>
           <li>Record your screen, or recognise faces or voices</li>
+          <li>Run an OS sandbox — settled permanently, and the reasoning is written down</li>
         </ul>
       </div>
       <div class="group">
-        <h3>Not built yet, and honest about it</h3>
+        <h3>Not built yet</h3>
         <ul>
-          <li>Windows and Linux. Cloud-placeholder detection is macOS-only and fails closed elsewhere, so those builds would index nothing</li>
-          <li>Semantic search in the desktop Search view and the MCP search tool. It reaches Ask and the CLI today</li>
-          <li>Arithmetic over tables, and units</li>
-          <li>Ruled tables inside PDFs</li>
-          <li>Write tools. The adversarial corpus has to be green first</li>
+          <li>Windows and Linux. <a href="install.html#why-mac">The reason is specific</a>, and it is not stubbornness</li>
+          <li>Meaning-based search in the MCP <code>search</code> tool. It reaches the desktop app and <code>marrow search --semantic</code>; MCP is keyword-only because a stdio server has to start instantly</li>
+          <li>Ruled tables inside PDFs, and unit extraction</li>
+          <li>Editing existing files, snapshots and undo. The three creation tools exist; a confirmation step before a write does not</li>
+          <li>A timeline — "what changed in this folder since March"</li>
+          <li>Multi-device sync, and a mobile app</li>
         </ul>
       </div>
     </div>
+
+    <figure>
+      <img src="img/about.jpg" width="1280" height="663" loading="lazy" decoding="async"
+           alt="The About screen in Settings: a paragraph describing what Marrow is, a row of facts giving version, index schema and licence, then a list headed What it can reach showing five granted folders with their file counts and a line reading and nowhere else.">
+      <figcaption>
+        The About screen. Rather than a privacy policy, it lists the folders it
+        has actually been granted, says that no other part of the disk is read,
+        and states in one sentence whether answers are written here or sent to a
+        provider — a sentence that changes with what is configured, because
+        neither branch is safe to assume. Rendered against the repository's
+        development fixtures.
+      </figcaption>
+    </figure>
+
+    <p class="note">
+      <strong>The tracker is the state, not the specification.</strong> The
+      repository holds about 8,700 lines of design across nine parts, and the
+      spec runs ahead of the build almost everywhere. If you want to know
+      whether something exists, read
+      <a href="https://github.com/CasualOffice/marrow/blob/main/TRACKER.md">TRACKER.md</a>
+      and <a href="https://github.com/CasualOffice/marrow/blob/main/BUGS.md">BUGS.md</a>,
+      not the spec.
+    </p>
   </div>
 </section>
 
-<section class="section" id="install">
+<section class="section" id="start">
   <div class="wrap">
-    <h2>Install</h2>
-    <p class="intro">Apple Silicon macOS. Apache-2.0.</p>
-
-    <div class="install">
-      <div class="snippet">
-<pre><span class="c"># Build from source, which is the honest option.</span>
-git clone https://github.com/CasualOffice/marrow
-cd marrow &amp;&amp; cargo build --release
-
-<span class="c"># Grant it a folder and index it.</span>
-marrow workspace add ~/Projects
-marrow index
-marrow search "auth refresh token"</pre>
-      </div>
-      <div class="cta">
-        <a class="btn btn-primary" href="https://github.com/CasualOffice/marrow/releases">Download v0.0.0</a>
-        <a class="btn btn-secondary" href="https://github.com/CasualOffice/marrow">Read the source</a>
-      </div>
+    <h2>Start here</h2>
+    <div class="grid grid-3">
+      <a class="card" href="install.html">
+        <h3>Install</h3>
+        <p>Apple Silicon only, unsigned, and both facts explained rather than glossed. Includes checksum verification.</p>
+        <span class="go">Install Marrow →</span>
+      </a>
+      <a class="card" href="guides.html">
+        <h3>Guides</h3>
+        <p>Index a folder, follow a citation to its source, wire it into an agent over MCP, or point it at a cloud model.</p>
+        <span class="go">Four guides →</span>
+      </a>
+      <a class="card" href="docs.html">
+        <h3>Docs</h3>
+        <p>What each document in the repository is actually for, and which one supersedes which.</p>
+        <span class="go">Find the right document →</span>
+      </a>
     </div>
-
-    <p class="note">
-      The release is not signed or notarised, so macOS will refuse to open it
-      the first time. That is Gatekeeper doing its job on an unsigned binary
-      from the internet. The release notes give the one command that clears the
-      quarantine flag, and explain what it does before you run it. Building from
-      source avoids the question entirely.
-    </p>
   </div>
 </section>
 
@@ -425,7 +307,8 @@ marrow search "auth refresh token"</pre>
     <a href="https://github.com/CasualOffice/marrow">GitHub</a>
     <a href="https://github.com/CasualOffice/marrow/blob/main/BUGS.md">Known issues</a>
     <a href="https://github.com/CasualOffice/marrow/blob/main/TRACKER.md">What is actually done</a>
-    <span class="sp">Runs on your machine. Nothing is uploaded unless you configure a provider.</span>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/SECURITY.md">Security</a>
+    <span class="sp">Runs on your machine. Nothing leaves it unless you configure a provider or approve a host for <code>fetch_url</code>.</span>
   </div>
 </footer>
 

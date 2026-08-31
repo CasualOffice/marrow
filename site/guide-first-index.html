@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Index your first folder — Marrow guides</title>
+<meta name="description" content="Grant Marrow a folder, index it, read the index-status numbers correctly, search it, and keep it fresh. Every command checked against the CLI definitions.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◗</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="brand-mark">◗</span> Marrow</a>
+    <div class="nav-links">
+      <a href="index.html">Home</a>
+      <a href="install.html">Install</a>
+      <a href="guides.html" aria-current="page">Guides</a>
+      <a href="docs.html">Docs</a>
+      <a href="https://github.com/CasualOffice/marrow">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+  <p class="crumbs"><a href="guides.html">Guides</a> / Index your first folder</p>
+</div>
+
+<header class="page-head">
+  <div class="wrap">
+    <p class="eyebrow">Guide 1</p>
+    <h1>Index your first folder</h1>
+    <p class="lede">
+      Nothing here needs a model, a GPU or a network connection. Ten minutes,
+      and at the end you have a searchable, citable index of one folder.
+    </p>
+  </div>
+</header>
+
+<section class="section">
+  <div class="wrap">
+    <div class="warn">
+      <p>
+        <strong>Pick the folder deliberately.</strong> Marrow indexes what you
+        tell it to and nothing else — but what it indexes is what an agent
+        wired to it can read. Start with one project directory rather than your
+        whole home folder.
+      </p>
+    </div>
+
+    <ol class="step-list">
+      <li>
+        <h3>Grant a folder</h3>
+        <p>
+          A granted folder is called a <em>workspace</em>. Nothing outside one is
+          ever read.
+        </p>
+        <div class="snippet"><pre>marrow workspace add ~/Projects
+marrow workspace add ~/Documents/Contracts --name contracts
+
+marrow workspace list</pre></div>
+        <p>
+          The name defaults to the folder's own name; <code>--name</code>
+          overrides it. In the desktop app the same thing is
+          <strong>Add a folder</strong> on the Status screen, which opens a
+          native picker — the folder chooser runs in Rust, and the window itself
+          has no filesystem affordance at all.
+        </p>
+      </li>
+
+      <li>
+        <h3>Index it</h3>
+        <div class="snippet"><pre><span class="c"># Every workspace:</span>
+marrow index
+
+<span class="c"># Or just one, by name:</span>
+marrow index contracts
+
+<span class="c"># Honour .gitignore for this run:</span>
+marrow index --gitignore</pre></div>
+        <p>
+          <code>--gitignore</code> is per-run and off by default, because the
+          files a repository ignores are often exactly the ones you later want
+          to find.
+        </p>
+        <p>
+          A run walks the folder, works out for each file whether it is really
+          on this disk, hashes it, records it, then parses and chunks it.
+          <strong>One file never ends a run.</strong> Recording a file is
+          required; parsing it is optional, and a file that fails to parse lands
+          in the outcome's failure list with its error code rather than being
+          swallowed. Kill the process half-way and run it again — jobs are
+          idempotent and resumable.
+        </p>
+      </li>
+
+      <li>
+        <h3>Read the status honestly</h3>
+        <div class="snippet"><pre>marrow status</pre></div>
+        <p>
+          There are two counts here and conflating them is the most common way
+          to misread Marrow:
+        </p>
+        <ul>
+          <li>
+            <strong>Files indexed</strong> — every file Marrow has a record of.
+            All of them are findable by name.
+          </li>
+          <li>
+            <strong>Files searchable</strong> — the far smaller number whose text
+            was actually extracted into chunks. Only these can be quoted or
+            cited.
+          </li>
+        </ul>
+        <p>
+          On a photo-heavy folder the second number is a small fraction of the
+          first, and <em>that is the expected state, not a fault</em>. The
+          breakdown says why, and its three parts add up: <strong>no parser</strong>
+          (photos, binaries, empty files — not a failure and not fixable),
+          <strong>parse failed</strong> (the only one worth acting on), and
+          <strong>not processed yet</strong> (another index run clears it).
+          Cloud-only files are counted separately and are never opened.
+        </p>
+        <figure>
+          <img src="img/status.jpg" width="1280" height="663" loading="lazy" decoding="async"
+               alt="The Status screen: a warning that nothing is watching the folders, then a card per workspace showing files, chunks, content size and cloud-only count, with a breakdown of how many files have no searchable text and why.">
+          <figcaption>
+            Status, one card per granted folder. The <code>pictures</code> card
+            has thousands of files with no searchable text and is still healthy;
+            the <code>melp</code> card has eight files a parser could not finish
+            and says so. Rendered against the repository's development fixtures.
+          </figcaption>
+        </figure>
+      </li>
+
+      <li>
+        <h3>Search it</h3>
+        <div class="snippet"><pre>marrow search "auth refresh token"
+
+<span class="c"># Narrow it:</span>
+marrow search --type rs --since 7d "admission"
+marrow search --path crates/model --workspace melp "breaker"
+marrow search --until 2026-01-31 -n 50 "invoice"
+
+<span class="c"># Why did these rank this way?</span>
+marrow search --explain "admission control"</pre></div>
+        <p>
+          <code>--since</code> and <code>--until</code> take a calendar date
+          (<code>2026-01-31</code>, read as UTC) or a span counted back from now
+          (<code>7d</code>, <code>3w</code>, <code>6m</code>, <code>2y</code>).
+          A workspace name that matches nothing is an <em>error</em>, not an
+          empty result — zero hits for a typo reads as "nothing is indexed" and
+          sends you to debug the wrong thing.
+        </p>
+
+        <h4 style="margin-top:22px">When the index cannot express it</h4>
+        <p>
+          Search tokenises into words, so <code>});</code>,
+          <code>TODO(name)</code> or any pattern with punctuation in it is
+          unfindable through the index. <code>--literal</code> reads the files
+          themselves instead.
+        </p>
+        <div class="snippet"><pre>marrow search --literal '});'
+marrow search --literal --regex -i 'fn\s+refresh_\w+'
+marrow search --literal -w --time-limit 30 TODO</pre></div>
+        <p>
+          It is slower, it only sees files that are on this disk, and it says
+          how many it skipped and why. <code>--regex</code>,
+          <code>-i/--ignore-case</code>, <code>-w/--whole-word</code> and
+          <code>--time-limit</code> only apply with <code>--literal</code>; the
+          CLI refuses the combination otherwise rather than ignoring the flag.
+        </p>
+      </li>
+
+      <li>
+        <h3>Keep it fresh</h3>
+        <div class="snippet"><pre>marrow watch
+marrow watch contracts</pre></div>
+        <p>
+          Runs until you interrupt it. <strong>Watchers miss events — by design
+          of the operating system.</strong> They are hints; reconciliation is
+          what makes the index correct, and both watchers sweep once before they
+          start listening. Watcher health is reported on start and whenever it
+          changes, so a degraded watcher is never silent.
+        </p>
+        <p>
+          Every surface in Marrow reports its freshness or says it cannot. A
+          stale index answers confidently about a disk it has not looked at, and
+          the counts are <em>true</em> — they are just true about a disk that has
+          moved on.
+        </p>
+      </li>
+
+      <li>
+        <h3>Optional: add meaning-based search</h3>
+        <div class="snippet"><pre>marrow embed
+marrow search --semantic "how do I stop a run"</pre></div>
+        <p>
+          <code>embed</code> needs the embedding model on disk and is resumable —
+          interrupt it and run it again. <code>--semantic</code> is opt-in
+          because starting the embedder costs several seconds on every
+          invocation, and a search you type is one you expect to answer
+          immediately. When you remember what a document <em>said</em> but not
+          what it called it, this is what finds it.
+        </p>
+      </li>
+    </ol>
+
+    <h2 style="margin-top:56px">Two more things</h2>
+    <div class="prose" style="margin-top:14px">
+      <p>
+        <strong>Every command takes <code>--json</code></strong>, globally, and
+        returns the same data as the human view. Also global:
+        <code>--no-color</code> (and <code>NO_COLOR</code> is honoured), and
+        <code>-v</code>, repeatable, for narration on stderr. Narration always
+        goes to stderr so stdout stays a clean pipe.
+      </p>
+      <p>
+        <strong>Exit codes are a contract.</strong> Zero results is success, not
+        an error. A missing index (<code>4</code>), an unreachable network
+        (<code>6</code>) and an unavailable model (<code>7</code>) are distinct,
+        so a script that falls back to <code>marrow search</code> can tell a
+        machine with no model from one where you pressed Ctrl-C
+        (<code>5</code>).
+      </p>
+    </div>
+
+    <p class="next">
+      <a href="guide-ask-and-cite.html">Next: ask a question and follow the citation →</a>
+      <a href="guide-mcp.html">Or: serve this index to an agent →</a>
+    </p>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="wrap">
+    <span>Marrow · Apache-2.0</span>
+    <a href="https://github.com/CasualOffice/marrow">GitHub</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/BUGS.md">Known issues</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/TRACKER.md">What is actually done</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/SECURITY.md">Security</a>
+    <span class="sp">Runs on your machine. Nothing leaves it unless you configure a provider or approve a host for <code>fetch_url</code>.</span>
+  </div>
+</footer>
+
+</body>
+</html>

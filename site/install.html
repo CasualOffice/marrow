@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Install Marrow</title>
+<meta name="description" content="Install Marrow on macOS with Apple Silicon: download and verify the release, clear the quarantine flag on an unsigned build, or build from source. Why there is no Linux or Windows build.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◗</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="brand-mark">◗</span> Marrow</a>
+    <div class="nav-links">
+      <a href="index.html">Home</a>
+      <a href="install.html" aria-current="page">Install</a>
+      <a href="guides.html">Guides</a>
+      <a href="docs.html">Docs</a>
+      <a href="https://github.com/CasualOffice/marrow">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="page-head">
+  <div class="wrap">
+    <p class="eyebrow">Install · v0.0.1</p>
+    <h1>macOS on Apple Silicon. Unsigned. Apache-2.0.</h1>
+    <p class="lede">
+      Two ways in: download the release and verify it, or build from source.
+      Both are explained below, including the part where macOS refuses to open
+      the download and what the command that fixes it actually does.
+    </p>
+
+    <div class="warn">
+      <p>
+        <strong>Do not use <code>v0.0.0</code>.</strong> That build was broken
+        in two ways that made it useless: the MLX worker script was never put
+        into the app bundle, so it could not load a model, and the app declared
+        no macOS folder-usage strings, so it could not read a folder you had
+        granted it. Both are fixed in <code>v0.0.1</code>. If you already have
+        <code>v0.0.0</code>, replace it.
+      </p>
+    </div>
+  </div>
+</header>
+
+<section class="section" id="requirements">
+  <div class="wrap">
+    <h2>What you need</h2>
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th>Requirement</th><th>Detail</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Mac with Apple Silicon</td>
+            <td>An M-series chip. Reference hardware for the project is an Apple Silicon Mac with 16&nbsp;GB. There are no degradation tiers — if it does not run there, that is a bug rather than a configuration.</td>
+          </tr>
+          <tr>
+            <td>Disk for the index</td>
+            <td>Everything lives under <code>~/.local/share/marrow/</code>, per-user, never machine-wide. <code>MARROW_DATA_DIR</code> overrides it.</td>
+          </tr>
+          <tr>
+            <td>Nothing, to search</td>
+            <td>Keyword and filename search need no model, no GPU and no network. That is a hard rule of the project.</td>
+          </tr>
+          <tr>
+            <td>Python 3.11, to answer locally</td>
+            <td>Local generation and embedding run in an MLX worker process. The app tells you the exact two commands if the runtime is missing; roughly 450&nbsp;MB. Or skip it and point Marrow at a <a href="guide-cloud-model.html">cloud endpoint</a> instead.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="download">
+  <div class="wrap">
+    <h2>Download and verify</h2>
+    <p class="intro">
+      Four files are attached to the
+      <a href="https://github.com/CasualOffice/marrow/releases/tag/v0.0.1">v0.0.1 release</a>.
+      Take the app, the CLI, or both.
+    </p>
+
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th>File</th><th>What it is</th><th>Size</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/releases/download/v0.0.1/Marrow_0.0.1_aarch64.dmg"><code>Marrow_0.0.1_aarch64.dmg</code></a></td>
+            <td>The desktop app, as a disk image. This is where Ask lives.</td>
+            <td>9.8&nbsp;MB</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/releases/download/v0.0.1/Marrow-v0.0.1-aarch64.app.zip"><code>Marrow-v0.0.1-aarch64.app.zip</code></a></td>
+            <td>The same app, zipped, if you would rather not mount a disk image.</td>
+            <td>9.8&nbsp;MB</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/releases/download/v0.0.1/marrow-cli-v0.0.1-aarch64-apple-darwin.tar.gz"><code>marrow-cli-…-apple-darwin.tar.gz</code></a></td>
+            <td>The <code>marrow</code> binary on its own — indexing, search, and the MCP server. No GPU, no model, no network.</td>
+            <td>5.9&nbsp;MB</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/CasualOffice/marrow/releases/download/v0.0.1/SHA256SUMS.txt"><code>SHA256SUMS.txt</code></a></td>
+            <td>SHA-256 for each of the three, generated by the release workflow at bundle time.</td>
+            <td>299&nbsp;B</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <ol class="step-list">
+      <li>
+        <h3>Verify what you downloaded</h3>
+        <p>
+          Put <code>SHA256SUMS.txt</code> in the same directory as the files you
+          took and check them. <code>--ignore-missing</code> is there so it does
+          not complain about the two files you did not download.
+        </p>
+        <div class="snippet"><pre>cd ~/Downloads
+shasum -a 256 --ignore-missing -c SHA256SUMS.txt</pre></div>
+        <p>
+          Every line must end in <code>OK</code>. If any line says
+          <code>FAILED</code>, stop — delete the file and download it again.
+        </p>
+      </li>
+
+      <li>
+        <h3>Install the app</h3>
+        <p>
+          Open the disk image and drag <code>Marrow.app</code> to
+          <code>/Applications</code>, or unzip it there.
+        </p>
+      </li>
+
+      <li>
+        <h3>Install the CLI</h3>
+        <p>
+          The tarball holds a single binary called <code>marrow</code>. Put it
+          anywhere on your <code>PATH</code>.
+        </p>
+        <div class="snippet"><pre>tar -xzf marrow-cli-v0.0.1-aarch64-apple-darwin.tar.gz
+sudo mv marrow /usr/local/bin/
+marrow --version</pre></div>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<section class="section" id="quarantine">
+  <div class="wrap">
+    <h2>macOS will refuse to open it. Here is why, and the fix.</h2>
+    <div class="prose intro">
+      <p>
+        This build is <strong>not signed and not notarised</strong>. Signing
+        requires a paid Apple Developer account, and this is a personal project
+        with one author. So Gatekeeper does exactly what it should with an
+        unsigned binary downloaded from the internet: it refuses to run it, and
+        the dialog does not offer you a way through.
+      </p>
+      <p>
+        Anything downloaded by a browser gets an extended attribute called
+        <code>com.apple.quarantine</code> attached to it. That attribute is what
+        Gatekeeper checks. The command below removes it — <code>-d</code> deletes
+        one attribute, <code>-r</code> walks into the bundle so every file inside
+        it is cleared too — from that one path and nothing else.
+      </p>
+    </div>
+
+    <div class="snippet"><pre><span class="c"># The app:</span>
+xattr -dr com.apple.quarantine /Applications/Marrow.app
+
+<span class="c"># Or the CLI, if that is what you took:</span>
+xattr -dr com.apple.quarantine /usr/local/bin/marrow</pre></div>
+
+    <div class="warn">
+      <p>
+        <strong>Read that command before you run it, and be suspicious of
+        anyone who tells you not to bother.</strong> It disables a real
+        protection for one specific file. The only reason it is safe here is
+        that you verified the checksum against the release above and can read
+        the source that produced it.
+      </p>
+      <p>
+        <strong>Building from source is the honest alternative</strong> and
+        avoids the question entirely — nothing you compiled yourself is ever
+        quarantined. It takes a few minutes.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="source">
+  <div class="wrap">
+    <h2>Build from source</h2>
+    <p class="intro">
+      Rust 1.85 or newer, Node 22 and pnpm 9. The desktop app additionally needs
+      the Tauri CLI.
+    </p>
+
+    <div class="snippet"><pre>git clone https://github.com/CasualOffice/marrow
+cd marrow
+
+<span class="c"># The CLI on its own — this is all you need for indexing,</span>
+<span class="c"># search and the MCP server.</span>
+cargo build --release -p marrow-cli
+./target/release/marrow --version
+
+<span class="c"># The desktop app. The front end is built first, because the</span>
+<span class="c"># Tauri build reads ui/dist at compile time.</span>
+cd crates/desktop/ui &amp;&amp; pnpm install &amp;&amp; pnpm build &amp;&amp; cd ..
+cargo install tauri-cli --version "^2" --locked
+cargo tauri build</pre></div>
+
+    <p class="note">
+      These are the same commands the release workflow runs, in the same order —
+      see <a href="https://github.com/CasualOffice/marrow/blob/main/.github/workflows/release.yml"><code>.github/workflows/release.yml</code></a>.
+      The bundle lands in <code>target/release/bundle/</code>.
+    </p>
+  </div>
+</section>
+
+<section class="section" id="why-mac">
+  <div class="wrap">
+    <h2>Why there is no Linux or Windows build</h2>
+    <div class="prose intro">
+      <p>
+        Not "we have not got round to it". Most of the code is already
+        portable — the platform-specific pieces are behind <code>cfg</code> gates
+        and the workspace compiles for both targets. <strong>One function is
+        what stops it.</strong>
+      </p>
+      <p>
+        Marrow has to decide, before opening a file, whether that file is really
+        on this disk or is a cloud placeholder — an iCloud stub, a OneDrive file
+        marked recall-on-open. Reading a placeholder <em>downloads</em> it, and
+        pointing an indexer at a home directory full of them would quietly pull
+        hundreds of gigabytes over someone's connection and onto their disk.
+        Never doing that is a hard rule of the project.
+      </p>
+      <p>
+        Only the macOS implementation of that check exists. The stub for every
+        other platform <strong>fails closed</strong>: it reports every file as
+        unavailable, so nothing is read and nothing is hashed. A Linux or
+        Windows build would therefore start up, refuse to index a single file,
+        and be right to. Shipping it would be shipping a program that does
+        nothing.
+      </p>
+      <p>
+        Three further things are Apple frameworks rather than portable code: PDF
+        text with per-character boxes comes from PDFKit, text inside images
+        comes from Vision, and local generation is MLX on Apple Silicon — there
+        is no CPU inference path to be slow on. A port would need a
+        placeholder check per platform, a keyring backend other than
+        <code>apple-native</code>, a hardware probe, and CI on real runners,
+        because SQLite and Tree-sitter build C and a Mac cannot honestly
+        cross-check them.
+      </p>
+      <p>
+        <strong>No GPU, or not on a Mac at all?</strong> Every part of Marrow
+        that answers questions can be pointed at any OpenAI-compatible endpoint
+        instead — see
+        <a href="guide-cloud-model.html">adding a cloud model</a>. Search itself
+        never needs one.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="next">
+  <div class="wrap">
+    <h2>Next</h2>
+    <div class="grid grid-3">
+      <a class="card" href="guide-first-index.html">
+        <h3>Index your first folder</h3>
+        <p>Grant a folder, run an index, and read the two numbers that people conflate.</p>
+        <span class="go">Start →</span>
+      </a>
+      <a class="card" href="guide-mcp.html">
+        <h3>Use it from Claude Code</h3>
+        <p><code>marrow mcp</code>, the eleven tools, and when to reach for each one.</p>
+        <span class="go">Wire it up →</span>
+      </a>
+      <a class="card" href="guides.html">
+        <h3>All guides</h3>
+        <p>Four of them, each short and each checkable against the repository.</p>
+        <span class="go">Browse →</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="wrap">
+    <span>Marrow · Apache-2.0</span>
+    <a href="https://github.com/CasualOffice/marrow">GitHub</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/BUGS.md">Known issues</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/TRACKER.md">What is actually done</a>
+    <a href="https://github.com/CasualOffice/marrow/blob/main/SECURITY.md">Security</a>
+    <span class="sp">Runs on your machine. Nothing leaves it unless you configure a provider or approve a host for <code>fetch_url</code>.</span>
+  </div>
+</footer>
+
+</body>
+</html>
