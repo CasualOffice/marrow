@@ -373,9 +373,45 @@ pub fn descendants_of(artifact: &ParsedArtifact, table: usize) -> Vec<bool> {
     owned
 }
 
+/// Arena indices whose **nearest** enclosing table is `table`.
+///
+/// Deliberately not [`descendants_of`], which closes over the entire subtree.
+/// Word puts tables inside cells, and the DOCX parser attaches a nested table
+/// to the cell that holds it — on purpose, so the chunker's ownership check
+/// claims it for the outer table and does not emit its rows a second time as
+/// loose text.
+///
+/// Building the outer table's grid from that same set is what went wrong. A
+/// nested table's cells number their rows from zero like anybody else, so they
+/// landed on top of the outer table's own `(0, 0)` and `(0, 1)`, and the write
+/// died on `UNIQUE(table_id, row_idx, col_idx)` — one real document in the
+/// corpus, silently unindexed, reported only as `INT_INVARIANT_VIOLATED`.
+///
+/// The descent stops at a nested table rather than skipping it: everything
+/// below one belongs to it, and `tables_in` builds it separately anyway.
+fn directly_owned_by(artifact: &ParsedArtifact, table: usize) -> Vec<bool> {
+    let mut mine = vec![false; artifact.nodes.len()];
+    if table < mine.len() {
+        mine[table] = true;
+    }
+    // `parent` always points backwards (`ParsedArtifact::validate` enforces
+    // it), so one forward pass closes the set.
+    for (i, n) in artifact.nodes.iter().enumerate() {
+        if i == table || n.kind == IrKind::Table {
+            continue;
+        }
+        if let Some(p) = n.parent {
+            if mine.get(p).copied().unwrap_or(false) {
+                mine[i] = true;
+            }
+        }
+    }
+    mine
+}
+
 fn build(artifact: &ParsedArtifact, table_idx: usize) -> TableIr {
     let table_node = &artifact.nodes[table_idx];
-    let owned = descendants_of(artifact, table_idx);
+    let owned = directly_owned_by(artifact, table_idx);
 
     // A caption is a content child of the table that is not a row or a cell —
     // HTML's `<caption>`. Markdown and CSV have no such element, so they get

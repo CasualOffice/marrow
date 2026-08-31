@@ -726,6 +726,60 @@ mod tests {
         format!("<w:tbl>{}</w:tbl>", rows.concat())
     }
 
+    #[test]
+    fn a_table_inside_a_cell_does_not_land_on_the_outer_tables_grid() {
+        // Word puts tables inside cells, and this parser attaches a nested
+        // table to the cell that holds it on purpose — so the chunker's
+        // ownership check claims it for the outer table and does not emit its
+        // rows again as loose text.
+        //
+        // Building the outer grid from that same set was the bug. A nested
+        // table numbers its rows from zero like anybody else, so its cells
+        // landed on the outer table's own (0,0) and (0,1) and the write died
+        // on `UNIQUE(table_id, row_idx, col_idx)`. One real document in the
+        // corpus was silently unindexed, reported only as
+        // `INT_INVARIANT_VIOLATED` with no path.
+        let inner = tbl(&[tr(&["in-a", "in-b"])]);
+        let outer = format!(
+            "<w:tbl><w:tr><w:tc>{}{inner}</w:tc><w:tc>{}</w:tc></w:tr></w:tbl>",
+            p("out-a"),
+            p("out-b"),
+        );
+        let a = parse(&docx(&outer)).expect("fixture must parse");
+        a.validate().unwrap();
+
+        let tables = crate::table::tables_in(&a);
+        assert_eq!(tables.len(), 2, "the nested table is still its own table");
+
+        for (i, t) in tables.iter().enumerate() {
+            let mut seen = std::collections::HashSet::new();
+            for c in &t.cells {
+                assert!(
+                    seen.insert((c.row, c.col)),
+                    "table {i} has two cells at ({}, {})",
+                    c.row,
+                    c.col
+                );
+            }
+        }
+
+        // And the outer table holds its own two cells, not four.
+        let outer_ir = tables
+            .iter()
+            .find(|t| t.cells.iter().any(|c| c.raw_text.contains("out-a")))
+            .expect("the outer table");
+        assert_eq!(
+            outer_ir.cells.len(),
+            2,
+            "the inner table's cells were counted as the outer table's: {:?}",
+            outer_ir
+                .cells
+                .iter()
+                .map(|c| &c.raw_text)
+                .collect::<Vec<_>>()
+        );
+    }
+
     fn parse(bytes: &[u8]) -> Result<ParsedArtifact> {
         let probe = FileProbe::new("doc.docx", bytes.len() as u64);
         DocxParser.parse(ParseInput {
