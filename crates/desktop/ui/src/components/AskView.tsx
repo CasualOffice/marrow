@@ -17,7 +17,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import styles from "./AskView.module.css";
 import { cx } from "../lib/cx";
-import { bytes, duration } from "../lib/format";
+import { age, bytes, duration } from "../lib/format";
 import { Answer } from "./Answer";
 import { Icon } from "./Icon";
 import { Kbd } from "./Kbd";
@@ -28,8 +28,10 @@ import {
   forgetConversation,
   loadConversation,
   saveTurn,
+  searchConversations,
   type AskEvent,
   type Citation,
+  type ConversationMatch,
   type ExcludedSource,
   type PriorTurn,
   type StoredTurn,
@@ -96,6 +98,31 @@ function newTurn(question: string, thorough: boolean): Turn {
     stage: { stage: "retrieving", detail: "Searching your files" },
     running: true,
   };
+}
+
+/**
+ * A question typed while an answer was still streaming.
+ *
+ * **Exactly one, replaced rather than appended to.** The composer used to be
+ * dead for the whole of a generation, which on a Thorough answer is a long time
+ * to sit on a thought — but a queue of several is a backlog the user cannot see
+ * the shape of, and that is worse than being told no. One is visible in a chip,
+ * one is cancellable, and typing a second replaces the first in front of them.
+ */
+interface Queued {
+  readonly text: string;
+  readonly thorough: boolean;
+  /**
+   * The thread it was queued in, so it cannot be fired into a different one.
+   * The user can open another conversation while an answer is still arriving.
+   */
+  readonly atEpoch: number;
+  /**
+   * Set when the run it was waiting behind ended badly, or ended somewhere
+   * else. It is then neither sent nor thrown away: it stays on screen and
+   * waits to be sent by hand. See the effect that decides this.
+   */
+  readonly held: boolean;
 }
 
 /**
@@ -167,6 +194,23 @@ export function AskView() {
   // you choose when you know you mean one, not a setting to get wrong first.
   const [scope, setScope] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  /** The one question waiting behind the answer on screen, if any. */
+  const [queued, setQueued] = useState<Queued | null>(null);
+  /**
+   * `running`, but readable synchronously.
+   *
+   * `setRunning(true)` happens after `send` awaits the previous turn's write,
+   * so for those few milliseconds the state says idle while a question is
+   * already on its way. Deciding "queue or send" from the state alone would
+   * start two generations in that window — rare before the composer could be
+   * used at all during a run, and reachable by a keypress now.
+   */
+  const inFlight = useRef(false);
+  /**
+   * Whether the last generation ended with an answer, rather than with a
+   * failure or a Stop. Read by the queue, and nothing else.
+   */
+  const lastRunOk = useRef(false);
   const askId = useRef<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
@@ -191,6 +235,11 @@ export function AskView() {
   sessionRef.current = session;
   const epochRef = useRef(epoch);
   epochRef.current = epoch;
+  // Read by the effect that swaps the thread. As a dependency it would make
+  // that effect re-run — and re-open the conversation — every time someone
+  // queued a question.
+  const queuedRef = useRef(queued);
+  queuedRef.current = queued;
 
   /**
    * Follow the stream, but stop the moment the user scrolls up. Yanking
@@ -254,8 +303,14 @@ export function AskView() {
     setTurns((all) => all.map((t) => (t.id === id ? f(t) : t)));
   }, []);
 
-  /** An empty thread with a session key nothing else has used. */
-  const startFresh = useCallback(() => {
+  /**
+   * An empty thread with a session key nothing else has used.
+   *
+   * `draft` is a question that was queued against the thread being left. It
+   * lands in the composer of the new one rather than being sent or discarded —
+   * see the epoch effect below.
+   */
+  const startFresh = useCallback((draft = "") => {
     // The runtime is holding a KV prefix for the thread being left. Nobody is
     // coming back to it under this key — reopening the conversation uses its
     // stored id — so releasing it now is a few hundred megabytes recovered
@@ -263,7 +318,7 @@ export function AskView() {
     void forgetConversation(sessionRef.current);
     setSession(sessionKey());
     setTurns([]);
-    setQuestion("");
+    setQuestion(draft);
     setScope(null);
     field.current?.focus();
   }, []);
@@ -275,7 +330,7 @@ export function AskView() {
    * not race, and the second one is the one the user meant.
    */
   const open = useCallback(
-    async (id: string, atEpoch: number) => {
+    async (id: string, atEpoch: number, draft = "") => {
       try {
         const c = await loadConversation(id);
         if (epochRef.current !== atEpoch) return;
@@ -283,7 +338,7 @@ export function AskView() {
         setSession(id);
         setTurns(c.turns.map(restore));
         setScope(c.scope);
-        setQuestion("");
+        setQuestion(draft);
         stickToBottom.current = true;
         field.current?.focus();
       } catch (e) {
@@ -310,9 +365,22 @@ export function AskView() {
       void cancelAsk(askId.current);
       notify("Stopped the answer in progress. What was written is kept.");
     }
+    /*
+     * A question queued against the thread being left goes with the user, into
+     * the composer of whatever is opened next.
+     *
+     * Not sent: it was asked of a conversation that is no longer on screen,
+     * and the run it was waiting behind has just been cancelled two lines up.
+     * Not dropped either — they typed it, and losing someone's words because
+     * they clicked a row in the sidebar is the kind of small theft nobody
+     * forgives. Both paths below clear the composer, so there is no draft here
+     * for this to overwrite.
+     */
+    const carried = queuedRef.current?.text ?? "";
+    setQueued(null);
     const id = useUi.getState().activeConversationId;
-    if (id === null) startFresh();
-    else void open(id, epoch);
+    if (id === null) startFresh(carried);
+    else void open(id, epoch, carried);
   }, [epoch, notify, open, startFresh]);
 
   /**
@@ -371,10 +439,18 @@ export function AskView() {
   const send = useCallback(
     async (text: string, mode: boolean) => {
       const q = text.trim();
-      if (!q || running) return;
+      if (!q || inFlight.current) return;
+      // Claimed here rather than after the await below, so nothing can start a
+      // second generation in the gap. Cleared in the `finally`.
+      inFlight.current = true;
       // See `pendingSave`: this is what stops a fast follow-up starting a
-      // second conversation for the same thread.
-      if (pendingSave.current) await pendingSave.current;
+      // second conversation for the same thread. It covers the queued
+      // follow-up too, which arrives through this same function.
+      //
+      // `persist` reports its own failures and never rejects; the `catch` is
+      // so that a promise which somehow did could not leave `inFlight` stuck
+      // and the composer dead for the rest of the session.
+      if (pendingSave.current) await pendingSave.current.catch(() => undefined);
 
       // Sent before this turn is appended, so the model sees the conversation
       // as it was when the question was asked.
@@ -487,6 +563,14 @@ export function AskView() {
         }));
       } finally {
         applyToTurn((t) => ({ ...t, running: false, stage: null }));
+        // What the queue is allowed to do next. "Ended with an answer" and not
+        // merely "ended": a Stop or a failure leaves the thread in a state a
+        // follow-up would be asked *about*.
+        lastRunOk.current =
+          record.failure === null &&
+          record.usage?.stopReason !== "cancelled" &&
+          record.answer.trim() !== "";
+        inFlight.current = false;
         setRunning(false);
         askId.current = null;
         field.current?.focus();
@@ -503,8 +587,69 @@ export function AskView() {
         pendingSave.current = write;
       }
     },
-    [persist, running, scope, session, turns, update],
+    [persist, scope, session, turns, update],
   );
+
+  /*
+   * The queued question, once the answer it was waiting behind has finished.
+   *
+   * **Sent only after a clean finish, and only in the thread it was queued
+   * in.** A follow-up asked of a run that failed or was stopped is asked with
+   * a broken or half-written answer as its context, so one failure becomes
+   * two and the second one looks like the model's fault; and if the epoch has
+   * moved the user is reading a different conversation, where a question they
+   * asked of another one would arrive from nowhere. In both cases it is
+   * *held* rather than dropped — still on screen, still cancellable, and sent
+   * only if they press Send. Silently discarding what someone typed is the
+   * other way to get this wrong.
+   *
+   * `send` awaits `pendingSave` before it builds the history, and that promise
+   * is assigned synchronously at the end of the run above — before React can
+   * flush the `running` change that triggers this effect. So the auto-sent
+   * follow-up is behind the same guard a typed one is, and cannot start a
+   * second conversation for this thread.
+   */
+  useEffect(() => {
+    // `inFlight` as well as `running`, and for the same reason `send` reads it:
+    // between the two there is a window where the state says idle and a
+    // question is already on its way. Firing here then would have `send` refuse
+    // it, and a queued question that vanishes on its own is the worst of the
+    // three outcomes. Nothing is missed by waiting — `running` changes when
+    // `inFlight` does, so this effect runs again either way.
+    if (running || inFlight.current || queued === null || queued.held) return;
+    if (!lastRunOk.current || queued.atEpoch !== epoch) {
+      setQueued({ ...queued, held: true });
+      return;
+    }
+    setQueued(null);
+    void send(queued.text, queued.thorough);
+  }, [epoch, queued, running, send]);
+
+  /**
+   * Enter, and the button beside it.
+   *
+   * Queues instead of refusing while an answer is streaming: the composer used
+   * to drop the keystroke on the floor, which reads as a broken input rather
+   * than as a rule.
+   */
+  const submit = useCallback(() => {
+    const q = question.trim();
+    if (!q) return;
+    if (running || inFlight.current) {
+      setQueued({ text: q, thorough, atEpoch: epoch, held: false });
+      setQuestion("");
+      return;
+    }
+    void send(q, thorough);
+  }, [epoch, question, running, send, thorough]);
+
+  /** The held question, sent because the user said so. */
+  const sendQueued = useCallback(() => {
+    const q = queued;
+    if (!q) return;
+    setQueued(null);
+    void send(q.text, q.thorough);
+  }, [queued, send]);
 
   const stop = useCallback(() => {
     if (askId.current) void cancelAsk(askId.current);
@@ -540,6 +685,7 @@ export function AskView() {
 
   return (
     <section className={cx(styles.view, opening && styles.viewOpening)} aria-label="Ask">
+      <ConversationFinder />
       <div
         className={styles.scroll}
         ref={scroller}
@@ -562,20 +708,33 @@ export function AskView() {
         className={styles.composer}
         onSubmit={(e) => {
           e.preventDefault();
-          void send(question, thorough);
+          submit();
         }}
       >
+        {queued && (
+          <QueuedNext
+            queued={queued}
+            onSend={sendQueued}
+            onCancel={() => setQueued(null)}
+          />
+        )}
         <textarea
           ref={field}
           className={styles.field}
           value={question}
-          placeholder={turns.length ? "Ask a follow-up…" : "Ask about your files…"}
+          placeholder={
+            running
+              ? "Ask the next one — it is sent when this answer finishes…"
+              : turns.length
+                ? "Ask a follow-up…"
+                : "Ask about your files…"
+          }
           rows={1}
           onChange={(e) => setQuestion(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              void send(question, thorough);
+              submit();
             }
             if (e.key === "Escape" && running) {
               e.preventDefault();
@@ -595,9 +754,18 @@ export function AskView() {
           <ModeSwitch value={thorough} onChange={setThorough} disabled={running} />
           <span className={styles.grow} />
           {running ? (
-            <button type="button" className={styles.stop} onClick={stop}>
-              Stop <Kbd>Esc</Kbd>
-            </button>
+            <>
+              {/* Only once there is something to queue. A permanent second
+                  button beside Stop would advertise a mode nobody is in. */}
+              {question.trim() !== "" && (
+                <button type="submit" className={styles.queue}>
+                  Queue <Kbd>↵</Kbd>
+                </button>
+              )}
+              <button type="button" className={styles.stop} onClick={stop}>
+                Stop <Kbd>Esc</Kbd>
+              </button>
+            </>
           ) : (
             <button type="submit" className={styles.send} disabled={!question.trim()}>
               Ask <Kbd>↵</Kbd>
@@ -606,6 +774,196 @@ export function AskView() {
         </div>
       </form>
     </section>
+  );
+}
+
+/**
+ * The one question waiting behind the answer on screen.
+ *
+ * **Visible, and cancellable.** A queue whose contents you cannot see is a
+ * promise that something will happen later without saying what — and the first
+ * time it fires a question the user had forgotten about, they stop trusting the
+ * composer. It sits directly above the field it was typed in.
+ */
+function QueuedNext({
+  queued,
+  onSend,
+  onCancel,
+}: {
+  queued: Queued;
+  onSend: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div
+      className={cx(styles.queued, queued.held && styles.queuedHeld)}
+      // Announced, because the user's eyes are on the answer above it.
+      role="status"
+      aria-live="polite"
+    >
+      <span className={styles.queuedLabel}>{queued.held ? "Not sent" : "Next"}</span>
+      <span className={styles.queuedText}>{queued.text}</span>
+      {queued.held && (
+        <>
+          <span className={styles.queuedWhy}>
+            the answer before it did not finish
+          </span>
+          <button type="button" className={styles.queuedSend} onClick={onSend}>
+            Send anyway
+          </button>
+        </>
+      )}
+      <button
+        type="button"
+        className={styles.queuedCancel}
+        onClick={onCancel}
+        aria-label="Cancel the queued question"
+        title="Cancel the queued question"
+      >
+        <Icon name="close" size={11} />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Find a conversation by what was said in it.
+ *
+ * The sidebar lists threads by recency under a title derived from their *first*
+ * question, which is a serviceable index of ten conversations and none at all
+ * of two hundred: the thing you remember is almost never the thing the thread
+ * opened with. Searching the turns as well is what makes a long list navigable,
+ * and a match deep in a thread arrives with the words that matched it — a
+ * result that answers "is this the one?" with a title the sidebar already
+ * showed you has answered nothing.
+ *
+ * Empty is not a search: the panel then shows the recent list, so this doubles
+ * as a jump-to-conversation for anyone who never types anything into it.
+ */
+function ConversationFinder() {
+  const openConversation = useUi((s) => s.openConversation);
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<readonly ConversationMatch[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    // Debounced only once there is something to debounce. The empty query is
+    // the recent list and wants to be there the moment the field is focused;
+    // a keystroke is worth the wait, because the results replace each other
+    // and a stale one arriving late would overwrite a newer one.
+    const timer = window.setTimeout(
+      () => {
+        searchConversations(query, 40)
+          .then((found) => {
+            if (!live) return;
+            setRows(found);
+            setError(null);
+          })
+          .catch((e) => {
+            if (!live) return;
+            setRows([]);
+            setError(asUiError(e).message);
+          });
+      },
+      query.trim() === "" ? 0 : 120,
+    );
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+  }, [open, query]);
+
+  const choose = (id: string) => {
+    setOpen(false);
+    setQuery("");
+    openConversation(id);
+  };
+
+  return (
+    <div
+      className={styles.finder}
+      // Closed when focus leaves the whole control, not when the field alone
+      // blurs: clicking a result moves focus to the button inside the panel,
+      // and closing on that would unmount the row mid-click.
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false);
+      }}
+    >
+      <div className={styles.finderBox}>
+        <Icon name="search" size={13} className={styles.finderIcon} />
+        <input
+          type="text"
+          className={styles.finderField}
+          value={query}
+          placeholder="Search conversations…"
+          aria-label="Search conversations by title or by what was said"
+          onFocus={() => setOpen(true)}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              // The window binds Escape as well, where it clears the *file*
+              // search and takes focus to that field. Here it means this box.
+              e.stopPropagation();
+              if (query !== "") setQuery("");
+              else {
+                setOpen(false);
+                e.currentTarget.blur();
+              }
+            }
+          }}
+        />
+      </div>
+
+      {open && (
+        <div
+          className={styles.finderPanel}
+          // WebKit does not focus a button when it is clicked, so the pointer
+          // press would blur the field, close this panel and destroy the row
+          // before the click ever landed on it. Keeping focus where it is makes
+          // the click arrive. Tabbing to a row still moves focus, and the
+          // `onBlur` above still closes on that.
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          {error !== null ? (
+            <p className={styles.finderNote}>{error}</p>
+          ) : rows.length === 0 ? (
+            <p className={styles.finderNote}>
+              {query.trim() === ""
+                ? "No conversations yet. The first answer you keep starts one."
+                : `Nothing in your conversations says “${query.trim()}”. Titles, questions and answers are all searched.`}
+            </p>
+          ) : (
+            <ul className={styles.finderList}>
+              {rows.map((c) => (
+                <li key={c.id}>
+                  <button
+                    type="button"
+                    className={styles.finderRow}
+                    onClick={() => choose(c.id)}
+                  >
+                    <span className={styles.finderTitle}>{c.title}</span>
+                    <span className={styles.finderMeta}>
+                      {age(c.updatedMs)} · {c.turns} {c.turns === 1 ? "turn" : "turns"}
+                      {/* Which turn matched, because "somewhere in nine" and
+                          "in the first thing you asked" are different answers
+                          to "is this the one?". */}
+                      {c.matchedTurn !== null && ` · matched in turn ${c.matchedTurn}`}
+                    </span>
+                    {c.snippet !== null && (
+                      <span className={styles.finderSnippet}>{c.snippet}</span>
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

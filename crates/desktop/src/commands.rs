@@ -647,6 +647,7 @@ const COMMAND_NAMES: &[&str] = &[
     "start_semantic_backfill",
     "stop_semantic_backfill",
     "list_conversations",
+    "search_conversations",
     "load_conversation",
     "save_turn",
     "rename_conversation",
@@ -800,7 +801,12 @@ mod tests {
         // 32 since `set_generator_model`, which writes one field of
         // `preferences.json` in Marrow's own data directory — the same reach
         // `set_ai_profile` already had, and nothing of the user's.
-        assert_eq!(COMMAND_NAMES.len(), 32);
+        //
+        // 33 since `search_conversations`, which reaches one `SELECT` over
+        // `conversations` and `conversation_turns` on a reader connection —
+        // rows Marrow wrote itself, and nothing of the user's disk. It reads
+        // strictly less than `load_conversation`, which was already here.
+        assert_eq!(COMMAND_NAMES.len(), 33);
         for n in COMMAND_NAMES {
             if DELIBERATE_MUTATIONS.contains(n) {
                 continue;
@@ -1133,6 +1139,28 @@ pub struct ConversationSummary {
     pub turns: i64,
 }
 
+/// One conversation a search matched, and the words that matched it.
+///
+/// The summary is flattened in rather than nested, so a search result and a
+/// row of the recent list are the same shape and render through one component.
+/// Two shapes would be two renderings, and the one used less often is the one
+/// that goes stale.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationMatch {
+    #[serde(flatten)]
+    pub conversation: ConversationSummary,
+    /// The text around the match, from the earliest turn that contains it.
+    ///
+    /// `null` when only the title matched — there, the title *is* the context.
+    /// Present otherwise because a result that matched turn nine of a thread
+    /// and shows only its name has told the reader nothing they did not already
+    /// see in the sidebar.
+    pub snippet: Option<String>,
+    /// Which turn the snippet came from, 1-based. `null` for a title match.
+    pub matched_turn: Option<i64>,
+}
+
 /// One exchange, restored.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1230,6 +1258,23 @@ pub async fn list_conversations(
 ) -> Res<Vec<ConversationSummary>> {
     let core = Arc::clone(&core);
     blocking(move || core.conversations(limit)).await
+}
+
+/// Find a conversation by what was said in it, not only by its name.
+///
+/// Read-only, and plain SQL: hard rule 10 covers this surface too, and a thread
+/// you can only find while a model is loaded is a thread you cannot find. An
+/// empty `query` is not a search — it returns the same recent list
+/// `list_conversations` does, so clearing the box restores the list rather than
+/// emptying it.
+#[tauri::command]
+pub async fn search_conversations(
+    core: State<'_, Arc<Core>>,
+    query: String,
+    limit: usize,
+) -> Res<Vec<ConversationMatch>> {
+    let core = Arc::clone(&core);
+    blocking(move || core.search_conversations(&query, limit)).await
 }
 
 #[tauri::command]

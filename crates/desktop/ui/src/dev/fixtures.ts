@@ -16,6 +16,7 @@ import type {
   AskEvent,
   Citation,
   ConversationDetail,
+  ConversationMatch,
   ConversationSummary,
   NewTurn,
   SavedTurn,
@@ -813,6 +814,31 @@ export async function mockInvoke<T>(
       return devModels() as T;
     case "list_conversations":
       return devConversations() as T;
+    case "search_conversations": {
+      // Mirrors the Rust: an empty query is the recent list, a match carries
+      // the words that matched, and only the title match has no snippet.
+      const q = String(args?.["query"] ?? "").trim().toLowerCase();
+      const recent = devConversations();
+      if (q === "") {
+        return recent.map((c) => ({ ...c, snippet: null, matchedTurn: null })) as T;
+      }
+      const out: ConversationMatch[] = [];
+      for (const c of recent) {
+        const turns = DEV_THREADS.get(c.id)?.turns ?? [];
+        const at = turns.findIndex(
+          (t) =>
+            t.question.toLowerCase().includes(q) || t.answer.toLowerCase().includes(q),
+        );
+        if (at >= 0) {
+          const t = turns[at];
+          const from = t?.question.toLowerCase().includes(q) ? t.question : t?.answer;
+          out.push({ ...c, snippet: `…${(from ?? "").slice(0, 160)}…`, matchedTurn: at + 1 });
+        } else if (c.title.toLowerCase().includes(q)) {
+          out.push({ ...c, snippet: null, matchedTurn: null });
+        }
+      }
+      return out as T;
+    }
     case "load_conversation": {
       const id = String(args?.["id"] ?? "");
       const found = DEV_THREADS.get(id);

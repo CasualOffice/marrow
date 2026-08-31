@@ -5,8 +5,8 @@ use marrow_index::{Fts5Index, TextIndex, TextQuery, VectorIndex};
 use marrow_store::Store;
 
 use crate::commands::{
-    to_hit, ConversationDetail, ConversationSummary, FileDetail, FileRow, IndexHealth, NewTurn,
-    Region, SavedTurn, SearchHit, SearchResponse, StoredTurn, WorkspaceRow,
+    to_hit, ConversationDetail, ConversationMatch, ConversationSummary, FileDetail, FileRow,
+    IndexHealth, NewTurn, Region, SavedTurn, SearchHit, SearchResponse, StoredTurn, WorkspaceRow,
 };
 
 /// Everything the commands need. Opened once at startup.
@@ -948,6 +948,107 @@ impl Core {
         )
     }
 
+    /// Conversations whose title or turns contain `query`, most recent first.
+    ///
+    /// **Plain SQL over `LIKE`, deliberately.** Hard rule 10 says search works
+    /// with no model, no GPU and no network, and a thread you cannot find again
+    /// is a thread you have lost — so this cannot depend on an embedding. Nor
+    /// on a new FTS table: that is a migration, and a migration over the one
+    /// table in this database that cannot be rebuilt from the user's files is
+    /// not something to run for a feature a scan already delivers. A few
+    /// hundred rows of someone's own writing takes SQLite well under a
+    /// millisecond; when a list is long enough for that to stop being true, an
+    /// FTS table over `conversation_turns` is the answer and it can be added
+    /// behind this signature without changing it.
+    ///
+    /// This lives here rather than beside [`list_conversations`] in
+    /// `marrow-store`, which is where it belongs and where the MCP server and
+    /// the CLI could reach it too. Move it there the moment a second frontend
+    /// wants it.
+    ///
+    /// [`list_conversations`]: marrow_store::conversations::list_conversations
+    pub fn search_conversations(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<ConversationMatch>> {
+        let needle = query.trim();
+        // An empty box is not a search for nothing — it is not a search. The
+        // recent list is what the sidebar shows for the same state, and a panel
+        // that emptied itself the moment the query was cleared would read as
+        // "you have no conversations".
+        if needle.is_empty() {
+            return Ok(self
+                .conversations(limit)?
+                .into_iter()
+                .map(|conversation| ConversationMatch {
+                    conversation,
+                    snippet: None,
+                    matched_turn: None,
+                })
+                .collect());
+        }
+
+        let limit = limit.clamp(1, marrow_store::conversations::MAX_LIST) as i64;
+        let pattern = like_pattern(needle);
+        let conn = self.store.reader()?;
+        // The `LEFT JOIN` carries the matching turn back with the row, so a hit
+        // deep in a thread arrives with the words that matched it. Matching a
+        // turn and returning only a title is the failure this replaces: the
+        // list is unusable precisely because every row already looks alike.
+        //
+        // Earliest matching ordinal rather than the last, because the first
+        // time something was discussed is what identifies the thread.
+        let mut stmt = conn
+            .prepare(
+                "SELECT c.conversation_id, c.title, c.scope, c.created_at, c.updated_at,
+                        (SELECT count(*) FROM conversation_turns t
+                          WHERE t.conversation_id = c.conversation_id),
+                        m.ordinal, m.question, m.answer
+                   FROM conversations c
+                   LEFT JOIN conversation_turns m
+                     ON m.turn_id = (
+                          SELECT t.turn_id FROM conversation_turns t
+                           WHERE t.conversation_id = c.conversation_id
+                             AND (t.question LIKE ?1 ESCAPE '\\'
+                               OR t.answer   LIKE ?1 ESCAPE '\\')
+                        ORDER BY t.ordinal
+                           LIMIT 1)
+                  WHERE c.status = 'ACTIVE'
+                    AND (c.title LIKE ?1 ESCAPE '\\' OR m.turn_id IS NOT NULL)
+               ORDER BY c.updated_at DESC
+                  LIMIT ?2",
+            )
+            .map_err(|e| marrow_store::map_sqlite(e, "Could not search your conversations."))?;
+
+        let lowered = needle.to_ascii_lowercase();
+        let rows = stmt
+            .query_map(marrow_store::rusqlite::params![pattern, limit], |r| {
+                let question: Option<String> = r.get(7)?;
+                let answer: Option<String> = r.get(8)?;
+                Ok(ConversationMatch {
+                    conversation: ConversationSummary {
+                        id: r.get(0)?,
+                        title: r.get(1)?,
+                        scope: r.get(2)?,
+                        created_ms: r.get(3)?,
+                        updated_ms: r.get(4)?,
+                        turns: r.get(5)?,
+                    },
+                    // The question first: it is what the thread is *about*, and
+                    // an answer's opening sentence often repeats it.
+                    snippet: question
+                        .as_deref()
+                        .and_then(|q| snippet_around(q, &lowered))
+                        .or_else(|| answer.as_deref().and_then(|a| snippet_around(a, &lowered))),
+                    matched_turn: r.get(6)?,
+                })
+            })
+            .and_then(|it| it.collect::<std::result::Result<Vec<_>, _>>())
+            .map_err(|e| marrow_store::map_sqlite(e, "Could not search your conversations."))?;
+        Ok(rows)
+    }
+
     pub fn conversation(&self, id: &str) -> Result<ConversationDetail> {
         let conn = self.store.reader()?;
         let (head, turns) = marrow_store::conversations::load_conversation(&conn, id)?;
@@ -1053,6 +1154,75 @@ fn decode_one<T: serde::de::DeserializeOwned>(json: &str, what: &str) -> Option<
             |e| tracing::warn!(error = %e, column = what, "stored conversation JSON did not parse"),
         )
         .ok()
+}
+
+/// A `LIKE` pattern matching `query` anywhere, with the wildcards the user
+/// typed treated as the characters they typed.
+///
+/// Without the escaping, a question containing `%` matches every conversation
+/// and one containing `_` matches any character in that position — a search box
+/// that quietly searches for something other than what is in it. `\` escapes
+/// itself for the same reason, and the statement must name it with `ESCAPE`
+/// because SQLite has no default escape character.
+fn like_pattern(query: &str) -> String {
+    let mut pattern = String::with_capacity(query.len() + 2);
+    pattern.push('%');
+    for c in query.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    pattern.push('%');
+    pattern
+}
+
+/// Roughly how much of a turn to show around a match.
+///
+/// Enough to be a sentence, short enough that ten results are still a list.
+const SNIPPET_CHARS: usize = 160;
+
+/// The words around the first occurrence of `lowered` in `text`.
+///
+/// `lowered` is ASCII-lowercased and so is the haystack here, because
+/// `to_ascii_lowercase` is exactly the case folding SQLite's `LIKE` does
+/// without ICU. Matching by any other rule would let the SQL return a row this
+/// function then finds nothing in, and the result would render with no context
+/// at all — which is the thing the snippet exists to prevent. It also leaves
+/// every byte offset valid in the original: ASCII folding cannot change a
+/// string's length, and `str::to_lowercase` can.
+fn snippet_around(text: &str, lowered: &str) -> Option<String> {
+    let at = text.to_ascii_lowercase().find(lowered)?;
+    let after = at + lowered.len();
+    // A third before the match and the rest after it: the words that follow a
+    // hit usually say more about it than the ones that precede it.
+    let before = SNIPPET_CHARS / 3;
+    let start = text[..at]
+        .char_indices()
+        .rev()
+        .nth(before)
+        .map_or(0, |(i, _)| i);
+    let end = text[after..]
+        .char_indices()
+        .nth(SNIPPET_CHARS - before)
+        .map_or(text.len(), |(i, _)| after + i);
+
+    // Collapsed, because an answer is Markdown: newlines and table pipes on one
+    // line of a result row are noise around the words that matched.
+    let mut snippet = text[start..end]
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if snippet.is_empty() {
+        return None;
+    }
+    if start > 0 {
+        snippet.insert(0, '…');
+    }
+    if end < text.len() {
+        snippet.push('…');
+    }
+    Some(snippet)
 }
 
 /// One chunk as a `TextHit`, for a candidate only the semantic branch found.
@@ -1192,5 +1362,193 @@ mod retrieval_tests {
         // Reducing it to nothing would turn a strange question into a refusal
         // rather than an empty result, and those read very differently.
         assert_eq!(retrieval_terms("what is it?"), "what is it?");
+    }
+}
+
+/// Finding a conversation again, which is the whole of what a list of two
+/// hundred rows is for.
+#[cfg(test)]
+mod conversation_search_tests {
+    use super::{like_pattern, snippet_around, Core};
+    use crate::commands::NewTurn;
+
+    /// A `Core` on a database of its own, with no workspace: conversations are
+    /// the one thing here that is not derived from a granted folder, so a
+    /// corpus would be scenery.
+    fn core() -> (tempfile::TempDir, Core) {
+        let dir = tempfile::tempdir().expect("data dir");
+        let core = Core::open(dir.path().join("marrow.db")).expect("open core");
+        (dir, core)
+    }
+
+    fn turn(question: &str, answer: &str) -> NewTurn {
+        NewTurn {
+            question: question.into(),
+            answer: answer.into(),
+            thorough: false,
+            model: None,
+            scope: None,
+            citations: vec![],
+            excluded: vec![],
+            usage: None,
+        }
+    }
+
+    /// Committed, because the search reads through a *reader* connection and
+    /// the writer batches. Without this the test would be racing the batch
+    /// interval and would pass or fail by timing.
+    fn commit(core: &Core) {
+        core.store().flush().expect("flush");
+    }
+
+    #[test]
+    fn a_conversation_is_found_by_what_was_said_in_it_not_only_by_its_name() {
+        // The reported failure: the list is ordered by recency and every row is
+        // a title, so a thread is findable only by whatever its *first*
+        // question happened to be. What was actually discussed is in turn nine.
+        let (_dir, core) = core();
+        let id = core
+            .save_turn(None, turn("How do I start?", "Open the app."))
+            .expect("first turn")
+            .id;
+        core.save_turn(
+            Some(id.clone()),
+            turn(
+                "And the deploy?",
+                "Run the ferrocyanide migration before anything else.",
+            ),
+        )
+        .expect("second turn");
+        commit(&core);
+
+        let found = core
+            .search_conversations("ferrocyanide", 50)
+            .expect("search");
+        assert_eq!(found.len(), 1, "the word is in the thread and nowhere else");
+        assert_eq!(found[0].conversation.id, id);
+        assert_eq!(found[0].conversation.title, "How do I start?");
+        assert_eq!(found[0].matched_turn, Some(2), "which turn said it");
+        let snippet = found[0].snippet.as_deref().expect("a match has context");
+        assert!(
+            snippet.contains("ferrocyanide"),
+            "the snippet must contain the words that matched: {snippet:?}"
+        );
+    }
+
+    #[test]
+    fn a_title_match_needs_no_snippet_and_a_turn_match_does() {
+        let (_dir, core) = core();
+        // Renamed, so the title says something none of the turns do. A derived
+        // title repeats the first question verbatim and every title match would
+        // also be a turn match, which would test nothing.
+        let id = core
+            .save_turn(None, turn("Anything I should know?", "Nothing to report."))
+            .expect("save")
+            .id;
+        core.rename_conversation(id, "Lease renewal".into())
+            .expect("rename");
+        commit(&core);
+
+        let by_title = core.search_conversations("lease", 50).expect("search");
+        assert_eq!(by_title.len(), 1, "titles match case-insensitively");
+        assert_eq!(
+            by_title[0].snippet, None,
+            "for a title match the title is the context"
+        );
+        assert_eq!(by_title[0].matched_turn, None);
+
+        let by_answer = core.search_conversations("report", 50).expect("search");
+        assert_eq!(by_answer[0].matched_turn, Some(1));
+        assert!(by_answer[0].snippet.is_some());
+    }
+
+    #[test]
+    fn an_empty_query_is_not_a_search_for_nothing() {
+        // Clearing the box must restore the recent list. Returning zero rows
+        // would read as "you have no conversations", which is a different and
+        // much more alarming statement.
+        let (_dir, core) = core();
+        core.save_turn(None, turn("One", "a")).expect("save");
+        core.save_turn(None, turn("Two", "b")).expect("save");
+        commit(&core);
+
+        let all = core.search_conversations("   ", 50).expect("search");
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().all(|m| m.snippet.is_none()));
+        let searched: Vec<&str> = all.iter().map(|m| m.conversation.id.as_str()).collect();
+        let listed = core.conversations(50).expect("list");
+        let recent: Vec<&str> = listed.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            searched, recent,
+            "the same rows, in the same order, as the ordinary list"
+        );
+    }
+
+    #[test]
+    fn a_wildcard_in_the_query_is_a_character_not_a_pattern() {
+        // `%` is `LIKE`'s "anything", so an unescaped one turns a search into a
+        // list of everything — a box that quietly searches for something other
+        // than what is in it.
+        let (_dir, core) = core();
+        core.save_turn(None, turn("Coverage is 90% today", "Yes."))
+            .expect("save");
+        core.save_turn(None, turn("Unrelated", "No."))
+            .expect("save");
+        commit(&core);
+
+        let hits = core.search_conversations("90%", 50).expect("search");
+        assert_eq!(hits.len(), 1, "one conversation says 90%, not both");
+        assert_eq!(hits[0].conversation.title, "Coverage is 90% today");
+
+        // A bare `%` is a search for a per-cent sign. Unescaped it would be
+        // `LIKE '%%%'`, which is every row — the search box answering a
+        // question nobody asked.
+        let per_cent = core.search_conversations("%", 50).expect("search");
+        assert_eq!(per_cent.len(), 1);
+        assert_eq!(per_cent[0].conversation.title, "Coverage is 90% today");
+        assert_eq!(like_pattern("90%_\\"), "%90\\%\\_\\\\%");
+    }
+
+    #[test]
+    fn a_deleted_conversation_stays_out_of_the_results() {
+        // Soft delete or not, a thread the list says is gone must not come back
+        // through the search box.
+        let (_dir, core) = core();
+        let gone = core
+            .save_turn(None, turn("Vanishing", "quicksilver"))
+            .expect("save")
+            .id;
+        core.delete_conversation(gone).expect("delete");
+        commit(&core);
+
+        assert!(core
+            .search_conversations("quicksilver", 50)
+            .expect("search")
+            .is_empty());
+    }
+
+    #[test]
+    fn a_snippet_is_a_window_around_the_match_not_the_whole_answer() {
+        let long = format!("{} needle {}", "lorem ".repeat(200), "ipsum ".repeat(200));
+        let snippet = snippet_around(&long, "needle").expect("a window");
+        assert!(snippet.contains("needle"));
+        assert!(snippet.starts_with('…') && snippet.ends_with('…'));
+        assert!(
+            snippet.chars().count() < 220,
+            "a result row is a line, not an answer: {}",
+            snippet.chars().count()
+        );
+        // Multi-byte text must not be sliced through a character. `find` on an
+        // ASCII-folded copy can only land on a boundary, and this is the test
+        // that says so rather than a comment claiming it.
+        assert_eq!(
+            snippet_around("naïve — RÉSUMÉ notes", "résumé"),
+            None,
+            "ASCII folding is what LIKE does, so É is not é to either of them"
+        );
+        assert_eq!(
+            snippet_around("naïve — RESUME notes", "resume").as_deref(),
+            Some("naïve — RESUME notes")
+        );
     }
 }

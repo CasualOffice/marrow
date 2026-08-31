@@ -895,6 +895,24 @@ export interface ConversationSummary {
   readonly turns: number;
 }
 
+/**
+ * Mirrors `commands::ConversationMatch` — one conversation a search matched.
+ *
+ * Extends the summary rather than wrapping it, which is what the flattened
+ * Rust struct serialises to: a result and a recent row are the same shape, so
+ * one component renders both and neither can go stale on its own.
+ */
+export interface ConversationMatch extends ConversationSummary {
+  /**
+   * The text around the match, from the earliest turn containing it.
+   *
+   * `null` when only the title matched — there the title *is* the context.
+   */
+  readonly snippet: string | null;
+  /** Which turn the snippet came from, 1-based. `null` for a title match. */
+  readonly matchedTurn: number | null;
+}
+
 /** Mirrors `commands::TurnUsage`, which mirrors the `done` event. */
 export interface TurnUsage {
   readonly promptTokens: number;
@@ -967,6 +985,21 @@ export interface SavedTurn {
 
 export function listConversations(limit = 200): Promise<ConversationSummary[]> {
   return call<ConversationSummary[]>("list_conversations", { limit });
+}
+
+/**
+ * Find a conversation by what was said in it, not only by its name.
+ *
+ * Plain SQL in Rust: no model, no network, nothing to warm up (hard rule 10).
+ * An empty `query` is not a search — it returns the same recent list
+ * `listConversations` does, so clearing the box restores the list instead of
+ * emptying it.
+ */
+export function searchConversations(
+  query: string,
+  limit = 200,
+): Promise<ConversationMatch[]> {
+  return call<ConversationMatch[]>("search_conversations", { query, limit });
 }
 
 export function loadConversation(id: string): Promise<ConversationDetail> {
