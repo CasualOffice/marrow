@@ -187,6 +187,236 @@ function useTheme(): string {
   return theme;
 }
 
+/* ── getting it back out ─────────────────────────────────────────────────────
+ *
+ * An artefact you cannot take anywhere is a screenshot with extra steps. The
+ * diagram leaves as SVG or PNG, the generated page as `.html`.
+ */
+
+/**
+ * Hand a finished file to the user.
+ *
+ * **Deliberately a browser download and not a save dialog.**
+ * `crates/desktop/capabilities/main.json` grants this WebView `core:default`
+ * and nothing else, because SEC-012 is that the window rendering model output
+ * has no filesystem affordance at all — only named Rust commands. Neither
+ * `@tauri-apps/plugin-dialog` nor `@tauri-apps/plugin-fs` is a dependency, and
+ * adding one would mean handing filesystem permissions to precisely the window
+ * that must not have them, to save three files. The cost is that the user does
+ * not choose the folder; the download lands wherever the WebView puts them.
+ */
+function download(name: string, blob: Blob): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.rel = "noopener";
+  // WebKit ignores a click on a node that is not in the document, so it has to
+  // be attached for the length of the call and gone immediately after.
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoking in the same turn cancels the download it was created for. The
+  // read has long since started by the time this fires.
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+/**
+ * The artefact's title as a filename.
+ *
+ * Titles come from the model, so they contain slashes, colons, newlines and
+ * emoji — and `a.download` takes a *filename*, not a path: a title with a `/`
+ * in it is silently truncated to whatever followed the last one.
+ */
+function filename(title: string, extension: string): string {
+  const stem = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+  return `${stem === "" ? "artifact" : stem}.${extension}`;
+}
+
+/**
+ * UTF-8 safe base64.
+ *
+ * `btoa` throws on the first character outside Latin-1, which for a diagram is
+ * any label containing an em dash.
+ */
+function base64(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  // In chunks: spreading a whole large diagram into `fromCharCode` overflows
+  // the argument list, and a large diagram is when an export matters most.
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
+}
+
+interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+function parseViewBox(svg: Element): Box | null {
+  const [x, y, w, h] = (svg.getAttribute("viewBox") ?? "")
+    .trim()
+    .split(/[\s,]+/)
+    .map(Number);
+  if (x === undefined || y === undefined || w === undefined || h === undefined) {
+    return null;
+  }
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !(w > 0) || !(h > 0)) {
+    return null;
+  }
+  return { x, y, w, h };
+}
+
+/**
+ * The size to give a drawing that is about to leave the app.
+ *
+ * Mermaid sizes its SVG for a *container*: `width="100%"`, with the real extent
+ * only in the `viewBox`. That is right on screen and wrong in a file — an SVG
+ * with no intrinsic size opens at whatever the viewer guesses, and `drawImage`
+ * of one rasterises to an empty canvas rather than failing.
+ */
+function extent(svg: Element): Box | null {
+  const view = parseViewBox(svg);
+  const px = (raw: string | null) => {
+    // A percentage is a fraction of a container the file will not have.
+    if (raw === null || raw.includes("%")) return NaN;
+    const n = Number.parseFloat(raw);
+    return Number.isFinite(n) && n > 0 ? n : NaN;
+  };
+  const w = px(svg.getAttribute("width"));
+  const h = px(svg.getAttribute("height"));
+  if (Number.isFinite(w) && Number.isFinite(h)) {
+    return { x: view?.x ?? 0, y: view?.y ?? 0, w, h };
+  }
+  return view;
+}
+
+/** The colour a diagram was drawn against, so it goes with it. */
+function paperColour(): string {
+  return (
+    getComputedStyle(document.documentElement).getPropertyValue("--sheet").trim() ||
+    "#ffffff"
+  );
+}
+
+/**
+ * Mermaid's markup, turned into a file that stands on its own.
+ *
+ * `DOMParser` in `image/svg+xml` mode builds a detached tree and runs nothing:
+ * no script, no subresource loads, no reference to this document. That is the
+ * only acceptable way to touch this markup — it was drawn from model output,
+ * and an export is not a reason to start executing it.
+ */
+function standalone(markup: string): { xml: string; box: Box } {
+  const doc = new DOMParser().parseFromString(markup, "image/svg+xml");
+  const svg = doc.documentElement;
+  if (doc.getElementsByTagName("parsererror").length > 0 || svg.localName !== "svg") {
+    throw new Error("the drawing could not be read back");
+  }
+
+  const box = extent(svg);
+  if (!box) throw new Error("the drawing has no size to export at");
+
+  svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  svg.setAttribute("width", String(Math.round(box.w)));
+  svg.setAttribute("height", String(Math.round(box.h)));
+  svg.setAttribute("viewBox", `${box.x} ${box.y} ${box.w} ${box.h}`);
+
+  // Mermaid pins `max-width` inline so a drawing fits the panel it is in. Left
+  // in a file, that is the one rule that makes it open at the wrong size in
+  // every viewer that is not this panel.
+  const style = svg.getAttribute("style");
+  if (style !== null) {
+    svg.setAttribute("style", style.replace(/max-width\s*:[^;]*;?/gi, "").trim());
+  }
+
+  /*
+   * The paper, painted in.
+   *
+   * Diagrams are drawn on `background: transparent` so they sit on the panel.
+   * Exported that way a dark-theme diagram is pale text on nothing: it lands in
+   * a document as an apparently empty rectangle, and the user has no way to
+   * tell that from a failed export.
+   */
+  const paper = doc.createElementNS("http://www.w3.org/2000/svg", "rect");
+  paper.setAttribute("x", String(box.x));
+  paper.setAttribute("y", String(box.y));
+  paper.setAttribute("width", String(box.w));
+  paper.setAttribute("height", String(box.h));
+  paper.setAttribute("fill", paperColour());
+  svg.insertBefore(paper, svg.firstChild);
+
+  const xml = new XMLSerializer().serializeToString(doc);
+  return { xml: `<?xml version="1.0" encoding="UTF-8"?>\n${xml}`, box };
+}
+
+/**
+ * Twice the drawing's own size, so the labels are still legible when the image
+ * is dropped into a document at its natural size and then looked at on a
+ * retina display. Anything less and a PNG export is a worse copy of the SVG for
+ * no reason.
+ */
+const PNG_RATIO = 2;
+
+async function rasterise(xml: string, box: Box): Promise<Blob> {
+  const image = new Image();
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error("the drawing could not be rasterised"));
+    // The CSP in `tauri.conf.json` is `img-src 'self' data:` — an object URL
+    // here is blocked outright, so the drawing goes in base64-encoded even
+    // though the blob would be cheaper.
+    image.src = `data:image/svg+xml;base64,${base64(xml)}`;
+  });
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(box.w * PNG_RATIO));
+  canvas.height = Math.max(1, Math.round(box.h * PNG_RATIO));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("this window has no 2D canvas");
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+  return await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) =>
+        blob ? resolve(blob) : reject(new Error("the image could not be encoded")),
+      "image/png",
+    );
+  });
+}
+
+/**
+ * A transient line of text under a control, and the reason exports never throw.
+ *
+ * A save that fails must not take the artefact with it: the panel still has the
+ * thing in it, and losing the diagram because the *copy* of it failed is by
+ * some distance the worse of the two outcomes.
+ */
+function useNotice(): [string | null, (text: string) => void] {
+  const [notice, setNotice] = useState<string | null>(null);
+  const timer = useRef(0);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const say = useCallback((text: string) => {
+    setNotice(text);
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setNotice(null), 3000);
+  }, []);
+  return [notice, say];
+}
+
+/** What went wrong, said as a cause rather than as a stack. */
+function why(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 let diagramSeq = 0;
 
 /** How far a diagram may be shrunk or enlarged, and by how much per step. */
@@ -196,10 +426,12 @@ const ZOOM_STEP = 1.25;
 
 const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
 
-function Diagram({ source }: { source: string }) {
+function Diagram({ source, name }: { source: string; name: string }) {
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
+  const [saving, setSaving] = useState(false);
+  const [notice, say] = useNotice();
   const id = useMemo(() => `mmd-${(diagramSeq += 1)}`, []);
   const theme = useTheme();
 
@@ -217,6 +449,18 @@ function Diagram({ source }: { source: string }) {
             // exactly what untrusted output must not have.
             securityLevel: "strict",
             theme: "base",
+            /*
+             * Labels as SVG `<text>`, not HTML inside a `<foreignObject>`.
+             *
+             * WebKit draws nothing inside a foreignObject when an SVG is used
+             * as an *image* — which is exactly how the PNG export rasterises
+             * it. With mermaid's default the exported picture came out as
+             * boxes and arrows with every label missing, and the failure is
+             * silent: the file saves, it is just wrong. Turning it off also
+             * means the file on disk is the drawing on screen rather than a
+             * second rendering path that can drift from it.
+             */
+            htmlLabels: false,
             themeVariables: themeVariables(),
           });
           return m.render(`${id}-${theme}`, source);
@@ -258,6 +502,37 @@ function Diagram({ source }: { source: string }) {
     setZoom((z) => clampZoom(z * Math.exp(-e.deltaY / 400)));
   }, []);
 
+  /**
+   * Save the drawing as it is on screen.
+   *
+   * The rendered SVG is already in state, so neither format re-runs mermaid and
+   * neither one depends on the zoom: what leaves is the drawing at its own
+   * size, not at the size the reader happens to be looking at it.
+   */
+  const save = useCallback(
+    (format: "svg" | "png") => {
+      if (svg === null || saving) return;
+      setSaving(true);
+      void (async () => {
+        try {
+          const { xml, box } = standalone(svg);
+          const file = filename(name, format);
+          if (format === "svg") {
+            download(file, new Blob([xml], { type: "image/svg+xml;charset=utf-8" }));
+          } else {
+            download(file, await rasterise(xml, box));
+          }
+          say(`Saved ${file}`);
+        } catch (e: unknown) {
+          say(`Could not save it — ${why(e)}.`);
+        } finally {
+          setSaving(false);
+        }
+      })();
+    },
+    [name, saving, say, svg],
+  );
+
   if (error) {
     return (
       <figure className={styles.diagramFailed}>
@@ -280,13 +555,28 @@ function Diagram({ source }: { source: string }) {
         onWheel={onWheel}
         dangerouslySetInnerHTML={{ __html: svg }}
       />
-      <div className={styles.zoom} role="group" aria-label="Diagram zoom">
-        <button type="button" onClick={() => nudge(-1)} disabled={zoom <= MIN_ZOOM}
-                title="Zoom out" aria-label="Zoom out">−</button>
-        <button type="button" className={styles.zoomLevel} onClick={() => setZoom(1)}
-                title="Reset to fit">{Math.round(zoom * 100)}%</button>
-        <button type="button" onClick={() => nudge(1)} disabled={zoom >= MAX_ZOOM}
-                title="Zoom in" aria-label="Zoom in">+</button>
+      <div className={styles.controls}>
+        {/* Always in the tree, never conditionally mounted: a live region that
+            appears at the same moment as its text is one a screen reader has
+            no chance to announce. */}
+        <p className={styles.notice} role="status">{notice ?? ""}</p>
+        <div className={styles.zoom} role="group" aria-label="Diagram controls">
+          <button type="button" onClick={() => nudge(-1)} disabled={zoom <= MIN_ZOOM}
+                  title="Zoom out" aria-label="Zoom out">−</button>
+          <button type="button" className={styles.zoomLevel} onClick={() => setZoom(1)}
+                  title="Reset to fit">{Math.round(zoom * 100)}%</button>
+          <button type="button" onClick={() => nudge(1)} disabled={zoom >= MAX_ZOOM}
+                  title="Zoom in" aria-label="Zoom in">+</button>
+          {/* Same pill: looking at the diagram and taking it away are one job,
+              and a second floating group would say they were two. */}
+          <span className={styles.sep} aria-hidden="true" />
+          <button type="button" className={styles.saveBtn} onClick={() => save("svg")}
+                  disabled={saving} title="Save the drawing as an SVG file"
+                  aria-label="Save as SVG">SVG</button>
+          <button type="button" className={styles.saveBtn} onClick={() => save("png")}
+                  disabled={saving} title={`Save the drawing as a PNG at ${PNG_RATIO}×`}
+                  aria-label="Save as PNG">PNG</button>
+        </div>
       </div>
     </>
   );
@@ -400,6 +690,7 @@ function Panel({ artifact }: { artifact: Artifact }) {
 
   const panel = useRef<HTMLElement>(null);
   const [copied, setCopied] = useState(false);
+  const [saved, setSaved] = useState<"ok" | "failed" | null>(null);
   /** The left edge of the column the panel is resizing within, while dragging. */
   const dragFrom = useRef<{ right: number; available: number } | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -478,6 +769,28 @@ function Panel({ artifact }: { artifact: Artifact }) {
 
   const summary = artifactSummary(artifact.kind, artifact.source);
 
+  /**
+   * The generated page, written out as a file.
+   *
+   * Straight from the string we already hold — the sandboxed frame is never
+   * asked for its DOM, so exporting the page never involves running it outside
+   * the sandbox. `text/html` rather than an octet stream because the file is
+   * going to be opened in a browser, and a download the OS cannot type is one
+   * the user has to rename before they can look at it.
+   */
+  const savePage = () => {
+    try {
+      download(
+        filename(artifact.title, "html"),
+        new Blob([artifact.source], { type: "text/html;charset=utf-8" }),
+      );
+      setSaved("ok");
+    } catch {
+      setSaved("failed");
+    }
+    window.setTimeout(() => setSaved(null), 2400);
+  };
+
   return (
     <aside
       ref={panel}
@@ -551,6 +864,15 @@ function Panel({ artifact }: { artifact: Artifact }) {
           {copied ? "Copied" : "Copy"}
         </button>
 
+        {/* Only for pages. A diagram's exports live on the diagram itself,
+            beside the zoom, because SVG and PNG are things you do to the
+            *drawing* — what this button saves is the source. */}
+        {artifact.kind === "html" && (
+          <button type="button" className={styles.ghost} onClick={savePage}>
+            {saved === "ok" ? "Saved" : saved === "failed" ? "Couldn’t save" : "Save"}
+          </button>
+        )}
+
         <button
           type="button"
           className={styles.iconBtn}
@@ -579,7 +901,7 @@ function Panel({ artifact }: { artifact: Artifact }) {
           <Page source={artifact.source} streaming={artifact.streaming} />
         ) : (
           <div className={styles.diagramScroll}>
-            <Diagram source={artifact.source} />
+            <Diagram source={artifact.source} name={artifact.title} />
           </div>
         )}
       </div>

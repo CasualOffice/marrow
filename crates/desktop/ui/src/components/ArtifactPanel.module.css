@@ -252,19 +252,41 @@
 }
 
 /* Sits over the diagram rather than in the flow, so it does not move when the
-   drawing resizes underneath it. */
-.zoom {
+   drawing resizes underneath it. The notice rides along with the pill so a
+   failed export is read where the button that failed is. */
+.controls {
   position: sticky;
   bottom: var(--sp-3);
   align-self: flex-end;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-3);
+  /* Over the drawing, which grows underneath it as the zoom changes. */
+  z-index: var(--z-accent);
+  /* Bottom-right of the scroller even when the diagram is narrower than it. */
+  margin-left: auto;
+  max-width: 100%;
+  pointer-events: none;
+}
+
+.controls > * {
+  pointer-events: auto;
+}
+
+.zoom {
   display: flex;
   align-items: center;
   gap: 2px;
   padding: 2px;
   border: 1px solid var(--line);
   border-radius: var(--r-surf);
-  background: var(--surface);
-  box-shadow: var(--shadow-1, 0 1px 3px rgb(0 0 0 / 12%));
+  /* The panel's own paper, not a token that does not exist: `--surface`,
+     `--ink-*`, `--shadow-1` and `--tint-hover` are not in `tokens.css`, and an
+     undefined custom property computes to nothing — which left this pill
+     transparent over the drawing it is supposed to sit on top of. */
+  background: var(--sheet);
+  box-shadow: var(--el2);
 }
 
 .zoom button {
@@ -273,14 +295,14 @@
   border: 0;
   border-radius: calc(var(--r-surf) - 2px);
   background: transparent;
-  color: var(--ink-2);
+  color: var(--fg2);
   font-size: var(--fs-xs);
   cursor: pointer;
 }
 
 .zoom button:hover:not(:disabled) {
-  background: var(--tint-hover, rgb(127 127 127 / 12%));
-  color: var(--ink-1);
+  background: var(--hover);
+  color: var(--fg);
 }
 
 .zoom button:disabled {
@@ -291,6 +313,39 @@
 .zoomLevel {
   min-width: 46px;
   font-variant-numeric: tabular-nums;
+}
+
+/* Zooming and exporting are one group with two jobs; the hairline says so
+   without splitting the pill into two floating things. */
+.sep {
+  align-self: stretch;
+  width: 1px;
+  margin: 3px 2px;
+  background: var(--line);
+}
+
+.saveBtn {
+  padding: 0 var(--sp-3);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--ls-tight);
+}
+
+/* Whether the file was written, or why it was not. Collapsed when it has
+   nothing to say — it stays mounted so a screen reader can announce into it. */
+.notice {
+  margin: 0;
+  padding: 3px var(--sp-3);
+  border-radius: var(--r-ctrl);
+  background: var(--sheet);
+  box-shadow: var(--el1);
+  color: var(--fg3);
+  font-size: var(--fs-micro);
+  line-height: var(--lh-tight);
+  text-align: right;
+}
+
+.notice:empty {
+  display: none;
 }
 
 /* A diagram that will not draw shows its source rather than vanishing. */
