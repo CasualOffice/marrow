@@ -1610,13 +1610,33 @@ fn answer_budget(
     let fixed = prompt.saturating_add(thinking);
 
     // Walk down from the ceiling to the floor, asking each time whether the
-    // whole conversation — prompt, thinking and answer — still fits. Halving
-    // rather than stepping keeps this to three probes; the estimate is
-    // conservative enough that a finer search would be false precision.
+    // conversation's **KV** still fits. Halving rather than stepping keeps this
+    // to three probes; the estimate is conservative enough that a finer search
+    // would be false precision.
+    //
+    // **Only the KV, because only the KV is still to be paid for.** This runs
+    // with the model already loaded, so its weights, its runtime overhead and
+    // the embedding model are resident — they are part of what is *used*, not
+    // what is free — and `headroom_bytes` is memory deliberately left alone
+    // rather than memory being asked for. `Requirement::total()` is all four
+    // plus the KV, and that number answers a different question: "can this
+    // machine load this model at all". Asking it here made every answer pay for
+    // the model a second time, beside itself.
+    //
+    // The arithmetic is why every footer read the same. A 4B q4 model is about
+    // 2.5 GB of weights and unified-memory headroom is another 2.5 GB, so the
+    // check wanted roughly 6 GB free before it would consider *any* answer
+    // length. A 16 GB laptop with a browser open has less, so the walk failed
+    // at 4,096, failed at 2,048, and floored at 1,024 — on every question,
+    // reported as `993 tokens ... cut off at the token limit` every time.
+    //
+    // Half of what is free, not all of it. The KV is what this decision
+    // allocates, and planning to consume everything that happens to be free at
+    // one instant is how a laptop is pushed into swap by a long answer.
     let mut answer = CEILING;
     while answer > FLOOR {
         let shape = entry.shape(fixed.saturating_add(answer), KvPrecision::F16);
-        if Requirement::estimate(machine, &shape).total() <= available_bytes {
+        if Requirement::estimate(machine, &shape).kv_cache_bytes <= available_bytes / 2 {
             break;
         }
         answer /= 2;
@@ -1834,6 +1854,33 @@ mod tests {
         assert!(
             budget > 1_024,
             "a 29 KB prompt collapsed the answer to the floor again, got {budget}"
+        );
+    }
+
+    #[test]
+    fn a_resident_model_is_not_charged_for_its_own_weights_again() {
+        // **The reported case, and it is every run on a real desktop.** By the
+        // time this is called the model is loaded: its weights, its runtime
+        // overhead and the embedding model are resident, and the headroom
+        // reserve is the memory deliberately *not* being used. All four are in
+        // `Requirement::total()`, and comparing that against what is free
+        // demands the machine fit the model a second time beside itself.
+        //
+        // A 4B q4 model is about 2.5 GB of weights and the unified-memory
+        // headroom is another 2.5 GB, so the check needed roughly 6 GB free
+        // before it would even consider the answer. A 16 GB laptop with a
+        // browser open does not have that, so the walk failed at 4,096, failed
+        // at 2,048 and floored at 1,024 — on every question, which is exactly
+        // what the footers said: `993 tokens ... cut off at the token limit`,
+        // over and over.
+        //
+        // Four gigabytes free is an ordinary desktop, not a starved one.
+        let (m, _) = roomy();
+        let free = 4 * 1_024 * 1_024 * 1_024;
+        let budget = answer_budget(&m, &qwen(), &envelope_of(29 * 1024), false, free);
+        assert!(
+            budget > 1_024,
+            "an ordinary desktop was given the floor again, got {budget}"
         );
     }
 
