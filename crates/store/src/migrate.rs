@@ -116,10 +116,27 @@ fn backup_prefix(db: &Path) -> String {
     format!("{stem}.backup-")
 }
 
+/// How many pre-migration backups to keep.
+///
+/// The comment this replaces said "nothing prunes these yet: an M1 database is
+/// a few megabytes and a lost backup is unrecoverable, so keeping them all is
+/// the cheap side of the trade." That was true when it was written and stopped
+/// being true without anyone noticing: on a real corpus the database reached
+/// 4.3 GB and its four kept backups came to 4.2 GB, which is most of what
+/// filled a disk — and a full disk stops SQLite writing at all, so the
+/// mechanism protecting the index was the thing taking it down.
+///
+/// Two, not one. One backup means the *current* migration is recoverable and
+/// nothing before it, and a schema fault is often noticed a migration late.
+/// Two costs one more copy and covers the case where the last upgrade was the
+/// one that did the damage.
+pub const KEEP_BACKUPS: usize = 2;
+
 /// Every pre-migration backup that exists for `db`, oldest name first.
 ///
-/// Nothing prunes these yet: an M1 database is a few megabytes and a lost
-/// backup is unrecoverable, so keeping them all is the cheap side of the trade.
+/// Name order is time order: the filename carries an epoch-millisecond stamp,
+/// which is why pruning can trust a lexical sort rather than asking the
+/// filesystem for mtimes it may not have preserved through a copy.
 pub fn backups_for(db: &Path) -> Result<Vec<PathBuf>> {
     let dir = match db.parent() {
         Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
@@ -283,7 +300,18 @@ pub(crate) fn open_migrated_with(
     };
 
     match apply(&mut conn, current, migrations) {
-        Ok(v) => Ok((conn, v)),
+        Ok(v) => {
+            // **After success, never before.** The whole point of the backup is
+            // the window between "about to change the schema" and "the changed
+            // schema is known good"; pruning inside that window would delete
+            // the thing being relied on. By here the migration has applied and
+            // the backup just taken is the newest, so it is one of the ones
+            // kept.
+            if let Some((_, db)) = &backup {
+                prune_backups(db);
+            }
+            Ok((conn, v))
+        }
         Err(e) => {
             drop(conn); // release the file before overwriting it
             if let Some((backup, db)) = &backup {
@@ -305,6 +333,32 @@ pub(crate) fn open_migrated_with(
                  if it persists, delete the index directory to rebuild from your files.",
             )
             .with_context(e.to_string()))
+        }
+    }
+}
+
+/// Delete all but the newest [`KEEP_BACKUPS`] backups of `db`.
+///
+/// **Never fails the migration.** A backup that cannot be listed or removed is
+/// wasted disk, and wasted disk is not a reason to refuse an index that has
+/// just migrated successfully. Every failure here is logged and swallowed.
+fn prune_backups(db: &Path) {
+    let all = match backups_for(db) {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not list old backups to prune");
+            return;
+        }
+    };
+    let Some(surplus) = all.len().checked_sub(KEEP_BACKUPS) else {
+        return;
+    };
+    for old in all.iter().take(surplus) {
+        match std::fs::remove_file(old) {
+            Ok(()) => tracing::info!(backup = %old.display(), "pruned an old pre-migration backup"),
+            Err(e) => {
+                tracing::warn!(error = %e, backup = %old.display(), "could not prune a backup")
+            }
         }
     }
 }
@@ -361,6 +415,48 @@ mod tests {
             )
             .unwrap();
         assert!(created.parse::<i64>().unwrap() > 1_700_000_000_000);
+    }
+
+    #[test]
+    fn backups_are_pruned_to_a_bound_but_never_below_it() {
+        // The comment that used to sit on `backups_for` said keeping every
+        // backup was "the cheap side of the trade", and it was — for a database
+        // of a few megabytes. On a real corpus the index reached 4.3 GB and its
+        // four kept backups came to 4.2 GB, which is most of what filled a
+        // disk. A full disk stops SQLite writing, so the mechanism that exists
+        // to protect the index was the thing taking it down.
+        let dir = tmp();
+        let db = dir.path().join("marrow.sqlite");
+
+        // Older backups than any migration would leave behind, named so that
+        // the lexical sort the pruner relies on puts them oldest-first.
+        for stamp in ["1000000000000-v0", "1000000000001-v1", "1000000000002-v2"] {
+            std::fs::write(
+                dir.path()
+                    .join(format!("marrow.sqlite.backup-{stamp}.sqlite")),
+                b"old",
+            )
+            .unwrap();
+        }
+        assert_eq!(backups_for(&db).unwrap().len(), 3);
+
+        // A real migration: takes one more, then prunes.
+        drop(open_migrated(&Location::File(db.clone())).unwrap());
+
+        let left = backups_for(&db).unwrap();
+        assert_eq!(
+            left.len(),
+            KEEP_BACKUPS,
+            "pruning did not bound the backups: {left:?}"
+        );
+        // And it kept the newest, not whichever the filesystem listed first.
+        // The one this migration just took is the newest of all, so it must
+        // survive its own pruning.
+        assert!(
+            left.iter()
+                .all(|p| !p.to_string_lossy().contains("1000000000000")),
+            "the oldest backup outlived a newer one: {left:?}"
+        );
     }
 
     #[test]
