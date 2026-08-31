@@ -196,15 +196,53 @@ export function AskView() {
    * Follow the stream, but stop the moment the user scrolls up. Yanking
    * someone back to the bottom while they are reading is the single most
    * irritating thing a streaming view can do.
+   *
+   * **Decided from the gesture, not from where the scroller ended up**, which
+   * is what it used to do and why scrolling during a stream was impossible.
+   * `scroll` events are dispatched asynchronously, and this layout effect has
+   * no dependency array — it runs after every render, which during a stream is
+   * many times a second, synchronously before paint. So the order was:
+   *
+   *   1. the user scrolls up; the browser moves `scrollTop` and *queues* a
+   *      scroll event
+   *   2. a token arrives, React re-renders, and this effect slams `scrollTop`
+   *      back to the bottom before that event is ever delivered
+   *   3. the handler finally runs, measures a scroller that is now at the
+   *      bottom, and concludes the user wants to stick
+   *
+   * The user's scroll was undone and then read as consent to undo it. `wheel`
+   * and `touchmove` fire *before* the scroll is applied and are unambiguously a
+   * person, so they release the lock outright and nothing can re-take it until
+   * the user comes back to the bottom themselves.
    */
+  const selfScrolling = useRef(false);
+
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
+    if (!el || !stickToBottom.current) return;
+    const bottom = el.scrollHeight - el.clientHeight;
+    // Only when it actually has to move. Assigning the position it already
+    // holds fires no event, and the guard below would then swallow the user's
+    // next real scroll instead.
+    if (Math.abs(el.scrollTop - bottom) < 1) return;
+    selfScrolling.current = true;
+    el.scrollTop = bottom;
   });
+
+  /** The user took hold of the scroller. */
+  const release = useCallback(() => {
+    stickToBottom.current = false;
+  }, []);
 
   const onScroll = useCallback(() => {
     const el = scroller.current;
     if (!el) return;
+    if (selfScrolling.current) {
+      // Ours, not theirs. Following the stream must not read as a decision to
+      // follow the stream.
+      selfScrolling.current = false;
+      return;
+    }
     stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
   }, []);
 
@@ -502,7 +540,13 @@ export function AskView() {
 
   return (
     <section className={cx(styles.view, opening && styles.viewOpening)} aria-label="Ask">
-      <div className={styles.scroll} ref={scroller} onScroll={onScroll}>
+      <div
+        className={styles.scroll}
+        ref={scroller}
+        onScroll={onScroll}
+        onWheel={release}
+        onTouchMove={release}
+      >
         {opening ? (
           <Empty />
         ) : (
