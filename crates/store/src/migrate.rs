@@ -406,6 +406,61 @@ mod tests {
         assert_eq!(MIGRATIONS[0].version, 1, "the chain starts at 1");
     }
 
+    /// **A database with rows in it survives the upgrade, keeping them.**
+    ///
+    /// Everything else here migrates a database that is either empty or built
+    /// from scratch, so the chain was only ever exercised against no data. The
+    /// path a real index takes is the other one: a populated v6 file gaining a
+    /// column. Schema v7 is the first migration to alter a table that already
+    /// holds hundreds of thousands of rows, and "the column appeared" is not
+    /// the property that matters — "the rows are still there, and readable
+    /// through the new shape" is.
+    #[test]
+    fn a_populated_database_keeps_its_rows_across_a_migration() {
+        let dir = tmp();
+        let loc = Location::File(dir.path().join("marrow.sqlite"));
+        let (conn, _) = open_migrated(&loc).unwrap();
+
+        // A chunk needs a file and a version to hang off, and both are
+        // enforced by foreign keys — so this is the real row shape, not a
+        // lone INSERT that a FK would have refused in production.
+        conn.execute_batch(
+            "INSERT INTO workspaces (workspace_id, name, created_at, updated_at)
+                  VALUES ('ws', 'notes', 0, 0);
+             INSERT INTO workspace_roots (root_id, workspace_id, canonical_path, created_at)
+                  VALUES ('r', 'ws', '/tmp', 0);
+             INSERT INTO files (file_id, workspace_id, root_id, current_path,
+                                created_at, updated_at)
+                  VALUES ('f', 'ws', 'r', '/tmp/a.md', 0, 0);
+             INSERT INTO file_versions (version_id, file_id, path_at_observation,
+                                        size_bytes, mtime_ms, content_hash, observed_at)
+                  VALUES ('v', 'f', '/tmp/a.md', 1, 0, 'h', 0);
+             INSERT INTO chunks (chunk_id, version_id, chunk_kind, text, token_count,
+                                 text_hash, chunker_version, provenance_class)
+                  VALUES ('c', 'v', 'TEXT', 'the body', 2, 'h', '2', 'EXACT');",
+        )
+        .unwrap();
+        drop(conn);
+
+        // Reopen: on a database already at the target this is a no-op, which
+        // is the point — the rows must read back through the current shape.
+        let (conn, v) = open_migrated(&loc).unwrap();
+        assert_eq!(v, target_version());
+
+        let (text, span): (String, Option<String>) = conn
+            .query_row(
+                "SELECT text, source_span FROM chunks WHERE chunk_id='c'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("the chunk written before the column existed is still readable");
+        assert_eq!(text, "the body");
+        // NULL, not invented. A row written before v7 has no span to give, and
+        // defaulting it to `Whole` would be the lossy state dressed as a real
+        // one — `CHUNKER_VERSION` re-cuts it instead.
+        assert_eq!(span, None);
+    }
+
     #[test]
     fn fresh_database_migrates_to_target() {
         let dir = tmp();
