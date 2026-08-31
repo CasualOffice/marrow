@@ -697,6 +697,69 @@ fn a_file_is_rerouted_when_the_parser_chain_has_changed() {
     );
 }
 
+/// **The routing fingerprint is recorded on a complete walk, not a clean one.**
+///
+/// The mistake underneath the fix above, which its own test could not see: the
+/// fingerprint was written under the *delete's* guard,
+/// `!cancelled && failures.is_empty()`, and a single unparseable file keeps
+/// that false for ever.
+///
+/// Found on the real corpus, where three spreadsheets trip a UNIQUE constraint
+/// on `table_cells`. The fingerprint was never written, so every sweep
+/// re-routed all 34,000 files — exactly the non-convergence the fingerprint
+/// exists to prevent, reintroduced by borrowing a guard without asking what it
+/// guarded against.
+///
+/// The two guards answer different questions. The delete asks "did this walk
+/// establish what is gone", which any failure invalidates. The fingerprint asks
+/// "was every file offered to the current parser chain", and a file that was
+/// offered and failed was still offered — offering it again next sweep fails
+/// the same way.
+///
+/// What is checked here is the boundary this test can own: a cancelled sweep
+/// has *not* offered the corpus and must not record, and a completed one must.
+/// The failure half was verified against the real corpus, where the three
+/// failing files no longer stop it settling.
+#[test]
+fn a_cancelled_sweep_does_not_record_that_it_re_routed_the_corpus() {
+    let f = setup();
+
+    let cancel = Cancel::new();
+    cancel.cancel();
+    let progress = std::sync::Arc::new(Progress::default());
+    let cancelled = ingest_root_with_index(
+        &f.store,
+        f.ws,
+        f.root_id,
+        &f.root,
+        &IngestPolicy::default(),
+        &progress,
+        &cancel,
+        None,
+    )
+    .unwrap();
+    assert!(cancelled.cancelled, "the fixture must actually cancel");
+    assert_eq!(
+        fingerprint_of(&f),
+        None,
+        "a cancelled sweep claimed it had re-routed a corpus it never walked"
+    );
+
+    // And a complete one does record, so the next sweep has nothing to do.
+    run(&f);
+    assert!(
+        fingerprint_of(&f).is_some(),
+        "a completed sweep did not record what it swept with"
+    );
+    assert_eq!(run(&f).parsed, 0, "re-routing did not converge");
+}
+
+/// The routing fingerprint stored for the fixture's root, if any.
+fn fingerprint_of(f: &Fixture) -> Option<String> {
+    let conn = f.store.reader().unwrap();
+    marrow_store::read::routing_fingerprint(&conn, f.root_id)
+}
+
 /// **A walk that could not read a directory has not established what is gone.**
 ///
 /// The guard on the bulk delete checks `outcome.failures.is_empty()`, and its

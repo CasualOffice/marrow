@@ -328,6 +328,12 @@ pub fn ingest_root_with_index(
     // conclude that unseen files are deleted: an unopenable directory removes
     // its whole subtree from `seen`, and every file under it would otherwise be
     // marked gone while sitting perfectly happily on the disk.
+    //
+    // Kept as its own fact as well. Once folded, a directory that could not be
+    // opened is indistinguishable from a spreadsheet that would not parse, and
+    // those answer different questions: the first means the corpus was never
+    // enumerated, the second means one file in it is broken.
+    let walk_failed = walk_errors.lock().map(|e| !e.is_empty()).unwrap_or(true);
     if let Ok(errs) = walk_errors.lock() {
         for (e, path) in errs.iter() {
             outcome.note_failure(e, path);
@@ -374,19 +380,31 @@ pub fn ingest_root_with_index(
     if !outcome.cancelled && outcome.failures.is_empty() {
         outcome.removed = mark_unseen_deleted(store, root_id, &seen)?;
 
-        // **And the same guard records the routing fingerprint.** A run that
-        // saw an arbitrary prefix of the corpus has not re-routed it, and
-        // claiming it had would strand every file it never reached on the
-        // parser it already had — permanently, which is the exact failure this
-        // mechanism exists to end. So it is written here, beside the other
-        // conclusion only a complete walk is allowed to draw.
+        store.flush()?;
+    } else if outcome.cancelled {
+        debug!("the sweep stopped early, so absent files were not reconciled");
+    }
+
+    // **The routing fingerprint has a weaker condition than the delete, and it
+    // has to.** The delete asks "did this walk establish what is gone", which
+    // any failure invalidates. This asks "was every file under this root
+    // offered to the current parser chain", and a file that was offered and
+    // failed to parse was still offered — re-routing it next sweep would fail
+    // in exactly the same way.
+    //
+    // Recorded under the *walk* succeeding, not under a clean run. Three
+    // spreadsheets that trip a UNIQUE constraint kept `failures` non-empty for
+    // ever, so the fingerprint was never written and every sweep re-routed all
+    // 34,000 files — the non-convergence this whole mechanism exists to avoid,
+    // reintroduced by borrowing the delete's guard without asking what it
+    // guarded against. The first test missed it because its fixture had no
+    // file that fails.
+    if !outcome.cancelled && !walk_failed {
         let fp = fingerprint.clone();
         store
             .writer()
             .submit(move |c| marrow_store::read::set_routing_fingerprint(c, root_id, &fp))?;
         store.flush()?;
-    } else if outcome.cancelled {
-        debug!("the sweep stopped early, so absent files were not reconciled");
     }
     Ok(outcome)
 }
