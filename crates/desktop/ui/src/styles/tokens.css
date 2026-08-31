@@ -289,7 +289,7 @@
 
   /* how much the location can be trusted */
   --provenance-warn: var(--warn);
-  /* written by an agent — invariant #13, cannot be cited */
+  /* written by an agent — the `origin = SELF` rule, cannot be cited */
   --self: var(--danger);
 }
 

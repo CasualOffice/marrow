@@ -83,9 +83,13 @@ pub struct RetrievedChunk {
     pub relative_path: String,
     pub location: String,
     pub line: Option<u32>,
+    /// The span itself, not just its rendering. A PDF's page and bbox and a
+    /// spreadsheet's cell reference are unrepresentable in `line`, and both
+    /// are what this product exists to cite.
+    pub span: marrow_core::SourceSpan,
     pub text: String,
     pub provenance: marrow_core::ProvenanceClass,
-    /// Invariant #9: `SelfWritten` cannot support a claim.
+    /// The `origin = SELF` rule: `SelfWritten` cannot support a claim.
     pub origin: marrow_core::Origin,
 }
 
@@ -316,16 +320,23 @@ impl Core {
             .map(|h| {
                 let relative = relative_to(&h.path, &roots);
                 RetrievedChunk {
-                    location: match &h.span {
-                        marrow_core::SourceSpan::Lines { start, .. } => {
-                            format!("{relative}:{start}")
-                        }
-                        _ => relative.clone(),
-                    },
+                    // **Was a second, worse copy of `SourceSpan::locate`.** It
+                    // matched `Lines` and let every other variant fall through
+                    // to the bare filename — so a PDF chunk cited
+                    // `contract.pdf` with no page and a spreadsheet chunk
+                    // `q2.xlsx` with no cell, on the one surface whose whole
+                    // promise is citing exactly those. The MCP server had the
+                    // right version the entire time.
+                    location: h.span.locate(&relative),
                     line: match &h.span {
                         marrow_core::SourceSpan::Lines { start, .. } => Some(*start),
                         _ => None,
                     },
+                    // Carried whole, not flattened. `line` answers "which line"
+                    // and cannot answer "which page" or "which cell"; the UI
+                    // needs the span itself to say either, and a bbox is the
+                    // next thing it will want.
+                    span: h.span.clone(),
                     relative_path: relative,
                     path: h.path.clone(),
                     // The whole window, markers stripped. Those are for
@@ -531,10 +542,11 @@ impl Core {
     /// Register a folder as an authorized root.
     ///
     /// Canonicalizes first, because a root that is not canonical defeats every
-    /// containment check that depends on it (invariant #5). Refuses a folder
+    /// containment check that depends on it — symlink escape is re-checked at
+    /// operation time, not trusted from index time. Refuses a folder
     /// that is already granted, or that overlaps one — nesting two roots means
     /// every file underneath is stored twice under two identities, and path is
-    /// never identity (invariant #2).
+    /// never identity (path is never identity).
     pub fn grant(&self, path: &std::path::Path) -> Result<marrow_core::RootId> {
         self.grant_named(path, None)
     }
@@ -876,7 +888,8 @@ impl Core {
                 )
             })?;
         if tier != "RESIDENT" {
-            // **Invariant #5.** Opening it is what triggers the download.
+            // **Never hydrate a placeholder.** Opening it is what triggers the
+            // download.
             return Err(marrow_core::Error::new(
                 marrow_core::Code::FsPlaceholderSkipped,
                 "That file is cloud-only. Its contents are not on this machine, and \

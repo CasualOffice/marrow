@@ -40,6 +40,24 @@ These are not style preferences. Violating them creates bugs that are expensive 
 9. **Agent-written files are marked `origin = SELF`** and excluded from evidence authority. Otherwise the system cites its own output back as independent corroboration.
 10. **Search must work with no LLM, no GPU, no network.**
 
+### How to cite a hard rule
+
+There are **three** numbered lists of these rules in this repo and **no two of them agree**:
+
+| List | Count | Where | Numbering |
+|---|---|---|---|
+| **Hard rules** (above) | 10 | CLAUDE.md | the one every agent loads each session |
+| **§126 "must not be relaxed"** | 14 | [Part 7 §126](docs/Part_7_Solo_Rescope.md) | a superset, ordered by *what it costs you*, not by subject |
+| **The `invariants` skill** | 15 | `.claude/skills/invariants/SKILL.md` | a superset, grouped by subject |
+
+The overlap is real but the numbers are not portable. `origin = SELF` is **9** here, **10** in §126 and **13** in the skill. "Never hydrate a placeholder" is **3** here, **3** in §126 and **5** in the skill — right for the wrong reason. Half the codebase used to cite one scheme and half the other, and nothing could catch it.
+
+So:
+
+- **Cite a rule by name.** "the `origin = SELF` rule", "never hydrate a placeholder", "symlink escape is re-checked at operation time". A name survives a renumber; a number does not.
+- **`hard rule N`** is the one sanctioned numeric form, and it means *this list* — the ten above.
+- **Never write `invariant #N`.** It is ambiguous across all three lists and is the form that produced every miscitation.
+
 ## Scope discipline
 
 The spec is ~8,700 lines across nine parts and the author is one person. **The default answer to "should we also…" is no.**

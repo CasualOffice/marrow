@@ -13,7 +13,8 @@ use crate::tier;
 
 /// Filesystem-level identity: device plus inode.
 ///
-/// **Not a file identity.** Invariant #2 stands: inodes are reused after
+/// **Not a file identity.** Path is never identity, and neither is an inode:
+/// they are reused after
 /// deletion, differ across volumes, and change when a file is copied rather
 /// than moved. This is a *hint* used to notice that a path that changed is the
 /// same on-disk object (rename detection, hard-link detection). The durable
@@ -134,7 +135,8 @@ pub struct FileFacts {
     /// link is never followed to answer it).
     pub is_symlink: bool,
     pub is_dir: bool,
-    /// **Invariant #5.** Decided from this same metadata; see [`crate::tier`].
+    /// **Never hydrate a placeholder.** Decided from this same metadata; see
+    /// [`crate::tier`].
     pub tier: TierState,
     /// Extension guess only. See [`MimeHint`] and FS-014.
     pub mime_hint: Option<MimeHint>,

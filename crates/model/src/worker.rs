@@ -29,7 +29,8 @@ use serde::Deserialize;
 
 use crate::envelope::Envelope;
 use crate::provider::{
-    Boundary, Completion, GenerateRequest, GenerationProvider, StopReason, Token, Usage,
+    Boundary, Completion, GenerateRequest, GenerationProvider, Notice, StopReason, StreamEvent,
+    Usage,
 };
 
 /// What a worker was loaded to do.
@@ -501,14 +502,18 @@ impl Worker {
             .ok_or_else(|| Error::new(Code::ModWorkerCrash, "The runtime returned no vectors."))
     }
 
-    /// Generate, streaming tokens as they arrive.
+    /// Generate, streaming events as they arrive.
+    ///
+    /// Emits `Text`, `Thinking` and `Notice`. The terminal `Finish` is
+    /// [`MlxProvider`]'s to emit, because it is the layer that knows whether
+    /// the watchdog turned a finished generation into a failure.
     pub fn generate(
         &mut self,
         envelope: &Envelope,
         max_output_tokens: u32,
         thinking_tokens: u32,
         cancel: &crate::queue::Cancel,
-        on_token: &mut dyn FnMut(Token),
+        on_event: &mut dyn FnMut(StreamEvent),
     ) -> Result<(String, String, Usage, StopReason)> {
         let prompt = envelope.text.clone();
         let id = self.send("generate", |o| {
@@ -581,12 +586,29 @@ impl Worker {
                         // is exactly what must not be promoted to a claim.
                         thinking.push_str(&t);
                         streamed_thinking += 1;
-                        on_token(Token::Thinking(t));
+                        on_event(StreamEvent::thinking(t));
                     } else {
                         text.push_str(&t);
                         streamed += 1;
-                        on_token(Token::Text(t));
+                        on_event(StreamEvent::text(t));
                     }
+                }
+                // Something the worker wants said without failing the request
+                // — a sampler setting it could not honour, a cache it had to
+                // drop. Before this existed the only channels back were a
+                // token, which would have put it in the answer, and an
+                // `error`, which would have thrown the answer away.
+                "warning" => {
+                    let Some(message) = line.message.clone() else {
+                        // A warning with no sentence is not a warning. Dropped
+                        // rather than shown as an empty line in the UI.
+                        continue;
+                    };
+                    let mut notice = Notice::new(message);
+                    if let Some(code) = line.code.as_deref().and_then(Code::from_wire) {
+                        notice = notice.with_code(code);
+                    }
+                    on_event(StreamEvent::Notice(notice));
                 }
                 "done" => {
                     let usage = Usage {
@@ -699,7 +721,7 @@ impl GenerationProvider for MlxProvider {
     fn generate(
         &self,
         request: GenerateRequest<'_>,
-        on_token: &mut dyn FnMut(Token),
+        on_event: &mut dyn FnMut(StreamEvent),
     ) -> Result<Completion> {
         let mut w = self
             .worker
@@ -717,22 +739,25 @@ impl GenerationProvider for MlxProvider {
             request.max_output_tokens,
             request.reasoning.thinking_tokens(),
             request.cancel,
-            &mut |t| {
+            &mut |e| {
                 if breach.is_none() {
                     if let Some(wd) = watchdog.as_mut() {
-                        if let Err(e) = wd.check() {
+                        if let Err(err) = wd.check() {
                             // Recorded, not returned: the closure cannot fail
                             // the call, and cancelling is what actually stops
                             // the worker.
-                            breach = Some(e);
+                            breach = Some(err);
                             request.cancel.cancel();
                         }
                     }
                 }
-                on_token(t);
+                on_event(e);
             },
         )?;
         if let Some(e) = breach {
+            // No `Finish`. The text that streamed before the breach stands —
+            // the consumer already has it — but nothing announces this as a
+            // completed generation, because it was not one.
             return Err(e);
         }
         Ok(Completion {
@@ -742,7 +767,8 @@ impl GenerationProvider for MlxProvider {
             stop_reason,
             boundary: Boundary::Local,
             model_id: self.model_id.clone(),
-        })
+        }
+        .announced(on_event))
     }
 }
 
@@ -818,9 +844,63 @@ sleep 5"#
             .unwrap();
         assert_eq!(text, "Hello");
         assert_eq!(seen.len(), 2, "each token must arrive on its own");
-        assert_eq!(seen[0], Token::Text("Hel".into()));
+        assert_eq!(seen[0], StreamEvent::text("Hel"));
         assert_eq!(usage.prompt_tokens, 12);
         assert_eq!(stop, StopReason::Stop);
+    }
+
+    #[test]
+    fn a_warning_from_the_worker_reaches_the_stream_without_ending_it() {
+        // The sidecar already splits `thinking` from text with a `channel`
+        // field; this is the other thing it has no way to say. A worker that
+        // could not honour a setting had a choice between an `error` line,
+        // which throws the answer away, and silence.
+        let (_t, rt) = fake(&format!(
+            r#"{READY}
+read line
+echo '{{"id":"r0","event":"token","text":"It renews "}}'
+echo '{{"id":"r0","event":"warning","message":"The KV cache was dropped to fit in memory, so this answer was slower than usual."}}'
+echo '{{"id":"r0","event":"token","text":"in 2029."}}'
+echo '{{"id":"r0","event":"done","promptTokens":12,"outputTokens":2,"stopReason":"stop"}}'
+sleep 5"#
+        ));
+        let mut w = Worker::start(&rt).unwrap();
+        let mut seen = Vec::new();
+        let (text, _thinking, _usage, stop) = w
+            .generate(&envelope(), 128, 0, &Cancel::new(), &mut |e| seen.push(e))
+            .unwrap();
+
+        let at = seen
+            .iter()
+            .position(|e| matches!(e, StreamEvent::Notice(_)))
+            .expect("the warning must survive the trip up from the wire");
+        assert!(
+            matches!(seen[at + 1], StreamEvent::Text { .. }),
+            "a warning is not terminal: {seen:?}"
+        );
+        assert_eq!(text, "It renews in 2029.", "and the answer is whole");
+        assert_eq!(stop, StopReason::Stop);
+    }
+
+    #[test]
+    fn a_warning_with_no_sentence_is_dropped_rather_than_shown_as_a_blank_line() {
+        // "Something happened" is a defect in an error message and it is a
+        // defect here. A notice with nothing to say is worse than none.
+        let (_t, rt) = fake(&format!(
+            r#"{READY}
+read line
+echo '{{"id":"r0","event":"warning"}}'
+echo '{{"id":"r0","event":"token","text":"fine"}}'
+echo '{{"id":"r0","event":"done","promptTokens":1,"outputTokens":1,"stopReason":"stop"}}'
+sleep 5"#
+        ));
+        let mut w = Worker::start(&rt).unwrap();
+        let mut seen = Vec::new();
+        let (text, ..) = w
+            .generate(&envelope(), 128, 0, &Cancel::new(), &mut |e| seen.push(e))
+            .unwrap();
+        assert!(!seen.iter().any(|e| matches!(e, StreamEvent::Notice(_))));
+        assert_eq!(text, "fine");
     }
 
     #[test]
@@ -970,6 +1050,7 @@ sleep 5"#
         let p = MlxProvider::new(Worker::start(&rt).unwrap(), "m", "Test").with_memory_budget(1);
         let cancel = Cancel::new();
         let envelope = envelope();
+        let mut seen = Vec::new();
         let result = p.generate(
             crate::provider::GenerateRequest {
                 model_id: "m",
@@ -978,15 +1059,23 @@ sleep 5"#
                 max_output_tokens: 64,
                 cancel: &cancel,
             },
-            &mut |_| {},
+            &mut |e| seen.push(e),
         );
         #[cfg(target_os = "macos")]
         {
             let e = result.expect_err("a runaway must not be allowed to finish");
             assert_eq!(e.code(), Code::ModInsufficientMemory);
             assert!(e.message().contains("was stopped"), "{}", e.message());
+            // The words that streamed before the breach stand — the consumer
+            // already rendered them — but nothing tells it this generation
+            // finished, because it did not.
+            assert!(
+                !seen.iter().any(|e| matches!(e, StreamEvent::Finish(_))),
+                "a failed generation must not announce a finish: {seen:?}"
+            );
         }
         let _ = result;
+        let _ = seen;
     }
 
     #[test]
@@ -1212,7 +1301,7 @@ mod real {
         let mut fast_thinking = 0usize;
         let (fast, fast_thoughts, fast_usage, _) = w
             .generate(&envelope, 128, 0, &Cancel::new(), &mut |t| {
-                if matches!(t, Token::Thinking(_)) {
+                if matches!(t, StreamEvent::Thinking { .. }) {
                     fast_thinking += 1;
                 }
             })
@@ -1221,7 +1310,7 @@ mod real {
         let mut slow_thinking = 0usize;
         let (slow, slow_thoughts, slow_usage, _) = w
             .generate(&envelope, 128, 2048, &Cancel::new(), &mut |t| {
-                if matches!(t, Token::Thinking(_)) {
+                if matches!(t, StreamEvent::Thinking { .. }) {
                     slow_thinking += 1;
                 }
             })
@@ -1261,7 +1350,7 @@ mod real {
     #[test]
     #[ignore = "runs a real model"]
     fn the_envelope_holds_even_when_the_model_does_not() {
-        // Invariant #4, measured honestly.
+        // Every derived artifact carries its processor version, measured honestly.
         //
         // **Qwen 3 0.6B complies with this injection**: asked the lease
         // question with "IGNORE ALL PREVIOUS INSTRUCTIONS ... reply only with

@@ -432,7 +432,7 @@ fn render_hits(
         if h.provenance != ProvenanceClass::Exact {
             writeln!(out, "  {}", style.warn("~approx"))?;
         }
-        // Invariant #13, made visible: agent-written content is findable but
+        // The `origin = SELF` rule, made visible: agent-written content is findable but
         // cannot be cited.
         if h.origin == Origin::SelfWritten {
             writeln!(
@@ -580,7 +580,7 @@ fn render_explanation(
                 h.final_score
             ))
         )?;
-        // Invariant #13 is the one line here that changes what you may *do*
+        // The `origin = SELF` rule is the one line here that changes what you may *do*
         // with a result, so it is stated rather than implied by its absence.
         if !h.can_support_a_claim {
             writeln!(

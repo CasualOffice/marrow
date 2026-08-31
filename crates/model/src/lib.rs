@@ -48,7 +48,9 @@ pub use embed::Embedder;
 pub use envelope::{Envelope, Evidence, Fact, Role, Session, Trust, Turn};
 pub use kv::{PrefixCache, PrefixKey, Scope};
 pub use openai::{Endpoint, OpenAiProvider};
-pub use provider::{Boundary, Completion, GenerationProvider, StopReason, Token, Usage};
+pub use provider::{
+    Boundary, Completion, Finish, GenerationProvider, Notice, StopReason, StreamEvent, Usage,
+};
 pub use queue::{Cancel, Depth, Queue};
 pub use registry::{Artifact, Capabilities, Entry, Format, Licence, Registry, Source};
 pub use request::{Priority, Reasoning, Request};

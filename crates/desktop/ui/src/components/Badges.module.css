@@ -60,7 +60,7 @@
   background: var(--tint-warn);
 }
 
-/* ── origin: invariant #13, an agent wrote it and it cannot be cited ─────── */
+/* ── origin: the `origin = SELF` rule — an agent wrote it and it cannot be cited ─────── */
 
 .self {
   color: var(--danger-text);

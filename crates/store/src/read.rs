@@ -252,7 +252,7 @@ impl NewWorkspace {
 pub struct NewRoot {
     pub root_id: RootId,
     pub workspace_id: WorkspaceId,
-    /// Already canonicalized by the caller — invariant #5 is a scan-side
+    /// Already canonicalized by the caller — the placeholder check is a scan-side
     /// concern, but storing a non-canonical path here would defeat it.
     pub canonical_path: String,
     pub volume_identity: Option<String>,
@@ -540,7 +540,7 @@ impl NewFile {
 ///
 /// This is a *lookup*, not an identity: the answer is a [`FileId`], and every
 /// caller must carry that forward rather than the path it started from
-/// (invariant #2, FS-005).
+/// (path is never identity, FS-005).
 pub fn find_file_by_path(
     conn: &Connection,
     root_id: RootId,
@@ -870,7 +870,7 @@ fn insert_path_row(conn: &Connection, file_id: FileId, path: &str, at: Timestamp
 
 /// Record that a file now lives at a new path.
 ///
-/// **Invariant #2: the path is not the identity.** `file_id` is untouched, the
+/// **Path is never identity.** `file_id` is untouched, the
 /// open range in `file_paths` is closed at `at`, and a new one is opened. Every
 /// version, chunk and job keyed on this file stays valid across the move.
 /// Bring a soft-deleted file back, because the walk found it again.
@@ -1756,7 +1756,7 @@ pub fn set_file_origin(
 
 // ------------------------------------------------------------- self-written
 
-/// Record that this system wrote these bytes (invariant #9).
+/// Record that this system wrote these bytes (the `origin = SELF` rule).
 ///
 /// Idempotent on the hash: writing the same content twice is one fact, not
 /// two, and re-running a failed action must not double-count.

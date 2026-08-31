@@ -8,7 +8,8 @@
 //! `characterBoundsAtIndex`, which is a rectangle **per character** in page
 //! coordinates.
 //!
-//! That last one is the whole reason this file exists. Invariant #1 asks for a
+//! That last one is the whole reason this file exists. The `source_span` rule
+//! asks for a
 //! span that resolves to an exact location, and `SourceSpan::Page { page, bbox }`
 //! has existed since M1 with nothing producing it. A parser that could only say
 //! "page 17" would satisfy the type and not the promise; this one can draw a
@@ -43,7 +44,8 @@ pub struct PdfParser;
 
 impl PdfParser {
     pub const ID: &'static str = "pdfkit";
-    /// Bumped when output would change for the same input (invariant #4).
+    /// Bumped when output would change for the same input: every derived
+    /// artifact carries `(source_version, processor, processor_version)`.
     pub const VERSION: &'static str = "1";
 }
 
@@ -191,9 +193,9 @@ mod backend {
     /// PDFKit reads from a URL or from `NSData`.
     ///
     /// `NSData`, because the bytes are already in memory and a path would mean
-    /// re-opening a file that invariant #5 has already resolved — and would
-    /// mean this parser needed a path at all, which `ParseInput` deliberately
-    /// does not carry (invariant #2).
+    /// re-opening a file the never-hydrate rule has already resolved — and
+    /// would mean this parser needed a path at all, which `ParseInput`
+    /// deliberately does not carry (path is never identity).
     pub(super) fn parse(p: &PdfParser, input: ParseInput<'_>) -> Result<ParsedArtifact> {
         let data = objc2_foundation::NSData::with_bytes(input.bytes);
         let doc =
@@ -460,7 +462,7 @@ mod tests {
     #[test]
     fn the_parser_identifies_itself_and_its_version() {
         // PAR-003: persisted with every result, so a version bump can schedule
-        // reprocessing without a manual reindex (invariant #4).
+        // reprocessing without a manual reindex — the processor-version rule.
         assert_eq!(PdfParser.id(), "pdfkit");
         assert!(!PdfParser.version().is_empty());
         assert_eq!(PdfParser.tier(), ParserTier::T2);
@@ -495,7 +497,7 @@ mod real {
     #[test]
     #[ignore = "needs a real PDF in ~/Downloads"]
     fn a_real_pdf_yields_paragraphs_with_a_page_and_a_box() {
-        // Invariant #1, finally produced rather than merely typed:
+        // The `source_span` rule, finally produced rather than merely typed:
         // `SourceSpan::Page { page, bbox }` has existed since M1 with nothing
         // emitting it.
         let Some(bytes) = sample() else {

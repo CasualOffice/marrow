@@ -68,7 +68,7 @@ pub struct Chunk {
     /// Ancestor chain, `›`-joined. Empty at the document root.
     pub context_prefix: String,
     pub text: String,
-    /// **Invariant #1.** Where in the source this came from.
+    /// **A `source_span` on every node.** Where in the source this came from.
     pub span: SourceSpan,
     /// Index of the IR node this chunk was rooted at.
     pub root_node: usize,
@@ -792,7 +792,7 @@ mod tests {
 
     #[test]
     fn every_chunk_carries_a_precise_span() {
-        // Invariant #1 survives chunking. A chunk whose span is `Whole` is a
+        // The `source_span` rule survives chunking. A chunk whose span is `Whole` is a
         // citation that means "somewhere in this file", which is not the
         // product's promise.
         let a = parse_md("# Title\n\nSome prose here that is long enough to matter.\n");

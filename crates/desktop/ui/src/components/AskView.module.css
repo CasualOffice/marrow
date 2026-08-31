@@ -782,3 +782,22 @@
   color: var(--fg3);
   font-size: var(--fs-micro);
 }
+
+/* A provider advisory. Not `.failure`: the answer beside it is real, and
+   dressing an advisory as an error teaches people to ignore both. */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  margin: var(--sp-3) 0 0;
+  max-width: var(--prose-measure);
+  color: var(--fg2);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-body);
+}
+
+.notice svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warn);
+}

@@ -100,7 +100,7 @@ fn artifacts_from_every_parser() -> Vec<(String, Vec<u8>, ParsedArtifact)> {
     out
 }
 
-// ------------------------------------------------------- invariant #1
+// --------------------------------------------- the `source_span` rule
 
 #[test]
 fn every_ir_node_has_a_source_span() {
@@ -358,7 +358,7 @@ fn markdown_headings_build_a_parent_chain() {
     );
 }
 
-// ------------------------------------------------------------ invariant #1
+// -------------------------------------------------- the `source_span` rule
 
 #[test]
 fn byte_spans_round_trip() {
@@ -643,7 +643,7 @@ fn the_csv_parser_covers_its_fixture() {
     assert_eq!(&src[r], "\"byte ranges, line ranges\"");
 }
 
-// --------------------------------------------------------- invariant #5
+// ------------------------------------------------- the never-hydrate rule
 
 #[test]
 fn a_cloud_placeholder_is_never_content_parsed() {
@@ -666,7 +666,7 @@ fn a_cloud_placeholder_is_never_content_parsed() {
 
 #[test]
 fn every_artifact_names_the_parser_and_version_that_made_it() {
-    // Invariant #4: `(source_version, processor_id, processor_version)` is what
+    // The processor-version rule: `(source_version, processor_id, processor_version)` is what
     // makes reprocessing after an upgrade automatic. The version half lives
     // here.
     for (label, _, a) in all_artifacts() {

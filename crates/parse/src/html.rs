@@ -12,7 +12,7 @@
 //! The same argument as [`crate::csv`]: a DOM library gives excellent *nodes*
 //! and no *positions*. `html5ever` normalizes, re-parents and synthesises
 //! elements — that is what conformance means — and the byte offset a cell came
-//! from does not survive it. Invariant #1 needs the offset more than it needs
+//! from does not survive it. The `source_span` rule needs the offset more than it needs
 //! conformance, so this is a tag scanner that hands every block the range it
 //! was found at.
 //!

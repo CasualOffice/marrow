@@ -24,7 +24,7 @@ use marrow_core::{ProvenanceClass, Result, SourceSpan};
 use marrow_model::envelope::{Builder, Envelope, Evidence, Fact, Role, Turn};
 
 use crate::models::Conversation;
-use marrow_model::provider::Token;
+use marrow_model::provider::StreamEvent;
 use marrow_model::queue::Cancel;
 use serde::Serialize;
 
@@ -170,6 +170,17 @@ pub enum AskEvent {
     Thinking {
         text: String,
     },
+    /// Something the provider needed to say that is not part of the answer and
+    /// is not a failure — a setting it could not honour, a frame it could not
+    /// read, an account limit about to bite. Rendered beside the answer, which
+    /// keeps arriving: a warning that ended the stream would be an error
+    /// wearing a friendlier name.
+    Notice {
+        message: String,
+        /// The §108 class when one fits, and absent when none does — §108
+        /// classifies failures and this is not one.
+        code: Option<String>,
+    },
     Done {
         prompt_tokens: u32,
         output_tokens: u32,
@@ -251,6 +262,13 @@ pub struct Citation {
     pub relative_path: String,
     pub location: String,
     pub line: Option<u32>,
+    /// Where in the file, structurally — not just its rendering.
+    ///
+    /// `line` cannot express a PDF page, a bounding box or a spreadsheet cell,
+    /// and those are the citations this product is for. The window renders the
+    /// page or the cell from this today; the bbox is here so that showing the
+    /// region itself does not need another trip through the boundary.
+    pub span: marrow_core::SourceSpan,
     pub excerpt: String,
     pub provenance: String,
 }
@@ -359,7 +377,7 @@ pub fn assemble(
         }
         spent += hit.text.len();
         let id = format!("E{}", i + 1);
-        // Invariant #9 is enforced inside the envelope, but the *reason* has
+        // The `origin = SELF` rule is enforced inside the envelope, but the *reason* has
         // to be collected here where the path is still known.
         let citable = hit.origin.can_support_a_claim();
         if !citable {
@@ -376,6 +394,7 @@ pub fn assemble(
                 relative_path: hit.relative_path.clone(),
                 location: hit.location.clone(),
                 line: hit.line,
+                span: hit.span.clone(),
                 excerpt: preview(&hit.text),
                 provenance: provenance_label(hit.provenance),
             });
@@ -634,9 +653,17 @@ pub fn run(
                 detail: detail.into(),
             })
         },
-        &mut |t| match t {
-            Token::Text(text) => (sink.borrow_mut())(AskEvent::Token { text }),
-            Token::Thinking(text) => (sink.borrow_mut())(AskEvent::Thinking { text }),
+        &mut |e| match e {
+            StreamEvent::Text { text } => (sink.borrow_mut())(AskEvent::Token { text }),
+            StreamEvent::Thinking { text } => (sink.borrow_mut())(AskEvent::Thinking { text }),
+            StreamEvent::Notice(n) => (sink.borrow_mut())(AskEvent::Notice {
+                message: n.message,
+                code: n.code.map(|c| c.as_str().to_string()),
+            }),
+            // `Done` is emitted below from the returned `Completion`, which
+            // carries the same usage and stop reason. Two events saying one
+            // thing are two things that can drift.
+            StreamEvent::Finish(_) => {}
         },
     );
     let emit = sink.into_inner();
@@ -673,6 +700,7 @@ mod tests {
             relative_path: rel.into(),
             location: location.into(),
             line: Some(1),
+            span: marrow_core::SourceSpan::Lines { start: 1, end: 1 },
             text: text.into(),
             provenance: ProvenanceClass::Exact,
             origin: if citable {
@@ -702,7 +730,7 @@ mod tests {
 
     #[test]
     fn a_self_written_file_is_excluded_and_the_reason_is_kept() {
-        // Invariant #9. The envelope drops it; this layer is where the path is
+        // The `origin = SELF` rule. The envelope drops it; this layer is where the path is
         // still known, so it is where the reason has to be collected.
         let e = evidence_from("E1", &chunk("notes.md", "as I said", false));
         assert_eq!(e.origin, Origin::SelfWritten);
@@ -751,7 +779,7 @@ mod tests {
 
     #[test]
     fn a_line_becomes_a_span_and_a_missing_line_does_not_pretend() {
-        // Invariant #1. `Whole` is honest; a fabricated line number is not.
+        // A `source_span` on every node. `Whole` is honest; a fabricated line number is not.
         let with = evidence_from("E1", &chunk("a.md", "x", true));
         assert_eq!(with.span, SourceSpan::Lines { start: 1, end: 1 });
         let mut no_line = chunk("a.md", "x", true);
@@ -890,6 +918,7 @@ mod tests {
             relative_path: relative_path.into(),
             location: relative_path.into(),
             line: None,
+            span: marrow_core::SourceSpan::Whole,
             excerpt: String::new(),
             provenance: "exact".into(),
         }

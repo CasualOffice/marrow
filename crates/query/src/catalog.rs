@@ -59,7 +59,8 @@ pub struct WorkspaceStats {
     /// No parse was ever attempted for the current version.
     ///
     /// Not yet reached rather than given up on: an ingest run killed part-way
-    /// through leaves exactly this (invariant #7 exists because that is the
+    /// through leaves exactly this (jobs are idempotent and resumable because
+    /// that is the
     /// normal case), as does a file whose bytes were never opened. A sweep
     /// clears it, so it is actionable in a way `no_parser` is not.
     pub not_processed: i64,
@@ -303,7 +304,7 @@ pub fn roots(conn: &ReadConn) -> Result<Vec<String>> {
 
 /// Every path a file has been seen at, oldest first (FS-006).
 ///
-/// **Path is never identity** (invariant #2): this is history, and the current
+/// **Path is never identity** (path is never identity): this is history, and the current
 /// path is the last entry rather than the only one.
 pub fn path_history(conn: &ReadConn, file_id: marrow_core::FileId) -> Result<Vec<String>> {
     let mut stmt = conn
@@ -642,7 +643,7 @@ mod tests {
 
     #[test]
     fn path_history_is_oldest_first_because_it_is_history() {
-        // Invariant #2: the current path is the last entry, not the only one.
+        // Path is never identity: the current path is the last entry, not the only one.
         let (_d, s) = fixture();
         let conn = s.reader().unwrap();
         let id: String = conn

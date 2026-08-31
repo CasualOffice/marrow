@@ -493,7 +493,7 @@ The last part of the ask: *a workspace for the model if it needs some operation*
 | ID | Requirement |
 |---|---|
 | SUP-010 | Each request gets its own scratch directory, removed when it completes — including on cancel and on crash |
-| SUP-011 | Scratch is **outside every workspace root**. A model writing into an indexed folder would have its own output re-indexed and cited back (invariant #13, §98.4) |
+| SUP-011 | Scratch is **outside every workspace root**. A model writing into an indexed folder would have its own output re-indexed and cited back (the `origin = SELF` rule, §98.4) |
 | SUP-012 | Scratch has a size cap; exceeding it fails the request rather than filling the disk |
 | SUP-013 | A worker gets scratch and its weights, and nothing else — not the index, not the user's files. Content reaches it as request payload, through the untrusted-evidence envelope (§114) |
 | SUP-014 | Weights are content-addressed, so a corrupt download cannot masquerade as a good one and two models never collide |
@@ -539,7 +539,7 @@ Reasoning::Budget(tokens)   → up to `tokens` of thinking before the answer
 | GEN-012 | The switch is **visible before the request is sent**, next to the estimated time, so the trade is legible at the moment of choosing. |
 | GEN-013 | A model that does not support a thinking budget shows the switch **disabled with the reason** — "qwen2.5 7B answers directly" — never hidden, and never silently ignored. Silently dropping the flag makes Thorough a lie. |
 | GEN-014 | Thinking output is **captured, not discarded**, and shown collapsed under the answer. It is the model's working; hiding it entirely makes a wrong answer un-diagnosable. |
-| GEN-015 | Thinking tokens are **never treated as evidence** and never cited. They are the model's own words about untrusted content, which is exactly what §98.4 and invariant #13 forbid promoting to a claim. |
+| GEN-015 | Thinking tokens are **never treated as evidence** and never cited. They are the model's own words about untrusted content, which is exactly what §98.4 and the `origin = SELF` rule forbid promoting to a claim. |
 | GEN-016 | Thorough requests carry a larger token budget and therefore a **different admission estimate** (§142.3) and a **different deadline** (SUP-006). A mode that changes cost but not accounting is a mode that lies to the queue. |
 | GEN-017 | Thorough is **interruptible at the same 500 ms** as everything else (UX §10). A long think is not an excuse to stop responding to Escape. |
 | GEN-018 | If a Thorough request is refused or deferred on resources, the UI offers **Fast** as the named alternative rather than only reporting the refusal. |
@@ -596,7 +596,7 @@ load paths and two breakers, for a routing decision that a 4B makes correctly.
                     ▼
    4B — answer                      same weights · prefix reused (LLM-040)
                     ▼
-            answer + citations       every claim spans a SourceSpan (invariant #1)
+            answer + citations       every claim spans a SourceSpan (span on every node)
 ```
 
 | ID | Requirement |

@@ -187,7 +187,8 @@ impl Fixture {
 }
 
 /// The canonical rows behind one index document: an IR node carrying the
-/// `source_span` (invariant #1) and the chunk that points at it.
+/// `source_span` (the rule that every IR node carries one) and the chunk that
+/// points at it.
 fn insert_chunk_row(conn: &Connection, doc: &TextDoc) -> Result<()> {
     let node = NodeId::new();
     conn.execute(
@@ -313,7 +314,8 @@ fn index_and_canonical_write_share_one_transaction() {
     assert_eq!(hits[0].chunk_id, survivor.chunk_id);
 }
 
-/// Invariant #11's other half: derived state is disposable because it can
+/// The other half of "derived indexes are rebuildable": derived state is
+/// disposable because it can
 /// always be re-derived. Blow the index away entirely and rebuild from
 /// canonical rows; the answers must be the same ones.
 #[test]
@@ -393,7 +395,8 @@ fn derived_index_is_rebuildable_from_canonical() {
     );
 }
 
-/// Query text is content, and content is untrusted (invariant #12). Nothing a
+/// Query text is content, and content is untrusted — retrieved content never
+/// grants authority. Nothing a
 /// user can type may become FTS5 syntax, SQL, or a panic.
 #[test]
 fn query_syntax_cannot_be_injected() {
@@ -667,7 +670,7 @@ fn literal_search_works_with_a_stale_index() {
     assert_eq!(out.hits[0].snippet.matched_text(), vec!["FOO_BAR"]);
 }
 
-/// **Invariant #5.** Reading a cloud placeholder silently downloads it. The
+/// **Never hydrate a placeholder.** Reading one silently downloads it. The
 /// literal scan refuses, counts the refusal, and never opens the file.
 #[test]
 fn literal_search_refuses_non_resident_files() {
@@ -812,7 +815,7 @@ fn a_literal_outcome_reports_the_scope_it_was_given_and_how_far_it_got() {
     assert_eq!(none.files_considered, 0);
 }
 
-/// **Invariant #7, at operation time.** `fs::metadata` follows a symlink, so a
+/// **Symlink escape, re-checked at operation time.** `fs::metadata` follows a symlink, so a
 /// target that was a regular file inside the authorised root when the list was
 /// built and is a link now would be read straight through to wherever it
 /// points. The reader stats with `symlink_metadata` and refuses instead.
@@ -1299,7 +1302,11 @@ fn upsert_replaces_and_survives_a_rename() {
     d.path = f.dir.path().join("new/name.md").display().to_string();
     d.body = "a completely different body".to_string();
     index.upsert(std::slice::from_ref(&d)).expect("upsert");
-    assert_eq!(f.doc_rows(), 1, "invariant #2: the chunk id is the key");
+    assert_eq!(
+        f.doc_rows(),
+        1,
+        "path is never identity: the chunk id is the key"
+    );
     assert_eq!(f.fts_rows(), 1, "no orphan FTS5 row left behind");
 
     assert!(index
@@ -1325,7 +1332,7 @@ fn upsert_replaces_and_survives_a_rename() {
 
 /// A hit carries the facts the renderer and the evidence layer need: exact
 /// provenance, and the origin that bars self-written content from supporting a
-/// claim (invariant #13).
+/// claim (the `origin = SELF` rule).
 #[test]
 fn hits_carry_provenance_and_origin_unchanged() {
     let f = Fixture::new();
@@ -1356,7 +1363,7 @@ fn hits_carry_provenance_and_origin_unchanged() {
     assert_eq!(h.origin, Origin::SelfWritten);
     assert!(
         !h.origin.can_support_a_claim(),
-        "invariant #13: findable, never citable"
+        "origin = SELF: findable, never citable"
     );
     assert_eq!(h.provenance, ProvenanceClass::Degraded);
     assert_eq!(h.span, SourceSpan::Lines { start: 4, end: 9 });

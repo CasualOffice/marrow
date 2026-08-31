@@ -63,7 +63,7 @@ pub struct SearchHit {
     pub provenance: String,
     /// Why it matched. One branch in M1, so it is honest rather than interesting.
     pub reason: String,
-    /// Invariant #13: `false` means the agent wrote it and it cannot be cited.
+    /// The `origin = SELF` rule: `false` means the agent wrote it and it cannot be cited.
     pub citable: bool,
     pub modified_ms: i64,
     pub file_id: String,
@@ -802,7 +802,7 @@ mod tests {
 
     #[test]
     fn a_span_that_is_not_lines_reports_no_line_rather_than_inventing_one() {
-        // Invariant #1: `Whole` is honest and a fabricated line number is not.
+        // A `source_span` on every node: `Whole` is honest and a fabricated line number is not.
         let h = hit_with(SourceSpan::Whole, "text", vec![]);
         assert_eq!(matched_line(&h), None);
     }

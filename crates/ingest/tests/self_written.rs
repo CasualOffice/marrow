@@ -1,4 +1,4 @@
-//! Invariant #9, end to end: what this system writes cannot be cited back.
+//! The `origin = SELF` rule, end to end: what this system writes cannot be cited back.
 //!
 //! The half of it that lives in `marrow-tools` — marking a write `origin =
 //! SELF` — was already true. This is the other half, and it is the one that
@@ -207,7 +207,7 @@ fn a_file_the_user_edits_becomes_theirs_again() {
 
 #[test]
 fn a_copy_of_agent_output_is_still_agent_output() {
-    // Path is never identity (invariant #2), and authorship follows the bytes.
+    // Path is never identity (path is never identity), and authorship follows the bytes.
     // A rule keyed on path would let a rename launder the origin.
     let f = fixture();
     std::fs::write(f.corpus.path().join("summary.md"), AGENT).unwrap();

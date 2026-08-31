@@ -250,7 +250,7 @@ fn index_status_never_hides_the_cloud_only_count() {
 
 // ── write tools ───────────────────────────────────────────────────────────
 
-/// Invariant #9, at the seam where it is easiest to skip.
+/// The `origin = SELF` rule, at the seam where it is easiest to skip.
 ///
 /// `marrow-tools` returns `origin = SELF` and the ingest pipeline reads it back
 /// from `self_written` — but only if something wrote that row. A handler that
@@ -594,7 +594,7 @@ mod literal {
         assert_eq!(v["coverage"]["complete"], json!(true));
     }
 
-    /// **Invariant #5.** The file is not on this disk; opening it is what
+    /// **Never hydrate a placeholder.** The file is not on this disk; opening it is what
     /// downloads it. It must be skipped unread *and* counted — a scan that
     /// quietly omitted the cloud-only half of a folder would be the most
     /// misleading possible "no matches".
@@ -614,7 +614,7 @@ mod literal {
         );
     }
 
-    /// **Invariant #9.** A hit inside a file this system wrote is not
+    /// **The `origin = SELF` rule.** A hit inside a file this system wrote is not
     /// independent corroboration, and the payload says so rather than leaving
     /// the caller to work it out from the path.
     #[test]

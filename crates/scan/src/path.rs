@@ -1,4 +1,4 @@
-//! Path safety and path identity. **Invariants #7 and #8.**
+//! Path safety and path identity. **Symlink escape, and Unicode NFC/NFD.**
 //!
 //! Two separate jobs live here and they must not be confused:
 //!
@@ -9,10 +9,10 @@
 //! 2. **Identity of a path string** ([`PathKey`]): macOS stores filenames in
 //!    NFD, but an app, an archive or a network share can hand you the NFC form
 //!    of the same name. Without normalising, the same file gets two identities.
-//!    Invariant #8 calls this a correctness bug, not a locale feature.
+//!    The NFC/NFD rule calls this a correctness bug, not a locale feature.
 //!
-//! [`PathKey`] is **not** a file identity. Invariant #2 — path is never
-//! identity — still holds: `PathKey` exists to compare and de-duplicate *paths*
+//! [`PathKey`] is **not** a file identity. Path is never identity, and that
+//! still holds: `PathKey` exists to compare and de-duplicate *paths*
 //! (was this the same path we saw before?), never to key derived data. That is
 //! what `marrow_core::FileId` is for.
 //!
@@ -75,7 +75,7 @@ impl fmt::Debug for PathKey {
     }
 }
 
-/// NFC-normalised identity of a path string. **Invariant #8.**
+/// NFC-normalised identity of a path string. **The Unicode NFC/NFD rule.**
 ///
 /// Deliberately *not* case-folded. APFS is case-insensitive by default, so
 /// `Foo.txt` and `foo.txt` are usually one file — but the same volume can be
@@ -142,7 +142,7 @@ impl AuthorizedRoot {
     /// Whether an **already canonical** path lies inside this root.
     ///
     /// Component-wise, never a string prefix: `/safe/root-evil` is not inside
-    /// `/safe/root`. Each component is NFC-normalised first (invariant #8) so
+    /// `/safe/root`. Each component is NFC-normalised first (the NFC/NFD rule) so
     /// the NFD form of a root name still matches.
     ///
     /// A path equal to the root counts as inside.
@@ -227,8 +227,8 @@ fn escape_error(path: &Path, why: &str) -> Error {
 ///
 /// The proof is a snapshot, not a guarantee: between resolution and the read,
 /// a component can be replaced by a symlink. Call [`SafePath::reverify`]
-/// immediately before the operation — invariant #7 says *at operation time*,
-/// not at index time.
+/// immediately before the operation — the symlink-escape rule says *at
+/// operation time*, not at index time.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SafePath {
     canonical: PathBuf,
@@ -342,7 +342,8 @@ mod tests {
         fs::create_dir(base.join("secrets")).unwrap();
         fs::write(base.join("secrets/id_rsa"), b"PRIVATE KEY").unwrap();
 
-        // The "cloned repo with a symlink to ~/.ssh" case from invariant #7.
+        // The "cloned repo with a symlink to ~/.ssh" case the symlink-escape
+        // rule is named after.
         std::os::unix::fs::symlink(base.join("secrets"), base.join("root/ssh")).unwrap();
         std::os::unix::fs::symlink(base.join("secrets/id_rsa"), base.join("root/key.txt")).unwrap();
 

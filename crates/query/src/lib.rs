@@ -29,11 +29,42 @@
 //!   *trait*, never on `Fts5Index`. That port exists so this crate does not
 //!   care what is behind it.
 //!
+//! # Optional stages fail open. Required ones fail loudly.
+//!
+//! **Hard rule 10 is the whole of it: search works with no LLM, no GPU and no
+//! network.** A stage that can take the entire query down when it breaks is a
+//! violation of that rule waiting for its first bad row, so the split below is
+//! a convention and not one branch's judgement call.
+//!
+//! A stage is **optional** when its failure makes the answer *thinner*: fewer
+//! candidates, a plainer snippet, an explanation with less in it. Those catch
+//! their error, log it at `warn` with enough context to find the cause, and
+//! carry on with what the required stages already produced. A caller must be
+//! able to tell that it happened — [`SearchResults::branches`] names the
+//! branches that actually ran, and [`explain::explain`] states in words when only one
+//! did — because a thin answer presented as a complete one is its own defect.
+//!
+//! A stage is **required** when its failure would make the answer *wrong*.
+//! Those propagate. Degrading them would substitute a plausible answer for a
+//! true one, which is worse than an error, and the caller loses the one signal
+//! that would have told them not to trust what they are reading.
+//!
+//! | Stage | Failure |
+//! |---|---|
+//! | Lexical retrieval ([`search::search_hybrid`]) | **Propagates.** It is the answer, not an enrichment. There is nothing to degrade to |
+//! | Workspace resolution, filter resolution | **Propagates.** An unresolvable `--workspace` returns zero hits, and zero hits for a typo reads as "nothing is indexed" |
+//! | Semantic branch ([`marrow_index::VectorIndex::search`]) | Degrades. The branch drops out; lexical answers alone |
+//! | Hydrating semantic-only candidates | Degrades. Those candidates are lost; every lexical hit survives |
+//! | A fused candidate with no hit behind it | Degrades. Dropped with a warning — a result nobody can open or cite is not a result |
+//! | `--explain` assembly ([`explain::explain`]) | Cannot fail: pure, and a projection of a decision already made |
+//! | [`file_intelligence`] | **Propagates.** The panel *is* the answer. A section that silently vanished would let a reader conclude a file has no duplicates, or that its parse succeeded |
+//! | [`catalog::index_stats`], [`catalog::workspace_stats`] | **Propagates.** A health number that degrades to zero is a wrong number, and these are read precisely to decide whether to trust the index. The one absence handled in-band is the vector table, because a database composed without it is a legitimate state rather than a failure |
+//!
 //! Two rules from [Part 6 §113.3] are enforced here because they are
 //! correctness, not ranking:
 //!
 //! - `origin = SelfWritten` is down-weighted **and flagged**, so a caller can
-//!   bar it from evidence (invariant #13). See [`search::Hit::can_support_a_claim`].
+//!   bar it from evidence (the `origin = SELF` rule). See [`search::Hit::can_support_a_claim`].
 //! - Anything short of `ProvenanceClass::Exact` is down-weighted (CONV-005).
 //!
 //! [Part 6 §113.3]: ../../../docs/Part_6_Engineering_Reference.md

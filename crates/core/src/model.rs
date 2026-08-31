@@ -117,7 +117,7 @@ impl<'de> Deserialize<'de> for ContentHash {
     }
 }
 
-/// **Invariant #1.** Where in a source artifact something came from.
+/// **A `source_span` on every IR node.** Where in a source artifact something came from.
 ///
 /// Every IR node carries one. Provenance to an exact location is the entire
 /// reason this project exists rather than `ripgrep | llm`, it is nearly free to
@@ -134,7 +134,12 @@ pub enum SourceSpan {
     Bytes { start: u64, end: u64 },
     /// Line range, 1-based inclusive. Companion to `Bytes` for display.
     Lines { start: u32, end: u32 },
-    /// Page plus optional bounding box, in PDF points. Deferred (M0 F3).
+    /// Page plus optional bounding box, in PDF points.
+    ///
+    /// No longer deferred: `marrow_parse::pdf` emits this from PDFKit
+    /// character bounds ([D54]). The "Deferred (M0 F3)" note that stood here
+    /// outlived the parser by months, and `docs/Comparison.md` §13.1 was still
+    /// citing it as evidence the claim was unmet.
     Page { page: u32, bbox: Option<[f32; 4]> },
     /// Sheet and A1 range. Spreadsheets.
     Cells { sheet: String, range: String },
@@ -148,6 +153,30 @@ pub enum SourceSpan {
 }
 
 impl SourceSpan {
+    /// `path` plus wherever in it this span points, in the notation the format
+    /// itself uses — `report.md:42`, `contract.pdf:p17`, `q2.xlsx:Sheet1!B4`.
+    ///
+    /// **One implementation, because there were two and they disagreed.** The
+    /// MCP server rendered `Page` and `Cells` correctly; the desktop's copy in
+    /// `state.rs` matched only `Lines` and fell through to the bare filename
+    /// for everything else. So the same citation, for the same chunk, read as
+    /// `contract.pdf:p17` through an agent and as `contract.pdf` in the app —
+    /// with the page silently gone on the surface whose entire promise is
+    /// citing one.
+    ///
+    /// `Bytes`, `XPath`, `Time` and `Whole` deliberately render as the path
+    /// alone. A byte offset is not a location a person can act on, and the
+    /// other three have no reader yet; inventing a notation for them here
+    /// would be a claim about precision that nothing behind it supports.
+    pub fn locate(&self, path: &str) -> String {
+        match self {
+            Self::Lines { start, .. } => format!("{path}:{start}"),
+            Self::Page { page, .. } => format!("{path}:p{page}"),
+            Self::Cells { sheet, range } => format!("{path}:{sheet}!{range}"),
+            _ => path.to_string(),
+        }
+    }
+
     /// Whether this span points at a specific location a human can be taken to.
     ///
     /// `Whole` is honest but not navigable; a citation that resolves to
@@ -157,7 +186,7 @@ impl SourceSpan {
     }
 }
 
-/// Cloud-sync hydration state (TIER-001). **Invariant #5.**
+/// Cloud-sync hydration state (TIER-001). **Never hydrate a placeholder.**
 ///
 /// Reading a `Placeholder` triggers a download. On a large sync folder that is
 /// hundreds of gigabytes of someone's bandwidth, silently.
@@ -181,7 +210,7 @@ impl TierState {
     }
 }
 
-/// Where a file came from. **Invariant #13.**
+/// Where a file came from. **The `origin = SELF` rule.**
 ///
 /// `SelfWritten` content is indexed and searchable — you must be able to find
 /// what the agent wrote — but it can never support a claim. Otherwise a summary
@@ -250,6 +279,41 @@ impl ProvenanceClass {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_page_and_a_cell_survive_into_the_citation_a_person_reads() {
+        // Two implementations of this existed and they disagreed. The MCP
+        // server rendered `Page` and `Cells`; the desktop's copy matched only
+        // `Lines` and let everything else fall through to the bare filename —
+        // so the same chunk cited `contract.pdf:p17` through an agent and
+        // `contract.pdf` in the app, with the page gone on the surface whose
+        // entire promise is citing one.
+        assert_eq!(
+            SourceSpan::Page {
+                page: 17,
+                bbox: Some([72.0, 90.0, 520.0, 140.0])
+            }
+            .locate("contract.pdf"),
+            "contract.pdf:p17"
+        );
+        assert_eq!(
+            SourceSpan::Cells {
+                sheet: "Q2".into(),
+                range: "B4:B18".into()
+            }
+            .locate("q2.xlsx"),
+            "q2.xlsx:Q2!B4:B18"
+        );
+        assert_eq!(
+            SourceSpan::Lines { start: 42, end: 44 }.locate("report.md"),
+            "report.md:42"
+        );
+
+        // And the ones with no notation a person can act on stay the path.
+        for span in [SourceSpan::Bytes { start: 0, end: 9 }, SourceSpan::Whole] {
+            assert_eq!(span.locate("notes.txt"), "notes.txt", "{span:?}");
+        }
+    }
 
     #[test]
     fn placeholders_are_never_safe_to_read() {

@@ -372,7 +372,7 @@ fn execute(case: &Case, sandbox: &Path) -> std::result::Result<(), String> {
                     return Err(format!("written file does not contain {needle:?}"));
                 }
             }
-            // **Invariant #9, asserted on every allowed write in the corpus.**
+            // **`origin = SELF`, asserted on every allowed write in the corpus.**
             // A write tool that forgets this turns the agent's own notes into
             // corroborating evidence for the agent's own claims.
             if w.origin() != Origin::SelfWritten || w.can_support_a_claim() {

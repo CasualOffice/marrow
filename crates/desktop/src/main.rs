@@ -52,7 +52,7 @@ fn main() {
     //
     // The indexed roots are passed so the model directory can refuse to sit
     // inside one: a model writing into an indexed folder would have its own
-    // output re-indexed and cited back (SUP-011, invariant #13).
+    // output re-indexed and cited back (SUP-011, and the `origin = SELF` rule).
     let indexed_roots: Vec<std::path::PathBuf> = core
         .workspaces()
         .map(|ws| {

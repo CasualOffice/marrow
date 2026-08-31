@@ -80,6 +80,10 @@ Three consequences change the *architecture*, not only the plan:
 
 Solo use removes the audience, not the failure modes. These stay because they protect *your* data on *your* machine.
 
+> **The numbers below are local to §126.** They are **not** the same numbers as CLAUDE.md's ten hard rules or the `invariants` skill's fifteen. This list is a superset of CLAUDE.md's — every hard rule appears here, plus transaction snapshots + undo (#5), watcher reconciliation (#11), authority classes (#12) and Unicode NFC/NFD (#14), which CLAUDE.md does not carry as hard rules. The mapping runs
+> §126 #8→CLAUDE #1, #7→#2, #3→#3, #1→#4, #2→#5, #4→#6, #9→#7, #6→#8, #10→#9, #13→#10.
+> Cite these rules **by name**, or write `§126 #N` so a reader knows which list. Never write a bare `invariant #N` — it resolves differently under each of the three.
+
 | # | Keep | Why it still bites |
 |---|---|---|
 | 1 | **Injection defence** (SEC-003/004, ADR-007, §114 envelope) | You download hostile PDFs and clone unknown repos. If this feeds a write-capable agent, a poisoned README targets your home directory. **Highest-value defence in the whole spec for a solo user** |

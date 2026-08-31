@@ -24,7 +24,7 @@
 //!   parameter, not a global: a global cancel flag is one that two callers
 //!   eventually share by accident.
 //!
-//! # Invariant #5 — placeholders are never hydrated
+//! # Placeholders are never hydrated
 //!
 //! Reading a cloud placeholder silently downloads it. This module **refuses to
 //! open anything whose [`TierState`] is not `Resident`**, checked before the
@@ -50,8 +50,8 @@
 //! the caller: [`read_bounded`] stats with `symlink_metadata` and refuses a
 //! symlink. Whatever proved containment did so when the list was built; a
 //! component swapped for a link since then would otherwise be followed out of
-//! the authorised root by `fs::read`, and invariant #7 says the containment
-//! check is at operation time, not at list-building time.
+//! the authorised root by `fs::read`, and the symlink-escape rule says the
+//! containment check is at operation time, not at list-building time.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -189,7 +189,8 @@ pub struct LiteralHit {
     pub path: PathBuf,
     /// 1-based line number, as an editor counts them.
     pub line: u32,
-    /// Byte range of the match within the file. Invariant #1: a literal hit is
+    /// Byte range of the match within the file. A `source_span` on every node: a
+    /// literal hit is
     /// as precise as provenance gets.
     pub span: SourceSpan,
     /// The line the match is on, as `Lines { start, end }`.
@@ -214,7 +215,7 @@ pub struct LiteralOutcome {
     /// Reached, resident, readable and actually searched. Always smaller than
     /// [`Self::files_considered`] by however much was skipped.
     pub files_scanned: usize,
-    /// Invariant #5: skipped without being opened.
+    /// Never hydrated: skipped without being opened.
     pub files_skipped_not_resident: usize,
     pub files_skipped_binary: usize,
     pub files_skipped_too_large: usize,
@@ -353,7 +354,7 @@ pub fn literal_search(
         // decision was made about it, whether or not it was opened.
         out.files_considered += 1;
 
-        // Invariant #5. Before the open, not after: opening is what starts a
+        // Never hydrate a placeholder. Before the open, not after: opening is what starts a
         // hydration on some providers.
         if !target.tier.safe_to_read() {
             out.files_skipped_not_resident += 1;
@@ -580,7 +581,7 @@ enum Read {
 }
 
 fn read_bounded(path: &Path, max: u64) -> Result<Read> {
-    // `symlink_metadata`, not `metadata`: invariant #7 is checked at operation
+    // `symlink_metadata`, not `metadata`: symlink escape is checked at operation
     // time, and `metadata` follows the link, so a path that was a regular file
     // inside the authorised root when the target list was built and is a
     // symlink now would be read straight through to wherever it points. The
@@ -829,7 +830,7 @@ mod tests {
 
     #[test]
     fn a_symlink_is_refused_rather_than_followed_out_of_the_root() {
-        // Invariant #7 at operation time. `fs::metadata` follows the link, so
+        // Symlink escape, at operation time. `fs::metadata` follows the link, so
         // before this check a path that turned into a symlink after the target
         // list was built was read straight through to wherever it pointed.
         let inside = tempfile::tempdir().unwrap();

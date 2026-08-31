@@ -19,7 +19,7 @@ unicode-normalization = "0.1"
 
 # No `libc` / `rustix`: `std::os::macos::fs::MetadataExt::st_flags()` already
 # exposes the `SF_DATALESS` bit from the `lstat` we have to do anyway, so the
-# placeholder check (invariant #5) needs no FFI and no `unsafe`.
+# placeholder check (the never-hydrate rule) needs no FFI and no `unsafe`.
 
 notify = "7"
 

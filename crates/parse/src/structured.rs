@@ -15,7 +15,8 @@
 //! - **JSON** — no Rust JSON parser in common use reports offsets (`serde_json`
 //!   deserialises and discards them). So `serde_json` validates the document
 //!   and a small structural scanner in this module produces the spans. Two
-//!   passes, but the second is the only one that can satisfy invariant #1.
+//!   passes, but the second is the only one that can satisfy the
+//!   `source_span` rule.
 //! - **YAML** — `yaml-rust2` validates; an indentation scanner locates the
 //!   keys. The marked-event API could do it in one pass, but it reports a start
 //!   marker per event and no end, so the ends would be reconstructed from the

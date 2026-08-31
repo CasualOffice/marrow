@@ -11,8 +11,8 @@
 //! Everything before this file could point at bytes because the bytes existed.
 //! A `.docx` is deflated XML inside a zip: offset 4,182 of `word/document.xml`
 //! is an offset into a stream that is nowhere on disk, and no editor, tool or
-//! human can be taken to it. Recording it would satisfy invariant #1 in form
-//! and break it in substance.
+//! human can be taken to it. Recording it would satisfy the `source_span`
+//! rule in form and break it in substance.
 //!
 //! `/word/document.xml#/w:document/w:body/w:tbl[2]/w:tr[3]/w:tc[1]` is an
 //! address the file really has: unzip the part and any XPath engine resolves

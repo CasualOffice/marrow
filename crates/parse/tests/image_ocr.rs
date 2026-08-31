@@ -319,7 +319,7 @@ mod vision {
 
     #[test]
     fn text_in_an_image_is_extracted_with_a_page_span_and_a_box() {
-        // Invariant #1, on the tier where it is hardest to honour: nothing in
+        // The `source_span` rule, on the tier where it is hardest to honour: nothing in
         // these bytes is text, so the span has to be reconstructed from where
         // the recogniser saw ink.
         //

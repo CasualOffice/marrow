@@ -1,7 +1,7 @@
 //! BLAKE3 content hashing.
 //!
 //! The only code in this crate that opens a file, which makes it the choke
-//! point for **invariant #5**: there is no public way to reach the read loop
+//! point for the **never-hydrate rule**: there is no public way to reach the read loop
 //! without a [`TierState`] having been checked first. A placeholder is refused
 //! with [`Code::FsPlaceholderSkipped`] before the `File::open`, because the
 //! `open` is what triggers hydration.
@@ -32,7 +32,7 @@ pub const HASH_BUFFER_BYTES: usize = 256 * 1024;
 ///
 /// Refuses anything that is not [`TierState::Resident`].
 pub fn hash_file_with_tier(path: &Path, tier: TierState) -> Result<ContentHash> {
-    // Invariant #5, checked before the open, not after.
+    // Never hydrate a placeholder: checked before the open, not after.
     tier::ensure_safe_to_read(path, tier)?;
     stream(path)
 }
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn placeholder_never_hydrated() {
-        // Invariant #5. Every non-resident tier is refused, and the refusal
+        // Never hydrate a placeholder. Every non-resident tier is refused, and the refusal
         // happens before the file is opened.
         let td = tempfile::tempdir().unwrap();
         let p = td.path().join("real.txt");

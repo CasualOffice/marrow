@@ -144,7 +144,7 @@ impl Watchers {
     /// where a person wonders whether the button did anything.
     ///
     /// The sweep is the same idempotent, resumable ingest as every other one
-    /// (invariant #7), so pressing this on an unchanged corpus costs one walk
+    /// (jobs are idempotent and resumable), so pressing this on an unchanged corpus costs one walk
     /// and stores nothing.
     ///
     /// A root whose thread has stopped is skipped rather than counted: nothing

@@ -77,7 +77,8 @@
 //!
 //! # Untrusted query text
 //!
-//! Query text is content, and content is untrusted (invariant #12). It is
+//! Query text is content, and content is untrusted — retrieved content never
+//! grants authority. It is
 //! never interpolated into an FTS5 expression. [`match_expression`] tokenizes
 //! the input itself and re-emits every token as a quoted FTS5 string, so the
 //! only operators in the expression are ones this module wrote. See
@@ -109,7 +110,8 @@ use crate::port::{
 /// 2. It previously said "delete the index directory". **There is no index
 ///    directory.** The FTS5 tables live inside the canonical database (D3), so
 ///    that sentence resolves to "delete `marrow.db`" — which takes the
-///    corrections with it, the one thing hard rule 8 says is not rebuildable.
+///    corrections with it, the one thing that is not rebuildable — derived
+///    indexes are, corrections are not.
 ///    A rebuild instruction must never be able to be followed destructively.
 const INDEX_MISSING: &str = "The text index is missing and has to be rebuilt before search will \
                              work. Re-index your workspaces to rebuild it from your files — the \
@@ -182,18 +184,19 @@ CREATE TABLE text_index_docs (
     -- their index docs go with them without any application code running.
     chunk_id            TEXT NOT NULL UNIQUE
                           REFERENCES chunks(chunk_id) ON DELETE CASCADE,
-    -- Invariant #2: derived data is keyed on file_id, never on a path.
+    -- Path is never identity: derived data is keyed on file_id, never on a path.
     file_id             TEXT NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
     version_id          TEXT NOT NULL,
     workspace_id        TEXT NOT NULL,
     -- Display and filtering only. Updated on rename; not identity.
     path                TEXT NOT NULL,
     extension           TEXT NOT NULL DEFAULT '',
-    -- Invariant #1: a hit that cannot say where it came from is not a citation.
+    -- A `source_span` on every node: a hit that cannot say where it came from
+    -- is not a citation.
     source_span         TEXT NOT NULL CHECK (json_valid(source_span)),
     provenance_class    TEXT NOT NULL CHECK (provenance_class IN
                           ('EXACT','DEGRADED','APPROXIMATE','METADATA_ONLY')),
-    -- Invariant #13: SELF content is findable, and the query layer refuses to
+    -- `origin = SELF`: such content is findable, and the query layer refuses to
     -- let it support a claim. Carried here so that refusal needs no extra join.
     origin              TEXT NOT NULL CHECK (origin IN ('USER','SELF')),
     modified_ms         INTEGER NOT NULL
@@ -291,7 +294,7 @@ fn provenance_of(s: &str) -> ProvenanceClass {
 }
 
 fn origin_of(s: &str) -> Origin {
-    // Invariant #13 fails safe: anything that is not literally 'USER' is
+    // The `origin = SELF` rule fails safe: anything that is not literally 'USER' is
     // treated as self-written, i.e. barred from supporting a claim.
     if s == "USER" {
         Origin::User
@@ -315,7 +318,7 @@ fn span_json(span: &SourceSpan) -> String {
 
 fn parse_span(json: &str) -> SourceSpan {
     serde_json::from_str(json).unwrap_or_else(|e| {
-        // Invariant #1 fails safe rather than loudly: a span we cannot decode
+        // The `source_span` rule fails safe rather than loudly: a span we cannot decode
         // must not become a *confident wrong* location.
         tracing::warn!(error = %e, "unreadable source span in the text index");
         SourceSpan::Whole
@@ -1166,7 +1169,7 @@ mod tests {
 
     #[test]
     fn unknown_origin_values_fail_closed_to_self_written() {
-        // Invariant #13: if we cannot prove content is the user's, it must not
+        // `origin = SELF`: if we cannot prove content is the user's, it must not
         // be allowed to support a claim.
         assert_eq!(origin_of("USER"), Origin::User);
         assert_eq!(origin_of("SELF"), Origin::SelfWritten);

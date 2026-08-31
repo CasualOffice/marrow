@@ -15,6 +15,7 @@ use marrow_core::{Origin, ProvenanceClass, SourceSpan};
 
 use super::*;
 use crate::envelope::{Builder, Evidence, RandomNonce};
+use crate::provider::Finish;
 use crate::queue::Cancel;
 use crate::request::Reasoning;
 use crate::secrets::MemorySecrets;
@@ -171,7 +172,7 @@ fn run(
     p: &OpenAiProvider,
     env: &crate::envelope::Envelope,
     cancel: &Cancel,
-    on_token: &mut dyn FnMut(Token),
+    on_event: &mut dyn FnMut(StreamEvent),
 ) -> Result<Completion> {
     p.generate(
         GenerateRequest {
@@ -181,7 +182,7 @@ fn run(
             max_output_tokens: 256,
             cancel,
         },
-        on_token,
+        on_event,
     )
 }
 
@@ -203,7 +204,7 @@ const STREAM: &str = concat!(
 
 #[test]
 fn the_prompt_is_the_envelope_and_nothing_else() {
-    // Invariant #4. The convenient shape for this API is a system message of
+    // Retrieved content never grants authority. The convenient shape for this API is a system message of
     // instructions plus the evidence as context, and that is precisely the
     // shape that grants retrieved content authority. The bytes sent must be
     // the bytes the local worker gets.
@@ -361,8 +362,13 @@ fn tokens_arrive_as_they_stream_rather_than_at_the_end() {
     assert_eq!(
         seen,
         vec![
-            Token::Text("It renews ".into()),
-            Token::Text("on 31 December 2026 [E1].".into()),
+            StreamEvent::text("It renews "),
+            StreamEvent::text("on 31 December 2026 [E1]."),
+            // The cost and the stop reason arrive *on the stream*, last. They
+            // used to exist only as this function's return value, so a window
+            // rendering tokens could not put a number in the footer until the
+            // whole answer was over.
+            StreamEvent::Finish(Finish::new(c.usage, StopReason::Stop)),
         ]
     );
     assert_eq!(c.text, "It renews on 31 December 2026 [E1].");
@@ -390,8 +396,8 @@ fn reasoning_deltas_are_kept_apart_from_the_answer() {
     let c = run(&p, &envelope(), &Cancel::new(), &mut |t| seen.push(t)).expect("generate");
     assert_eq!(c.text, "31 December 2026.");
     assert_eq!(c.thinking.as_deref(), Some("the lease says… and so"));
-    assert!(matches!(seen[0], Token::Thinking(_)));
-    assert!(matches!(seen[2], Token::Text(_)));
+    assert!(matches!(seen[0], StreamEvent::Thinking { .. }));
+    assert!(matches!(seen[2], StreamEvent::Text { .. }));
 }
 
 #[test]
@@ -420,6 +426,123 @@ fn a_chunk_that_does_not_parse_does_not_throw_away_the_answer() {
     let p = provider(cloud_endpoint(), &cloud_dns(), Arc::new(Stub::ok(stream)));
     let c = run(&p, &envelope(), &Cancel::new(), &mut |_| {}).expect("generate");
     assert_eq!(c.text, "still here");
+}
+
+#[test]
+fn a_warning_mid_stream_does_not_end_the_answer() {
+    // The case the event exists for. Something worth telling the user happens
+    // half way through — here a frame that could not be read, so a few words
+    // of their answer are missing — and the answer keeps arriving afterwards.
+    // Before there was a `Notice`, this was a `warn!` in a log the user will
+    // never open, or a hard error that threw away a good answer.
+    let stream = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"It renews \"}}]}\n",
+        "data: {not json at all}\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"on 31 December 2026 [E1].\"}}]}\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n",
+        "data: [DONE]\n",
+    );
+    let p = provider(cloud_endpoint(), &cloud_dns(), Arc::new(Stub::ok(stream)));
+    let mut seen = Vec::new();
+    let c = run(&p, &envelope(), &Cancel::new(), &mut |e| seen.push(e)).expect("generate");
+
+    let at = seen
+        .iter()
+        .position(|e| matches!(e, StreamEvent::Notice(_)))
+        .expect("the unreadable frame must be said out loud, not only logged");
+    assert!(
+        seen[at + 1..]
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Text { .. })),
+        "text must keep arriving after the warning: {seen:?}"
+    );
+    assert!(
+        matches!(seen.last(), Some(StreamEvent::Finish(_))),
+        "and the stream must still finish: {seen:?}"
+    );
+    assert_eq!(c.text, "It renews on 31 December 2026 [E1].");
+    assert_eq!(c.stop_reason, StopReason::Stop);
+
+    let StreamEvent::Notice(n) = &seen[at] else {
+        unreachable!()
+    };
+    assert!(n.message.contains("api.example.com"), "{}", n.message);
+    assert!(
+        n.message.contains("Ask again"),
+        "cause and action, not just cause: {}",
+        n.message
+    );
+}
+
+#[test]
+fn only_one_warning_however_many_frames_are_unreadable() {
+    // A server producing garbage produces a lot of it. The same sentence four
+    // hundred times is not more informative than the same sentence once, and
+    // it would bury the answer it is about.
+    let stream = "data: {not json}\n".repeat(20) + "data: [DONE]\n";
+    let p = provider(cloud_endpoint(), &cloud_dns(), Arc::new(Stub::ok(&stream)));
+    let mut notices = 0;
+    run(&p, &envelope(), &Cancel::new(), &mut |e| {
+        if matches!(e, StreamEvent::Notice(_)) {
+            notices += 1;
+        }
+    })
+    .expect("generate");
+    assert_eq!(notices, 1);
+}
+
+#[test]
+fn an_answer_the_provider_stopped_filtering_is_not_reported_as_a_clean_finish() {
+    // `content_filter` used to fall into the `_ =>` arm and arrive as
+    // `StopReason::Stop` — an answer that was cut short presented as one the
+    // model chose to end. There is no third `StopReason` to add without
+    // changing what every consumer renders, so the truth goes on the stream.
+    let stream = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"The clause says\"}}]}\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n",
+        "data: [DONE]\n",
+    );
+    let p = provider(cloud_endpoint(), &cloud_dns(), Arc::new(Stub::ok(stream)));
+    let mut seen = Vec::new();
+    let c = run(&p, &envelope(), &Cancel::new(), &mut |e| seen.push(e)).expect("generate");
+
+    let notice = seen
+        .iter()
+        .find_map(|e| match e {
+            StreamEvent::Notice(n) => Some(n),
+            _ => None,
+        })
+        .expect("a filtered answer must say so");
+    assert!(notice.message.contains("content_filter"), "{notice:?}");
+    assert!(notice.message.contains("incomplete"), "{notice:?}");
+    assert_eq!(c.text, "The clause says");
+}
+
+#[test]
+fn a_failure_after_the_text_has_streamed_keeps_the_text_and_announces_no_finish() {
+    // The third thing the old shape could not express. The provider fails
+    // after emitting real words: those words already reached the consumer
+    // through the stream and they stand, but nothing announces this as a
+    // finished generation, because it was not one. The error is still the
+    // `Result`, so no caller can forget to look at it.
+    let stream = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"It renews on 31 Dec\"}}]}\n",
+        "data: {\"error\":{\"message\":\"upstream capacity\",\"type\":\"server_error\"}}\n",
+    );
+    let p = provider(cloud_endpoint(), &cloud_dns(), Arc::new(Stub::ok(stream)));
+    let mut seen = Vec::new();
+    let e = run(&p, &envelope(), &Cancel::new(), &mut |ev| seen.push(ev))
+        .expect_err("the provider failed");
+
+    assert!(
+        seen.iter().any(|ev| matches!(ev, StreamEvent::Text { .. })),
+        "what streamed before the failure is not taken back"
+    );
+    assert!(
+        !seen.iter().any(|ev| matches!(ev, StreamEvent::Finish(_))),
+        "a failed generation must not announce a finish: {seen:?}"
+    );
+    assert!(!e.message().is_empty());
 }
 
 #[test]
@@ -902,7 +1025,7 @@ fn the_real_client_speaks_to_a_real_server_and_streams_what_it_says() {
                 cancel: &Cancel::new(),
             },
             &mut |t| {
-                if let Token::Text(s) = t {
+                if let StreamEvent::Text { text: s } = t {
                     streamed.push_str(&s);
                 }
             },

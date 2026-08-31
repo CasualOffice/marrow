@@ -247,7 +247,7 @@ CREATE TABLE ir_nodes (
     parent_node_id      TEXT REFERENCES ir_nodes(node_id),
     kind                TEXT NOT NULL,               -- §8.6 IrNodeKind
     ordinal             INTEGER NOT NULL,
-    -- Invariant #1: provenance is NOT NULL by construction. A node without a
+    -- A `source_span` on every node: provenance is NOT NULL by construction. A node without a
     -- source_span is a bug, so the schema refuses to store one.
     source_span         TEXT NOT NULL CHECK (json_valid(source_span)),
     attributes          TEXT CHECK (attributes IS NULL OR json_valid(attributes)),
@@ -355,7 +355,7 @@ pub fn apply_reader_pragmas(conn: &Connection) -> Result<()> {
 /// Three, not two: the chain is numbered across crates and the text index
 /// occupies 2. See `migrate::MIGRATIONS`.
 ///
-/// **Invariant #9 lives or dies here.** `files.origin` defaults to `'USER'`,
+/// **The `origin = SELF` rule lives or dies here.** `files.origin` defaults to `'USER'`,
 /// and a scan has no way to tell agent output from a document the user typed —
 /// so without this table the next reconciliation reclassifies everything the
 /// write tools produced as the user's own work, and it becomes citable
@@ -379,7 +379,7 @@ pub const SCHEMA_V3: &str = r#"
 CREATE TABLE self_written (
     content_hash TEXT PRIMARY KEY,
     -- The path at the time of writing. Diagnostic only: identity is the hash,
-    -- because a path is never identity (invariant #2).
+    -- because a path is never identity (path is never identity).
     written_path TEXT NOT NULL,
     -- The action that produced it, so a forget path can undo one write.
     txn_id       TEXT NOT NULL,
@@ -508,7 +508,7 @@ CREATE TABLE table_ir (
     -- arena ordinal below is what actually identifies the node today.
     node_id             TEXT,
     node_ordinal        INTEGER,
-    -- Invariant #1 at table scope.
+    -- A `source_span` on every node, at table scope.
     source_span         TEXT NOT NULL CHECK (json_valid(source_span)),
     n_rows              INTEGER NOT NULL,
     n_cols              INTEGER NOT NULL,

@@ -70,7 +70,7 @@ pub struct HitExplanation {
     pub multipliers: Vec<AppliedMultiplier>,
     /// `base_score` × every factor above. The sort key.
     pub final_score: f32,
-    /// **Invariant #13.** `false` bars this content from supporting a claim,
+    /// **The `origin = SELF` rule.** `false` bars this content from supporting a claim,
     /// no matter how it scored.
     pub can_support_a_claim: bool,
 }
@@ -111,7 +111,7 @@ pub fn explain(req: &SearchRequest, ran: &[&'static str], hits: &[Hit]) -> Expla
         weight: LEXICAL_WEIGHT,
         contributed,
         ran_because: "always: lexical retrieval needs no model, no GPU and no network \
-                      (invariant #15)",
+                      (search works with no LLM, no GPU and no network)",
     }];
     if ran.contains(&SEMANTIC) {
         branches.push(BranchExplanation {
@@ -143,7 +143,7 @@ pub fn explain(req: &SearchRequest, ran: &[&'static str], hits: &[Hit]) -> Expla
     if hits.iter().any(|h| !h.can_support_a_claim) {
         caveats.push(
             "Some results are agent-written (origin = SELF). They are findable and \
-             down-weighted, and they may never be cited as evidence (invariant #13).",
+             down-weighted, and they may never be cited as evidence (the `origin = SELF` rule).",
         );
     }
     if hits
@@ -197,7 +197,7 @@ pub fn summarize(h: &HitExplanation) -> String {
 
 /// Whether an explanation describes content that may be cited.
 ///
-/// The convenience form of invariant #13 for a caller assembling evidence: it
+/// The convenience form of the `origin = SELF` rule for a caller assembling evidence: it
 /// filters on this, never on the score.
 pub fn citable(h: &HitExplanation) -> bool {
     h.can_support_a_claim

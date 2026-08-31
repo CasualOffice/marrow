@@ -46,7 +46,7 @@
 //!
 //! A ragged row leaves a hole in the grid. The hole stays a hole: synthesising
 //! a cell for it would mean synthesising a location, which is the one thing
-//! invariant #1 exists to prevent. The table is flagged
+//! the `source_span` rule exists to prevent. The table is flagged
 //! [`Reconstruction::Degraded`] instead.
 
 use std::collections::BTreeMap;
@@ -291,7 +291,7 @@ impl Reconstruction {
 pub struct TableIr {
     /// Arena index of the [`IrKind::Table`] node this came from.
     pub node: usize,
-    /// **Invariant #1**, at table scope.
+    /// **A `source_span` on every node**, at table scope.
     pub span: SourceSpan,
     pub n_rows: u32,
     pub n_cols: u32,
@@ -1102,7 +1102,7 @@ mod tests {
 
     #[test]
     fn every_cell_keeps_a_precise_span_that_resolves_to_its_own_bytes() {
-        // TBL-002, and invariant #1 in its table form.
+        // TBL-002, and the `source_span` rule in its table form.
         let src = "name,qty\nbolt,12\nnut,144\n";
         let t = one(&parse_csv("t.csv", src));
         assert!(!t.cells.is_empty());
@@ -1224,7 +1224,7 @@ mod tests {
 
     #[test]
     fn a_ragged_table_is_flagged_rather_than_squared_off() {
-        // TBL-018 and invariant #1 together: the missing square gets no cell,
+        // TBL-018 and the `source_span` rule together: the missing square gets no cell,
         // because a cell would need a location and there is none.
         let t = one(&parse_csv("r.csv", "a,b,c\n1,2\n3,4,5\n"));
         assert_eq!(t.reconstruction, Reconstruction::Degraded);

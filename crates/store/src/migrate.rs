@@ -159,7 +159,7 @@ pub fn backups_for(db: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-/// `VACUUM INTO` a timestamped backup. **Invariant #11.**
+/// `VACUUM INTO` a timestamped backup. **Back up before any migration.**
 fn take_backup(conn: &Connection, db: &Path, from_version: i64) -> Result<PathBuf> {
     let at = Timestamp::now().as_millis();
     let dir = db.parent().unwrap_or(Path::new("."));
@@ -290,7 +290,7 @@ pub(crate) fn open_migrated_with(
         return Ok((conn, current));
     }
 
-    // Invariant #11: back up first, unconditionally — including the very first
+    // Back up before any migration: unconditionally first, unconditionally — including the very first
     // migration. An unconditional rule is one that cannot be reasoned wrong at
     // 1am; an empty database costs a few kilobytes to copy.
     let backup = match loc.file_path() {

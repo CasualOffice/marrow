@@ -163,8 +163,8 @@ fn validate_component(whole: &str, c: &str) -> Result<()> {
     }
     if c.ends_with(' ') || c.ends_with('.') {
         // Windows silently strips both, so the file syncs to a machine where
-        // it has a different name than the one we recorded — invariant #2's
-        // problem arriving through the back door.
+        // it has a different name than the one we recorded — the
+        // path-is-never-identity rule's problem arriving through the back door.
         return Err(denied(
             whole,
             "A name ends with a space or a dot, which some filesystems silently strip.",

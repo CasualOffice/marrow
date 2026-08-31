@@ -151,7 +151,7 @@ codes! {
 
     // ACT_ — a write the user asked for, refused. Never retryable as-is: the
     // caller has to look at what changed and decide again.
-    /// The file changed since the caller read it (invariant #6). The user has
+    /// The file changed since the caller read it — the stale-version check. The user has
     /// it open in their editor, and the write would discard their work.
     ActStaleVersion         => "ACT_STALE_VERSION",   Action, false;
     /// The target exists and the caller asked to create, not replace. There is

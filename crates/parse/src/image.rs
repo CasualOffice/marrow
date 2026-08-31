@@ -15,8 +15,8 @@
 //! [D13] settled it: the OCR engine is platform-native. On macOS that is
 //! `VNRecognizeTextRequest`, which costs nothing to ship, downloads no model,
 //! needs no network, and is already better than a vendored Tesseract. It also
-//! satisfies invariant #10 — search still works with no LLM, no GPU and no
-//! network — because none of those are what it uses.
+//! satisfies the hard rule that search still works with no LLM, no GPU and
+//! no network — because none of those are what it uses.
 //!
 //! [D13]: ../../../DECISIONS.md
 //!
@@ -100,7 +100,8 @@ pub struct ImageParser;
 
 impl ImageParser {
     pub const ID: &'static str = "vision-ocr";
-    /// Bumped when output would change for the same input (invariant #4).
+    /// Bumped when output would change for the same input: every derived
+    /// artifact carries `(source_version, processor, processor_version)`.
     ///
     /// Vision's own recogniser revision moves with the OS, which this cannot
     /// see. That is a known limit: an OS upgrade improves results for newly
@@ -127,7 +128,7 @@ impl ContentParser for ImageParser {
     }
 
     fn parse(&self, input: ParseInput<'_>) -> Result<ParsedArtifact> {
-        // Invariant #5, re-asserted rather than assumed. The router checks this
+        // Never hydrate a placeholder, re-asserted rather than assumed. The router checks this
         // too; the reason to check again is that OCR is the most expensive
         // thing in the crate and a placeholder is the one input where spending
         // that cost also spends someone's bandwidth.
@@ -445,8 +446,8 @@ mod backend {
         format: ImageFormat,
     ) -> Result<ParsedArtifact> {
         // From `NSData`, not from a URL — the bytes are already in memory, and
-        // a URL would mean this parser needed a path at all, which invariant #2
-        // and `ParseInput` both refuse.
+        // a URL would mean this parser needed a path at all, which the
+        // path-is-never-identity rule and `ParseInput` both refuse.
         let data = NSData::with_bytes(input.bytes);
         let image = unsafe { CIImage::initWithData(CIImage::alloc(), &data) }.ok_or_else(|| {
             Error::new(
@@ -656,7 +657,7 @@ mod tests {
     #[test]
     fn the_parser_identifies_itself_and_its_tier() {
         // PAR-003: persisted with every result, so a version bump can schedule
-        // reprocessing without a manual reindex (invariant #4).
+        // reprocessing without a manual reindex — the processor-version rule.
         assert_eq!(ImageParser.id(), "vision-ocr");
         assert!(!ImageParser.version().is_empty());
         assert_eq!(ImageParser.tier(), ParserTier::T4);
@@ -743,7 +744,7 @@ mod tests {
 
     #[test]
     fn a_placeholder_is_never_recognised() {
-        // Invariant #3. The router refuses first; this is the parser refusing
+        // Never hydrate a placeholder. The router refuses first; this is the parser refusing
         // on its own account, because OCR is the one parse whose cost is also
         // someone's bandwidth.
         let probe = FileProbe::new("photo.heic", 4_000_000).with_tier(TierState::Placeholder);
@@ -808,7 +809,7 @@ mod tests {
 
     #[test]
     fn every_node_carries_a_page_span_with_a_box() {
-        // Invariant #1. A node without a span is a bug, and for this parser a
+        // The `source_span` rule. A node without a span is a bug, and for this parser a
         // span without a box is very nearly one.
         let lines = vec![
             line("MARROW OCR", [0.1, 0.7, 0.9, 0.8]),
@@ -908,7 +909,7 @@ mod tests {
 ///
 /// The generated fixtures in `tests/image_ocr.rs` prove the wiring; this proves
 /// the thing the wiring is for, on a photograph or a screenshot the author
-/// actually has. Its only assertion is invariant #1, because everything else
+/// actually has. Its only assertion is the `source_span` rule, because everything else
 /// about a real image is unknown by definition.
 ///
 /// `cargo test -p marrow-parse -- --ignored --nocapture image`

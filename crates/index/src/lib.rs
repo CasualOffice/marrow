@@ -26,8 +26,8 @@
 //!
 //! Everything here is derived state. Deleting the FTS5 tables and running
 //! [`TextIndex::rebuild_from`] must reproduce the same answers — that is
-//! invariant #11's other half, and `derived_index_is_rebuildable_from_canonical`
-//! is the test.
+//! the other half of "derived indexes are rebuildable; corrections are not",
+//! and `derived_index_is_rebuildable_from_canonical` is the test.
 
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]

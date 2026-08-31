@@ -18,7 +18,7 @@
 //! Three properties are load-bearing and each has a test:
 //!
 //! 1. **The prompt is the envelope and nothing else.** Retrieved content never
-//!    grants authority (invariant #4), so it does not become a `system`
+//!    grants authority, so it does not become a `system`
 //!    message because an API makes that convenient. The bytes sent here are
 //!    the same bytes the local worker gets.
 //! 2. **The key is read at request time and never printed.** See
@@ -40,7 +40,8 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 use crate::provider::{
-    Boundary, Completion, GenerateRequest, GenerationProvider, StopReason, Token, Usage,
+    Boundary, Completion, GenerateRequest, GenerationProvider, Notice, StopReason, StreamEvent,
+    Usage,
 };
 use crate::secrets::{Secret, SecretStore};
 
@@ -536,7 +537,7 @@ impl OpenAiProvider {
         // **One user message, the envelope verbatim.**
         //
         // Not a system message and a set of assistant messages: retrieved file
-        // content never grants authority (invariant #4), and the §114 envelope
+        // content never grants authority, and the §114 envelope
         // is the mechanism that says so — its own SYS block is first, its
         // untrusted evidence is labelled, and a runtime instruction is last.
         // Splitting it across chat roles would put the user's documents into
@@ -564,7 +565,7 @@ impl GenerationProvider for OpenAiProvider {
     fn generate(
         &self,
         request: GenerateRequest<'_>,
-        on_token: &mut dyn FnMut(Token),
+        on_event: &mut dyn FnMut(StreamEvent),
     ) -> Result<Completion> {
         let body = self.body(&request)?;
         // Read here rather than held on the struct: a key rotated in the
@@ -598,7 +599,7 @@ impl GenerationProvider for OpenAiProvider {
         );
 
         if request.cancel.is_cancelled() {
-            return Ok(cancelled(self, String::new(), String::new(), 0, 0));
+            return Ok(cancelled(self, String::new(), String::new(), 0, 0).announced(on_event));
         }
 
         let response = self.http.post(ChatRequest {
@@ -613,7 +614,7 @@ impl GenerationProvider for OpenAiProvider {
             return Err(self.map_status(status, &detail));
         }
 
-        self.stream(response.body, &request, on_token)
+        self.stream(response.body, &request, on_event)
     }
 }
 
@@ -623,7 +624,7 @@ impl OpenAiProvider {
         &self,
         body: Box<dyn Read + Send>,
         request: &GenerateRequest<'_>,
-        on_token: &mut dyn FnMut(Token),
+        on_event: &mut dyn FnMut(StreamEvent),
     ) -> Result<Completion> {
         let mut reader = BufReader::new(body);
         let mut line = String::new();
@@ -633,6 +634,7 @@ impl OpenAiProvider {
         let mut streamed_thinking = 0u32;
         let mut usage: Option<Usage> = None;
         let mut stop = StopReason::Stop;
+        let mut warned_unreadable = false;
 
         loop {
             if request.cancel.is_cancelled() {
@@ -640,7 +642,8 @@ impl OpenAiProvider {
                 // the provider generating — and billing — for an answer nobody
                 // is waiting for, on a connection nobody is watching.
                 drop(reader);
-                return Ok(cancelled(self, text, thinking, streamed, streamed_thinking));
+                return Ok(cancelled(self, text, thinking, streamed, streamed_thinking)
+                    .announced(on_event));
             }
             line.clear();
             // Cancellation is checked between events. A provider that has
@@ -679,9 +682,22 @@ impl OpenAiProvider {
                 Ok(c) => c,
                 Err(e) => {
                     // One unreadable chunk is not a reason to throw away an
-                    // answer that is arriving. Counted in the log rather than
-                    // silently swallowed.
+                    // answer that is arriving. It is also not something to keep
+                    // to the log: a few words may be missing from the middle of
+                    // the text the user is reading, and only they can judge
+                    // whether that matters. Said once — a server producing
+                    // garbage produces a lot of it, and one sentence repeated
+                    // four hundred times is not more informative than one.
                     warn!(error = %e, "a chunk of the event stream did not parse");
+                    if !warned_unreadable {
+                        warned_unreadable = true;
+                        on_event(StreamEvent::notice(format!(
+                            "Part of the response from {} could not be read, so a \
+                             few words may be missing from this answer. Ask again \
+                             if it reads wrongly.",
+                            self.target.host
+                        )));
+                    }
                     continue;
                 }
             };
@@ -701,21 +717,39 @@ impl OpenAiProvider {
                         if !t.is_empty() {
                             thinking.push_str(&t);
                             streamed_thinking += 1;
-                            on_token(Token::Thinking(t));
+                            on_event(StreamEvent::thinking(t));
                         }
                     }
                     if let Some(t) = delta.content {
                         if !t.is_empty() {
                             text.push_str(&t);
                             streamed += 1;
-                            on_token(Token::Text(t));
+                            on_event(StreamEvent::text(t));
                         }
                     }
                 }
                 if let Some(reason) = choice.finish_reason {
                     stop = match reason.as_str() {
                         "length" | "max_tokens" => StopReason::Length,
-                        _ => StopReason::Stop,
+                        // Everything else is *presented* as a clean stop,
+                        // because there is no third [`StopReason`] and
+                        // inventing one is a change to what every consumer
+                        // renders. But `content_filter` is not a clean stop and
+                        // neither is a reason this build has never heard of,
+                        // and until there was somewhere to say so they were
+                        // silently identical to "the model finished". That is
+                        // the shape of failure this crate exists to refuse:
+                        // an answer that looks complete and is not.
+                        other => {
+                            if !matches!(other, "stop" | "eos" | "end_turn") {
+                                on_event(StreamEvent::Notice(Notice::new(format!(
+                                    "{} stopped this answer early and gave the reason \
+                                     \"{other}\". What is above may be incomplete.",
+                                    self.target.host
+                                ))));
+                            }
+                            StopReason::Stop
+                        }
                     };
                 }
             }
@@ -739,7 +773,8 @@ impl OpenAiProvider {
             stop_reason: stop,
             boundary: self.boundary,
             model_id: self.endpoint.model.clone(),
-        })
+        }
+        .announced(on_event))
     }
 
     /// Four different problems, four different actions (SUP-001).

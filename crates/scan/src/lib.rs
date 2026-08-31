@@ -6,12 +6,12 @@
 //! from a test with a `tempfile` and no other setup.
 //!
 //! ```text
-//! path::AuthorizedRoot   consent + containment  (invariants #7, #8)
+//! path::AuthorizedRoot   consent + containment  (symlink escape, NFC)
 //!        │
 //!        ├── walk::walk  →  Iterator<ScanEvent>  (FS-011, WS-005, D47)
 //!        │        │
 //!        │        └── probe::FileFacts  one lstat, no content   (FS-014)
-//!        │                 └── tier::tier_from_metadata         (invariant #5)
+//!        │                 └── tier::tier_from_metadata (never-hydrate)
 //!        │
 //!        └── hash::hash_file  →  ContentHash    refuses non-Resident
 //! ```
@@ -20,13 +20,13 @@
 //!
 //! - **A placeholder is never opened.** The tier is decided from metadata the
 //!   walk already had, and [`hash`] is the only code that opens a file — behind
-//!   a tier check it cannot be reached around. Invariant #5.
+//!   a tier check it cannot be reached around. The never-hydrate rule.
 //! - **Containment is proved by comparing canonical path *components*.** Never
-//!   a string prefix, and re-proved at operation time. Invariant #7.
+//!   a string prefix, and re-proved at operation time. The symlink-escape rule.
 //! - **Paths are NFC-normalised before comparison**, so the NFD form macOS
 //!   stores and the NFC form everything else produces are one identity, not two.
-//!   Invariant #8. None of these keys are file identities — that is
-//!   `marrow_core::FileId`, per invariant #2.
+//!   The Unicode NFC/NFD rule. None of these keys are file identities — that
+//!   is `marrow_core::FileId`, per the path-is-never-identity rule.
 //!
 //! **Platform: macOS only** (D5). Platform-specific code is behind
 //! `#[cfg(target_os = "macos")]` with a fail-closed fallback: on any other

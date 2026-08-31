@@ -64,7 +64,7 @@ fn a_full_scan_hashes_only_resident_files_inside_the_root() {
             skipped.push(Code::FsPlaceholderSkipped);
             continue;
         }
-        // Invariant #7 at operation time, not at index time.
+        // Symlink escape is re-checked at operation time, not at index time.
         let safe = root
             .resolve(&entry.path)
             .expect("entry must resolve inside");

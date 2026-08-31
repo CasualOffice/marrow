@@ -126,10 +126,22 @@ pub enum Event {
         reason: String,
         depth: Depth,
     },
-    /// A token arrived. The UI renders these; nothing polls for them.
-    Token {
+    /// Something happened on a generation's stream. The UI renders these;
+    /// nothing polls for them.
+    ///
+    /// Not called `Token` any more, because a
+    /// [`Notice`](crate::provider::Notice) is not a token and a variant that
+    /// says otherwise is how a warning ends up rendered into the middle of an
+    /// answer. The stream's terminal `Finish` is **not** forwarded here:
+    /// `Completed` already carries the same usage and stop reason, and two
+    /// announcements of one fact are two things that can drift.
+    // The field is `stream` rather than `event` because this enum is
+    // internally tagged on `event`, and serde refuses the collision outright.
+    // It is right to: a reader of the JSON would have had to work out which
+    // `event` was meant, and so would a reader of the Rust.
+    Streamed {
         request_id: String,
-        token: crate::provider::Token,
+        stream: crate::provider::StreamEvent,
     },
     /// A request finished, with what it cost and where it ran.
     Completed {
@@ -503,7 +515,7 @@ impl Supervisor {
         let request_id = request.id.to_string();
         self.transition(model_id, ModelState::Busy, "Running a request.");
 
-        let mut tokens = Vec::new();
+        let mut streamed = Vec::new();
         let result = provider.generate(
             crate::provider::GenerateRequest {
                 model_id,
@@ -512,13 +524,18 @@ impl Supervisor {
                 max_output_tokens: request.max_output_tokens,
                 cancel,
             },
-            &mut |t| tokens.push(t),
+            &mut |e| streamed.push(e),
         );
 
-        for token in tokens {
-            self.events.push(Event::Token {
+        for event in streamed {
+            if matches!(event, crate::provider::StreamEvent::Finish(_)) {
+                // See `Event::Streamed`. `Completed` says this, and says it
+                // with the completion the caller also gets.
+                continue;
+            }
+            self.events.push(Event::Streamed {
                 request_id: request_id.clone(),
-                token,
+                stream: event,
             });
         }
 
@@ -1091,7 +1108,8 @@ mod running {
     use crate::catalogue;
     use crate::envelope::{Builder, RandomNonce};
     use crate::provider::{
-        Boundary, Completion, GenerateRequest, GenerationProvider, StopReason, Token, Usage,
+        Boundary, Completion, GenerateRequest, GenerationProvider, Notice, StopReason, StreamEvent,
+        Usage,
     };
     use crate::request::{Priority, Reasoning};
     use marrow_core::{Code, Error};
@@ -1132,7 +1150,7 @@ mod running {
         fn generate(
             &self,
             request: GenerateRequest<'_>,
-            on_token: &mut dyn FnMut(Token),
+            on_event: &mut dyn FnMut(StreamEvent),
         ) -> marrow_core::Result<Completion> {
             let next = self
                 .outcome
@@ -1142,8 +1160,13 @@ mod running {
                 .unwrap_or(Ok("default answer"));
             let text = next?;
             for word in text.split_inclusive(' ') {
-                on_token(Token::Text(word.to_string()));
+                on_event(StreamEvent::text(word));
             }
+            // Always, so the path a notice takes to a subscriber is exercised
+            // by every test that runs this fake rather than by one of them.
+            on_event(StreamEvent::Notice(Notice::new(
+                "This model was asked for a setting it could not honour.",
+            )));
             Ok(Completion {
                 text: text.into(),
                 thinking: None,
@@ -1156,7 +1179,8 @@ mod running {
                 stop_reason: StopReason::Stop,
                 boundary: Boundary::Local,
                 model_id: request.model_id.into(),
-            })
+            }
+            .announced(on_event))
         }
     }
 
@@ -1237,9 +1261,37 @@ mod running {
         let events = s.take_events();
         let tokens: Vec<_> = events
             .iter()
-            .filter(|e| matches!(e, Event::Token { .. }))
+            .filter(|e| {
+                matches!(
+                    e,
+                    Event::Streamed {
+                        stream: StreamEvent::Text { .. },
+                        ..
+                    }
+                )
+            })
             .collect();
         assert_eq!(tokens.len(), 2, "each word streamed");
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::Streamed {
+                    stream: StreamEvent::Notice(_),
+                    ..
+                }
+            )),
+            "a warning must reach subscribers too, not just the caller"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                Event::Streamed {
+                    stream: StreamEvent::Finish(_),
+                    ..
+                }
+            )),
+            "`Completed` already carries the usage; two copies of it drift"
+        );
         assert!(events.iter().any(|e| matches!(e, Event::Completed { .. })));
     }
 
@@ -1301,7 +1353,7 @@ mod running {
             fn generate(
                 &self,
                 _: GenerateRequest<'_>,
-                _: &mut dyn FnMut(Token),
+                _: &mut dyn FnMut(StreamEvent),
             ) -> marrow_core::Result<Completion> {
                 Err(Error::new(Code::ModCancelled, "The request was cancelled."))
             }

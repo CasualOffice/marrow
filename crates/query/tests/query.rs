@@ -199,7 +199,7 @@ fn search_returns_workspace_relative_paths() {
 
 #[test]
 fn self_written_content_is_flagged_and_downweighted() {
-    // Invariant #13. Identical bodies, so BM25 cannot separate them and the
+    // The `origin = SELF` rule. Identical bodies, so BM25 cannot separate them and the
     // only thing that can reorder these two is §113.3's multiplier.
     let c = Corpus::new();
     let (ws, root) = c.workspace("desktop", "/corpus/desktop");
@@ -486,7 +486,7 @@ fn an_empty_query_is_a_clean_error() {
 
 #[test]
 fn file_intelligence_reports_path_history_after_a_rename() {
-    // FS-006 and invariant #2: the rename moves the path, not the identity.
+    // FS-006, and path is never identity: the rename moves the path, not the identity.
     let c = Corpus::new();
     let (ws, root) = c.workspace("desktop", "/corpus/desktop");
     let (file_id, _) = c.add(Doc::new(
@@ -596,7 +596,7 @@ fn file_intelligence_reports_unknown_as_unknown() {
 
 #[test]
 fn file_intelligence_finds_duplicates_by_content_hash() {
-    // FS-008. Invariant #3: a shared hash is dedup information, not shared
+    // FS-008. A content hash is identity for dedup, not for files: a shared hash is dedup information, not shared
     // identity — these stay two files.
     let c = Corpus::new();
     let (ws, root) = c.workspace("desktop", "/corpus/desktop");
@@ -655,7 +655,7 @@ fn file_intelligence_by_path_and_by_id_agree() {
     )
     .unwrap();
 
-    // A path is a lookup, not an identity (invariant #2): resolving one must
+    // A path is a lookup, not an identity (path is never identity): resolving one must
     // land on the same file id and therefore the same panel.
     assert_eq!(by_id.identity.file_id, by_path.identity.file_id);
     assert_eq!(by_id.identity.content_hash, by_path.identity.content_hash);
@@ -705,7 +705,7 @@ fn file_intelligence_reports_the_index_state_it_can_actually_see() {
     assert_eq!(
         fi.index_state.chunker_versions,
         vec!["test-chunker/1".to_string()],
-        "the one processor version M1 does record (invariant #4)"
+        "the one processor version M1 does record (every derived artifact carries its processor version)"
     );
     assert!(fi.index_state.pending_jobs.is_empty());
     assert!(fi.index_state.errors.is_empty());
@@ -721,7 +721,7 @@ fn file_intelligence_reports_the_index_state_it_can_actually_see() {
         .iter()
         .all(|s| !s.contains("recovered from a scan")));
 
-    // Invariant #5 is answered before anyone opens the file.
+    // Never hydrate a placeholder — answered before anyone opens the file.
     assert!(fi.location.safe_to_read);
     assert_eq!(fi.location.root_path, "/corpus/desktop");
 }

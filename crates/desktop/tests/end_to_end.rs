@@ -1177,6 +1177,7 @@ mod conversations {
             relative_path: location.into(),
             location: location.into(),
             line: Some(14),
+            span: marrow_core::SourceSpan::Lines { start: 14, end: 14 },
             excerpt: "renews on 31 December 2031".into(),
             provenance: "exact".into(),
         }

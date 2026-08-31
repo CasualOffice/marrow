@@ -21,11 +21,11 @@
 //! **Why the checks repeat.** Steps 2–4 prove things about the filesystem as it
 //! was. A `mv` in another terminal, a sync client, or a poisoned repo's
 //! post-checkout hook can invalidate all of them between the proof and the
-//! write. Invariant #5 says *at operation time*: steps 6 and 7 are the same
+//! write. The symlink-escape rule says *at operation time*: steps 6 and 7 are the same
 //! questions asked again with nothing in between them and the `rename`.
 //!
-//! **Why the stale check is last.** Invariant #6 is "immediately before any
-//! write". Digesting the file first and then spending 20 ms building content
+//! **Why the stale check is last.** The stale-version rule is "immediately
+//! before any write". Digesting the file first and then spending 20 ms building content
 //! would make the check a formality. The bytes are prepared into a temp file
 //! first, so the last three syscalls are: digest, rename, done.
 
@@ -42,7 +42,7 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::name;
 
-/// What the caller believes it is replacing. **Invariant #6.**
+/// What the caller believes it is replacing. **The stale-version rule.**
 ///
 /// There is deliberately no "just overwrite" variant. A write with no
 /// precondition is the one that silently discards the paragraph the user typed
@@ -59,7 +59,7 @@ pub enum Expect {
     Replacing(ContentHash),
 }
 
-/// What a completed write did. **Invariant #9** is carried in the type: there
+/// What a completed write did. **`origin = SELF`** is carried in the type: there
 /// is no constructor that produces anything but [`Origin::SelfWritten`].
 #[derive(Clone, Debug, Serialize)]
 pub struct Written {
@@ -252,7 +252,7 @@ impl Workspace {
             path: plan.target,
             digest,
             bytes: bytes.len() as u64,
-            // Invariant #9. Not a parameter, so no caller can weaken it.
+            // `origin = SELF`. Not a parameter, so no caller can weaken it.
             origin: Origin::SelfWritten,
             replaced,
             written_at: Timestamp::now(),
@@ -366,7 +366,8 @@ impl Workspace {
         Ok(())
     }
 
-    /// **§126 #14.** A name that differs from an existing one only by
+    /// **The Unicode NFC/NFD rule** (§126 #14). A name that differs from an
+    /// existing one only by
     /// capitalisation or Unicode normalisation is the same file on APFS and a
     /// different file on a case-sensitive volume. Either way the caller did not
     /// mean to address the file that is already there, so refuse rather than
@@ -404,7 +405,7 @@ impl Workspace {
         Ok(())
     }
 
-    /// **Invariant #6**, run with nothing between it and the rename.
+    /// **The stale-version check**, run with nothing between it and the rename.
     ///
     /// Returns the digest of what is being replaced, so the caller can record
     /// what it overwrote.
@@ -412,8 +413,9 @@ impl Workspace {
         let present = fs::symlink_metadata(target);
 
         // A symlink here means one appeared after `plan` refused symlinks.
-        // That is a race, not a naming mistake, and it is the case invariant #5
-        // exists for.
+        // That is a race, not a naming mistake, and it is the case the
+        // canonicalize-and-check-symlink-escape-at-operation-time rule exists
+        // for.
         if let Ok(meta) = &present {
             if meta.file_type().is_symlink() {
                 return Err(escape_error(
@@ -445,8 +447,8 @@ impl Workspace {
                     )
                     .with_context(target.display().to_string()));
                 }
-                // `hash_file` refuses a cloud placeholder before opening it
-                // (invariant #3) — reading one here to compare digests would
+                // `hash_file` refuses a cloud placeholder before opening it (the
+                // never-hydrate rule) — reading one here to compare digests would
                 // download it, which is the failure TIER-001 is about.
                 let actual = marrow_scan::hash_file(target)?;
                 if actual != *expected {
@@ -553,7 +555,8 @@ fn sync_dir(dir: &Path) {
 }
 
 /// Comparison form for a file or directory name: NFC so the two spellings of
-/// `café` are one name (invariant #8), lowercased so `Notes` and `notes` are
+/// `café` are one name (the Unicode NFC/NFD rule, §126 #14), lowercased so
+/// `Notes` and `notes` are
 /// one name on the case-insensitive volume this runs on by default.
 fn fold(s: &str) -> String {
     s.nfc().collect::<String>().to_lowercase()
@@ -562,8 +565,8 @@ fn fold(s: &str) -> String {
 /// Whether `path` is `ancestor` or lies below it.
 ///
 /// Compares NFC path strings with an explicit separator appended, so
-/// `/root-evil` is not "inside" `/root` — the string-prefix bug invariant #5
-/// names by hand.
+/// `/root-evil` is not "inside" `/root` — the string-prefix bug the
+/// symlink-escape rule names by hand.
 fn under(path: &Path, ancestor: &Path) -> bool {
     let (Ok(p), Ok(a)) = (path_key(path), path_key(ancestor)) else {
         return false;
@@ -753,7 +756,7 @@ mod tests {
 
     #[test]
     fn replacing_a_file_that_changed_since_it_was_read_is_refused() {
-        // Invariant #6. The user has the file open in their editor.
+        // The stale-version rule. The user has the file open in their editor.
         let s = sandbox();
         let p = s.root.join("notes.md");
         fs::write(&p, b"as read").unwrap();
@@ -828,7 +831,8 @@ mod tests {
 
     #[test]
     fn a_name_differing_only_by_normalisation_is_refused_not_merged() {
-        // §126 #14. macOS stores NFD; everything else hands you NFC. Without
+        // The Unicode NFC/NFD rule (§126 #14). macOS stores NFD; everything
+        // else hands you NFC. Without
         // this, one file quietly acquires two identities — or one write
         // clobbers a file the caller did not name.
         let s = sandbox();
@@ -856,7 +860,7 @@ mod tests {
 
     #[test]
     fn a_cloud_placeholder_is_never_read_to_satisfy_the_stale_check() {
-        // Invariant #3. Digesting the file being replaced is a *read*, and on a
+        // Never hydrate a placeholder. Digesting the file being replaced is a *read*, and on a
         // dehydrated file a read is a download. The stub name is the form
         // iCloud leaves behind and the one that can be created in a test.
         let s = sandbox();
@@ -917,7 +921,7 @@ mod tests {
 
     #[test]
     fn everything_written_is_marked_self_written_and_cannot_be_cited() {
-        // Invariant #9. If the agent's own summary can support a claim, the
+        // `origin = SELF`. If the agent's own summary can support a claim, the
         // system cites itself back as independent corroboration.
         let s = sandbox();
         let w = ws(&s)

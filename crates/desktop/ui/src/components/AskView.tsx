@@ -43,6 +43,7 @@ import {
   type PriorTurn,
   type StoredTurn,
   type TurnUsage,
+  type SourceSpan,
 } from "../api";
 import { CONVERSATIONS_KEY, useModels, useProjects } from "../queries";
 import { useUi } from "../store";
@@ -55,6 +56,16 @@ interface Turn {
   readonly thorough: boolean;
   answer: string;
   thinking: string;
+  /**
+   * What the provider said that was neither answer nor failure — a setting it
+   * could not honour, a frame it could not read, a plan limit about to bite.
+   *
+   * Kept per turn rather than as a toast: it qualifies *this* answer, and a
+   * notice that has scrolled away cannot do that. An event with no case here
+   * renders nothing and fails silently, which is the bug already recorded on
+   * `AskEvent` — so it has one.
+   */
+  notices: readonly { message: string; code: string | null }[];
   sources: readonly Citation[];
   excluded: readonly ExcludedSource[];
   /**
@@ -96,6 +107,7 @@ function newTurn(question: string, thorough: boolean): Turn {
     thorough,
     answer: "",
     thinking: "",
+    notices: [],
     sources: [],
     excluded: [],
     projects: [],
@@ -159,6 +171,7 @@ function restore(t: StoredTurn, i: number): Turn {
     // cited, and it is the largest thing a turn produces. Its absence in a
     // reopened thread is the honest rendering of that.
     thinking: "",
+    notices: [],
     sources: t.citations,
     excluded: t.excluded,
     projects: t.projects,
@@ -572,6 +585,14 @@ export function AskView() {
             // through a long Thorough think would say "nothing yet" while the
             // model is visibly working.
             applyToTurn((t) => ({ ...t, thinking: t.thinking + e.text, stage: null }));
+            break;
+          case "notice":
+            // Appended, not replaced: two different things going wrong is two
+            // things the reader should see.
+            applyToTurn((t) => ({
+              ...t,
+              notices: [...t.notices, { message: e.message, code: e.code }],
+            }));
             break;
           case "done":
             applyToTurn((t) => ({ ...t, usage: e, stage: null }));
@@ -1088,6 +1109,28 @@ function grow(el: HTMLTextAreaElement): void {
   el.style.height = `${el.scrollHeight}px`;
 }
 
+/**
+ * The part of a citation after the filename — `:42`, `:p17`, `:Q2!B4:B18`.
+ *
+ * Reads the span rather than `line`, which cannot express a page or a cell.
+ * `null` where the format has no notation a person can act on: a byte offset
+ * is not a location, and inventing one for the rest would claim a precision
+ * nothing supports. Mirrors `SourceSpan::locate` in Rust — the two disagreeing
+ * is exactly the bug this replaced, so keep them together.
+ */
+function where(c: { span: SourceSpan; line: number | null }): string | null {
+  switch (c.span.kind) {
+    case "lines":
+      return `:${c.span.start}`;
+    case "page":
+      return `:p${c.span.page}`;
+    case "cells":
+      return `:${c.span.sheet}!${c.span.range}`;
+    default:
+      return c.line === null ? null : `:${c.line}`;
+  }
+}
+
 /** Everything up to and including the last `/`, or empty for a bare filename. */
 function dirOf(rel: string): string {
   const cut = rel.lastIndexOf("/");
@@ -1231,7 +1274,11 @@ function TurnBlock({
                     <span className={styles.sourceDir}>{dirOf(s.relativePath)}</span>
                     <span className={styles.sourceName}>
                       {nameOf(s.relativePath)}
-                      {s.line !== null && <span className={styles.sourceLine}>:{s.line}</span>}
+                      {/* `line` alone could only ever say ":42". A PDF's page
+                          and a spreadsheet's cell are the citations this
+                          product is for, and both were rendering as a bare
+                          filename here. */}
+                      {where(s) !== null && <span className={styles.sourceLine}>{where(s)}</span>}
                     </span>
                   </button>
                   {/* Computed in Rust for every citation and rendered nowhere,
@@ -1287,6 +1334,18 @@ function TurnBlock({
           }}
         />
       )}
+
+      {/* Beside the answer, not instead of it. A notice means the provider
+          could not honour something, or read something, or is about to hit a
+          limit — the answer under it is real, so this is not the failure
+          style. Held in state and never drawn would be the same silent drop
+          the event exists to end. */}
+      {turn.notices.map((n, i) => (
+        <p className={styles.notice} key={`${n.code ?? "notice"}-${i}`}>
+          <Icon name="warning" size={12} />
+          <span>{n.message}</span>
+        </p>
+      ))}
 
       {/* Where the answer stops, not only in the footer. An answer that ends
           mid-sentence with the reason in small grey type below reads as broken

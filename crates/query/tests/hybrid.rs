@@ -329,3 +329,108 @@ fn a_workspace_filter_reaches_the_semantic_branch_too() {
     let elsewhere = VectorQuery::new(query(&[1.0, 0.0])).workspace(WorkspaceId::new());
     assert!(f.vectors.search(&elsewhere).unwrap().is_empty());
 }
+
+// ------------------------------------------------- optional stages fail open
+
+/// A vector index whose every search fails.
+///
+/// Stands in for the real ones: an MLX worker that died mid-query, a dimension
+/// mismatch against a model that was swapped out, a corrupt `chunk_embeddings`
+/// page. What the search does about it must not depend on which.
+struct FailingVectors;
+
+impl VectorIndex for FailingVectors {
+    fn upsert(&self, _docs: &[VectorDoc]) -> marrow_core::Result<()> {
+        Ok(())
+    }
+    fn delete(&self, _ids: &[ChunkId]) -> marrow_core::Result<()> {
+        Ok(())
+    }
+    fn search(&self, _q: &VectorQuery) -> marrow_core::Result<Vec<marrow_index::VectorHit>> {
+        Err(marrow_core::Error::new(
+            marrow_core::Code::IdxCorrupt,
+            "The semantic index could not be searched.",
+        ))
+    }
+    fn doc_count(&self) -> marrow_core::Result<u64> {
+        Ok(0)
+    }
+    fn model_id(&self) -> marrow_core::Result<Option<String>> {
+        Ok(None)
+    }
+    fn set_model(&self, _model_id: &str) -> marrow_core::Result<bool> {
+        Ok(false)
+    }
+}
+
+#[test]
+fn a_failing_semantic_branch_still_yields_the_lexical_results() {
+    // **Hard rule 10, as a test rather than a hope.** The semantic branch
+    // enriches an answer; it does not produce one. A machine with a dead
+    // embedding worker is the same machine that must still search with no LLM,
+    // no GPU and no network, so the branch drops out with a line in the log and
+    // the query is answered by the half that worked.
+    let f = fixture();
+    f.chunk("the agreement renews on 31 December");
+
+    let out = search_hybrid(
+        &f.store,
+        &f.text,
+        Some((&FailingVectors as &dyn VectorIndex, &query(&[1.0, 0.0]))),
+        &SearchRequest::new("renews").limit(10),
+    )
+    .expect("an optional stage's failure must not become the search's");
+
+    assert_eq!(out.hits.len(), 1, "the lexical half was in hand");
+    assert_eq!(
+        out.branches,
+        vec![LEXICAL],
+        "a branch that failed must not be reported as having run"
+    );
+}
+
+#[test]
+fn a_semantic_candidate_that_cannot_be_hydrated_still_yields_the_lexical_results() {
+    // Hydration is the second optional stage on this path, and it used to
+    // propagate: one chunk row the store could not decode took the whole query
+    // down, including every lexical hit already retrieved. The row here holds a
+    // BLOB where `chunks.text` should be TEXT — SQLite's affinity rules permit
+    // it, so this is a state a real database can reach and a `String` cannot be
+    // read out of.
+    let f = fixture();
+    let lexical = f.chunk("the agreement renews on 31 December");
+    // Reachable only through the semantic branch, so only hydration can render
+    // it — and only hydration can fail on it.
+    let undecodable = f.chunk_row("the tenancy rolls over at the end of the year");
+    f.embed(lexical, &[0.0, 1.0]);
+    f.embed(undecodable, &[1.0, 0.0]);
+    f.store
+        .writer()
+        .submit(move |c| {
+            c.execute(
+                "UPDATE chunks SET text = X'deadbeef' WHERE chunk_id = ?1",
+                [undecodable.to_string()],
+            )
+            .map(|_| ())
+            .map_err(|e| marrow_store::map_sqlite(e, "corrupting a chunk"))
+        })
+        .unwrap();
+    f.store.flush().unwrap();
+
+    let out = search_hybrid(
+        &f.store,
+        &f.text,
+        Some((&f.vectors, &query(&[1.0, 0.0]))),
+        &SearchRequest::new("renews").limit(10),
+    )
+    .expect("one undecodable chunk must not take the search down");
+
+    assert!(
+        out.hits.iter().any(|h| h.hit.chunk_id == lexical),
+        "the lexical result was retrieved and must survive"
+    );
+    assert!(
+        out.hits.iter().all(|h| h.hit.chunk_id != undecodable),
+        "a chunk that could not be read must not be rendered"
+    );
+}

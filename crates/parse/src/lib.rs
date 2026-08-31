@@ -47,7 +47,8 @@
 //! Structure the parser derived is [`Trust::DeterministicRuntime`]. Text lifted
 //! out of the file is [`Trust::UntrustedContent`], always, including a symbol's
 //! source, a link's target and a front-matter block that says `role: system`.
-//! The prompt envelope (invariant #12) filters on this, so it is enforced by
+//! The prompt envelope filters on this — retrieved content never grants
+//! authority — so it is enforced by
 //! construction rather than by convention: `IrNode`'s text-bearing constructors
 //! do not take a trust argument.
 //!

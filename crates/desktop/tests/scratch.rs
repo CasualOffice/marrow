@@ -47,7 +47,7 @@ fn a_dropped_file_is_searchable_immediately_and_citable() {
     let found = core.search("renews", 10).expect("search");
     assert_eq!(found.hits.len(), 1, "the dropped file is not searchable");
 
-    // **Invariant #9, applied the right way round.** A copied file is the
+    // **The `origin = SELF` rule, applied the right way round.** A copied file is the
     // *user's* file; `origin = SELF` is for content this system generated and
     // it bars that content from supporting a claim. Marking a dropped file SELF
     // because Marrow wrote the bytes would make every dropped file silently
@@ -154,7 +154,7 @@ fn the_same_file_dropped_twice_is_not_copied_twice() {
 #[test]
 fn a_file_that_is_already_indexed_somewhere_is_not_copied_in() {
     // Copying it would store one document twice under two identities, which is
-    // the same reason `Core::grant` refuses overlapping roots (invariant #2).
+    // the same reason `Core::grant` refuses overlapping roots (path is never identity).
     // The containment test is component-wise, not a string prefix.
     let (_data, core) = core();
     let granted = tempfile::tempdir().expect("granted");

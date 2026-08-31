@@ -26,6 +26,13 @@ Protocol
 
 Every failure is a `{"event":"error","code":...,"message":...}` line, never a
 traceback on stdout: stdout is the protocol, stderr is the log.
+
+Something that is worth telling the user but is *not* a failure — a setting
+that could not be honoured, a cache that had to be dropped — is a
+`{"id":...,"event":"warning","message":"...","code":...}` line, where `code` is
+optional. It reaches the window as a notice beside the answer and does not end
+the generation; the alternatives were an `error`, which throws a good answer
+away, and silence. Rust accepts these already; nothing here emits one yet.
 """
 
 import json

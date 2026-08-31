@@ -326,7 +326,7 @@ impl Iterator for Scan {
             Err(e) => return Some(ScanEvent::Failed(map_walk_error(e))),
         };
 
-        // Invariant #7, for the opt-in `follow_links` case only: a followed
+        // Symlink escape, for the opt-in `follow_links` case only: a followed
         // symlink is the one way a walk can leave the authorised root.
         if self.check_containment && entry.path_is_symlink() {
             match std::fs::canonicalize(entry.path()) {
@@ -715,7 +715,7 @@ mod tests {
             .find(|e| e.path.ends_with(".Report.pdf.icloud"))
             .unwrap();
         assert_eq!(stub.facts.tier, marrow_core::TierState::Placeholder);
-        assert!(!stub.facts.readable(), "invariant #5");
+        assert!(!stub.facts.readable(), "a placeholder is never readable");
     }
 
     #[test]

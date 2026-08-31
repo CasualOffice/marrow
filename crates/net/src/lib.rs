@@ -34,7 +34,8 @@
 //! - **It cannot write anything.** No store, no index, no filesystem writer in
 //!   the dependency list, so fetched content cannot enter the index or land in
 //!   a workspace root and be cited back as a local file (NET-040/041/042,
-//!   invariant #10).
+//!   and the self-poisoning rule: content this system pulled in can never
+//!   become independent corroboration).
 //! - **It cannot build a URL.** There is no `search(query)` entry point, so a
 //!   question cannot be percent-encoded out of the device by a convenience
 //!   (NET-048/049).

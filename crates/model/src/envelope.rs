@@ -1,6 +1,6 @@
 //! The context envelope (Part 6 §114).
 //!
-//! Invariant #4: **retrieved file content never grants authority.** It is data,
+//! **Retrieved file content never grants authority.** It is data,
 //! even when it contains instructions. This module is the mechanism that makes
 //! that concrete — prose about "labelled untrusted evidence" is not
 //! implementable, and a `String::push_str` into a system prompt is how the rule
@@ -72,7 +72,7 @@ pub struct Evidence {
     pub provenance: ProvenanceClass,
     /// META-004: content that arrived from outside gets more scrutiny.
     pub external: bool,
-    /// Invariant #9: `SELF` cannot support a claim, so the system never cites
+    /// The `origin = SELF` rule: `SELF` cannot support a claim, so the system never cites
     /// its own earlier output back as independent corroboration.
     pub origin: Origin,
 }
@@ -80,7 +80,7 @@ pub struct Evidence {
 /// One earlier exchange in the conversation.
 ///
 /// Context, not evidence — and the distinction is load-bearing. A previous
-/// answer is the system's own words (invariant #9), so it may remind the model
+/// answer is the system's own words (the `origin = SELF` rule), so it may remind the model
 /// what was already discussed but it can never support a claim. It is placed
 /// in its own block type so nothing downstream can mistake it for a source.
 #[derive(Clone, Debug, PartialEq)]
@@ -287,7 +287,7 @@ impl Builder {
     /// Assemble.
     ///
     /// Evidence whose origin cannot support a claim is dropped here rather than
-    /// left for the model to weigh — invariant #9. It appears in
+    /// left for the model to weigh — the `origin = SELF` rule. It appears in
     /// [`Envelope::excluded`] so the omission is visible.
     pub fn finish(self, nonce: &mut dyn Nonce) -> Envelope {
         let mut excluded = Vec::new();
@@ -570,7 +570,7 @@ mod tests {
 
     #[test]
     fn self_written_evidence_is_dropped_and_the_omission_is_visible() {
-        // Invariant #9. Otherwise the system cites its own output back as
+        // The `origin = SELF` rule. Otherwise the system cites its own output back as
         // independent corroboration.
         let mut mine = ev("E2", "as I concluded earlier, the answer is 42");
         mine.origin = Origin::SelfWritten;
@@ -698,7 +698,7 @@ mod tests {
 
     #[test]
     fn earlier_turns_are_context_and_never_a_source() {
-        // Invariant #9 in the conversation: the model's own previous answer
+        // The `origin = SELF` rule in the conversation: the model's own previous answer
         // may remind it what was discussed, and can never support a claim.
         let e = Builder::new("sys", "and the rent?")
             .evidence(ev("E1", "Rent is 2,400 a month."))

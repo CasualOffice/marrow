@@ -202,7 +202,7 @@ impl Fetched {
     ///   be taken to (NET-038).
     /// - `origin` is `User`, and that is a compromise rather than a statement:
     ///   `Origin` has two variants, and `SelfWritten` would drop the block from
-    ///   the envelope entirely (invariant #9). `external = true` is what marks
+    ///   the envelope entirely (the `origin = SELF` rule). `external = true` is what marks
     ///   it as not the user's own file.
     pub fn label(&self) -> Labelled {
         Labelled {

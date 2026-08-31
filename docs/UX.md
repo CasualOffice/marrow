@@ -214,7 +214,7 @@ $ marrow ask "when does the Acme contract renew?"
 | Contradictions render **both**, with validity, and say so — never silently pick one (§11.3) |
 | Below the coverage threshold: `Not found in your files.` and stop. A hedge is worse than an abstention |
 | `~approx` badge on any `Degraded`/`Approximate` citation |
-| Content from `origin = SELF` renders as `[self]` and **cannot be a citation** (invariant #13) |
+| Content from `origin = SELF` renders as `[self]` and **cannot be a citation** (the `origin = SELF` rule) |
 
 ---
 
@@ -324,7 +324,7 @@ $ marrow search "auth refresh" --json
 | Rule |
 |---|
 | `schema` is versioned and **stable**. Adding a field is fine; changing a meaning is a new version |
-| `file_id`, not just a path — paths move, and a machine consumer must survive that (invariant #2) |
+| `file_id`, not just a path — paths move, and a machine consumer must survive that (path is never identity) |
 | `span` uses the same `SourceSpan` shape as the core domain type. One serialization, everywhere |
 | `provenance` and `origin` are **always present**, never omitted when convenient — an agent must be able to refuse to cite `self` content without special-casing |
 | Errors in `--json` mode emit a JSON error object on **stderr**, still non-zero exit |

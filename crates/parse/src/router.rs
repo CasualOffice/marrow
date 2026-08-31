@@ -174,7 +174,8 @@ impl ParserRouter {
     pub fn parse(&self, bytes: &[u8], probe: &FileProbe) -> Result<ParsedArtifact> {
         let mut warnings: Vec<ParseWarning> = Vec::new();
 
-        // Invariant #5, re-checked here rather than trusted from upstream. If
+        // Never hydrate a placeholder, re-checked here rather than trusted from
+        // upstream. If
         // these bytes exist at all for a non-Resident file, something already
         // went wrong; parsing them would compound it.
         if !probe.tier.safe_to_read() {

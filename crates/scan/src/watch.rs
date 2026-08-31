@@ -1,6 +1,6 @@
 //! Filesystem watching.
 //!
-//! # Invariant #6: watchers are hints, reconciliation is truth
+//! # Watchers are hints, reconciliation is truth
 //!
 //! Every platform's change notification is lossy. FSEvents coalesces and can
 //! drop under load, `ReadDirectoryChangesW` overflows its buffer, inotify runs
@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn a_watch_error_demands_a_rescan_rather_than_being_swallowed() {
-        // Invariant #6: a lost event is a correctness problem, and the only
+        // Watchers are hints: a lost event is a correctness problem, and the only
         // honest response is to look again.
         let (_td, r) = root();
         let mut w = Watcher::open(&r).unwrap();

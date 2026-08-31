@@ -12,7 +12,7 @@
 # 151. What this is
 
 Marrow's premise is that it is local. Search works with no LLM, no GPU and no
-network (invariant #10). A network tool inverts that premise, so the rules are
+network — the availability rule. A network tool inverts that premise, so the rules are
 written here first — before the implementation, because an implementation that
 arrives before its policy *becomes* the policy, and nobody ever reads it back
 out of the code to check whether they agree with it.
@@ -283,7 +283,8 @@ being untrusted".
 | NET-037 | Fetched content enters the envelope as `trust=UNTRUSTED_CONTENT`, `external=true`. Both are properties of the type, not arguments a caller passes — a caller that could pass `external=false` will eventually do it. |
 | NET-038 | Provenance is `DEGRADED` (CONV-003). HTML → text is a lossy conversion; claiming `EXACT` would put a confident badge on a citation nobody can be taken to. |
 | NET-039 | The citation carries the **final** URL, the fetch timestamp and a **content hash** of what was read. A URL alone is not a stable citation — the page changes under it — and the hash is what makes that detectable later. |
-| NET-040 | Fetched content is **never written into a workspace root** and **never enters the index**. If it were, it would be re-indexed as a local file and cited back with its external origin laundered off (invariant #10, §98.4). |
+| NET-040 | Fetched content is **never written into a workspace root** and **never enters the index**. If it were, it would be re-indexed as a local file and cited back with its external origin laundered off (the `origin = SELF` /
+self-poisoning rule, §98.4). |
 | NET-041 | Fetched content **never becomes a claim, a correction or a stored fact**. It may be quoted, with its citation, in one answer. Marrow's index is about the user's files; a fact learned from a stranger's web page has no place in it and no way to be re-verified. |
 | NET-042 | The fetching crate depends on nothing that can write — no store, no index, no filesystem writer. NET-040 and NET-041 are enforced by the dependency graph rather than by discipline. |
 | NET-043 | A fetched page is never `DETERMINISTIC_RUNTIME` and never a `FACT` block, however arithmetical it looks. |

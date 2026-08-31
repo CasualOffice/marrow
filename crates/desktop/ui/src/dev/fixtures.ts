@@ -712,6 +712,7 @@ const DEV_THREADS = new Map<
               relativePath: "services/vault/src/auth/token.rs",
               location: "services/vault/src/auth/token.rs:88",
               line: 88,
+              span: { kind: "lines", start: 88, end: 88 },
               excerpt: "Tokens are rotated every fifteen minutes.",
               provenance: "exact",
             },
@@ -1011,6 +1012,7 @@ export async function mockAsk(
       relativePath: "services/vault/README.md",
       location: "services/vault/README.md:14",
       line: 14,
+      span: { kind: "lines", start: 14, end: 14 },
       excerpt:
         "Enclave stores documents encrypted at rest; the vault service holds the keys and never the plaintext.",
       provenance: "exact",
@@ -1021,6 +1023,7 @@ export async function mockAsk(
       relativePath: "services/vault/src/auth/token.rs",
       location: "services/vault/src/auth/token.rs:88",
       line: 88,
+      span: { kind: "lines", start: 88, end: 88 },
       excerpt:
         "Tokens are rotated every fifteen minutes; a refresh that arrives after the window is rejected rather than extended.",
       provenance: "exact",

@@ -211,7 +211,7 @@ The differentiator is verifiable citation. If checking a source takes more than 
 |---|---|
 | Match reason | Badge on every row: `exact` `semantic` `path` `recent` |
 | Provenance class | `~approx` badge on anything not `Exact`; row tinted subtly |
-| Origin | `self` badge on agent-written files, which **cannot** be cited (invariant #13) |
+| Origin | `self` badge on agent-written files, which **cannot** be cited (the `origin = SELF` rule) |
 | Citation | One click reveals the exact page/cell/line, highlighted in context |
 | Extraction method | Shown beside every derived fact in the detail panel |
 

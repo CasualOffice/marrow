@@ -17,7 +17,7 @@
 //! So this is RFC 4180 directly: quote-aware, `""`-escape aware, embedded
 //! newlines and `\r\n` handled, and every field carries the range it came from.
 //! It is about seventy lines and it is the only version that can satisfy
-//! invariant #1.
+//! the `source_span` rule.
 
 use std::ops::Range;
 

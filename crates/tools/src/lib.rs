@@ -16,13 +16,14 @@
 //!
 //! **The checks are re-run at operation time.** Canonicalising a path proves
 //! something about the filesystem as it was. Between that proof and the write
-//! there is a `git checkout`, a sync client, a second terminal. Invariant #5
-//! says *at operation time*; [`guard`] asks the containment and staleness
+//! there is a `git checkout`, a sync client, a second terminal. The
+//! symlink-escape rule says *at operation time*; [`guard`] asks the containment and staleness
 //! questions again with nothing between them and the `rename`.
 //!
 //! **Everything written is [`marrow_core::Origin::SelfWritten`].** Not a
 //! parameter, not a default — there is no constructor for [`Written`] that says
-//! anything else. Invariant #9: a summary the agent wrote, re-indexed and cited
+//! anything else. The `origin = SELF` rule: a summary the agent wrote,
+//! re-indexed and cited
 //! back, is the system corroborating itself.
 //!
 //! # Caller's remaining obligation

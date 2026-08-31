@@ -25,7 +25,7 @@
 //!     it the row stays `ACTIVE` with a `current_path` pointing at nothing.
 //!     Every citation to it then resolves to a file that is not there, and
 //!     `read_region` and `open_path` both refuse a file Marrow claims to hold.
-//!     Invariant #2 says path is never identity — the index is keyed on a file
+//!     Path is never identity — the index is keyed on a file
 //!     id with path history precisely so a *move* is survivable, and that
 //!     machinery only works for files something is watching.
 //!   * With a copy, none of it is a special case. The copy lives under a root
@@ -54,7 +54,7 @@
 //! ── 3. Dropped files are the user's, not Marrow's ─────────────────────────
 //!
 //! Nothing here touches `origin`. A copied file is ingested exactly as any
-//! other file is, so it is `USER` and citable. `origin = SELF` (invariant #9)
+//! other file is, so it is `USER` and citable. `origin = SELF` (the `origin = SELF` rule)
 //! is for content *this system generated*, and it bars that content from
 //! supporting a claim. Marking a dropped file `SELF` because Marrow was the
 //! process that wrote the bytes would get the rule exactly backwards and make
@@ -77,7 +77,7 @@
 //! string prefix would accept `/data/dropped-evil` under `/data/dropped`. After
 //! the copy the result is resolved and re-verified against the root, at
 //! operation time, which is what catches a symlink planted between the check
-//! and the write (invariant #5).
+//! and the write (never hydrate a placeholder).
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -289,7 +289,7 @@ pub fn ensure(
 /// watcher, because "drop a file and ask about it" has to work in the next
 /// breath: a watcher event is a hint that arrives up to a poll interval later,
 /// and a sweep of the folder would re-hash everything already in it. Same
-/// idempotent, resumable pipeline either way (invariant #7).
+/// idempotent, resumable pipeline either way (jobs are idempotent and resumable).
 pub fn accept(
     core: &Arc<Core>,
     watchers: Option<&Arc<crate::watching::Watchers>>,
@@ -344,7 +344,7 @@ fn one(
     touched: &mut BTreeSet<PathBuf>,
     report: &mut DropReport,
 ) -> Result<()> {
-    // Invariant #5, at operation time. `canonicalize` resolves both `..` and
+    // Symlink escape is re-checked at operation time. `canonicalize` resolves both `..` and
     // symlinks, so what follows is about the real file and not about the name
     // the window server handed over.
     let canonical = std::fs::canonicalize(source)
@@ -366,7 +366,7 @@ fn one(
         ));
     }
 
-    // **Invariant #3, before anything opens the file.** A dropped iCloud
+    // **Never hydrate a placeholder, before anything opens the file.** A dropped iCloud
     // placeholder is a name with no bytes behind it, and copying it is exactly
     // the read that downloads it. Refused with the reason rather than silently
     // pulling a gigabyte over the network.
@@ -387,7 +387,7 @@ fn one(
 
     // Already inside a folder the user granted — including the scratch root
     // itself, which is how a re-drop of something already here is caught.
-    // Component-wise containment, never a string prefix (invariant #5).
+    // Component-wise containment, never a string prefix (never hydrate a placeholder).
     if let Some((workspace, _)) = granted.iter().find(|(_, r)| r.contains(&canonical)) {
         return Err(Error::new(
             Code::ActAlreadyExists,
@@ -433,7 +433,7 @@ fn one(
 
     // And proved again against the live filesystem, now that a file exists
     // there to resolve. This is the check that catches a component replaced by
-    // a symlink between the decision and the write — invariant #5 says *at
+    // a symlink between the decision and the write — the rule says *at
     // operation time*, and this is the operation.
     handle
         .root
@@ -732,7 +732,7 @@ mod tests {
     #[test]
     fn containment_is_component_wise_not_a_string_prefix() {
         // `/tmp/x/dropped-evil` starts with `/tmp/x/dropped` as a string and is
-        // not inside it as a path. This is the failure mode invariant #5 names
+        // not inside it as a path. This is the failure mode the operation-time symlink check names
         // explicitly, and the reason `destination` calls `contains` rather than
         // comparing text.
         let parent = tempfile::tempdir().expect("temp dir");

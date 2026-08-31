@@ -19,6 +19,20 @@
 //! produces `FileFacts` from the same `lstat` the walker performs. Making them
 //! a separate stage would mean a second stat per file for no gain.
 //!
+//! # Optional stages fail open, and say so in the outcome
+//!
+//! The same convention `marrow-query` states at its crate root, in the shape
+//! ingest needs: **one file must never end a run.** Recording a file is
+//! required and its failure is counted against that file; parsing it is
+//! optional, because a file with no content is still discoverable by name and
+//! date (T5, PAR-013), which is what FS-011 promises.
+//!
+//! Failing open here means *counted*, not *ignored*. Every degraded stage lands
+//! in [`IngestOutcome::failures`] with its error code, so `marrow index` can
+//! report "34,102 files, 11 could not be parsed" — a swallowed error is
+//! indistinguishable from a file that had nothing in it, and the two call for
+//! completely different actions.
+//!
 //! # What it does not do
 //!
 //! No parsing, no chunking, no indexing. Those stages attach behind the hash

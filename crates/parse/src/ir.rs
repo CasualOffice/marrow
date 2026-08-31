@@ -1,6 +1,6 @@
 //! The parser intermediate representation (PAR-001).
 //!
-//! # Invariant #1 lives here
+//! # The `source_span` rule lives here
 //!
 //! [`IrNode::span`] is a [`SourceSpan`], **not** an `Option<SourceSpan>`. There
 //! is no constructor, no `Default`, and no builder that can produce a node
@@ -20,8 +20,8 @@
 //!
 //! That is deliberately narrower than the sketch in the task, which had `text`
 //! and `trust` as public fields. Public fields make "text marked as trusted"
-//! representable, and the whole injection defence downstream (invariant #12)
-//! is a filter on `trust`. Read access is unchanged: [`IrNode::text`] and
+//! representable, and the whole injection defence downstream (retrieved
+//! content never grants authority) is a filter on `trust`. Read access is unchanged: [`IrNode::text`] and
 //! [`IrNode::trust`].
 
 use std::ops::Range;
@@ -108,7 +108,8 @@ impl ParseOutcome {
 
 /// PAR-014. Whether a node's payload was derived by us or lifted from the file.
 ///
-/// This is the discriminator the prompt envelope (invariant #12) filters on.
+/// This is the discriminator the prompt envelope filters on — retrieved
+/// content never grants authority.
 /// Anything that came out of a file is data, even when it reads as an
 /// instruction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,7 +279,7 @@ impl NodeAttrs {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct IrNode {
     pub kind: IrKind,
-    /// **Invariant #1.** Mandatory, by construction.
+    /// **A `source_span` on every node.** Mandatory, by construction.
     pub span: SourceSpan,
     /// Index into [`ParsedArtifact::nodes`]. An arena, not pointers: the IR is
     /// serialised, diffed and written to SQLite as rows, and `Rc`/`Box` trees
@@ -526,7 +527,7 @@ impl ParsedArtifact {
             }
             if !n.span.is_precise() && n.kind != IrKind::Metadata {
                 return Err(Error::invariant(
-                    "An IR node has a whole-file span. Invariant #1 requires provenance to \
+                    "An IR node has a whole-file span. The `source_span` rule requires provenance to \
                      an exact location; only the metadata-only marker may be whole-file.",
                 )
                 .with_context(format!("node {i} kind {}", n.kind.as_str())));

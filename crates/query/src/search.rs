@@ -74,7 +74,7 @@ pub const SEMANTIC_WEIGHT: f32 = 0.8;
 
 /// `origin = SELF` multiplier (§113.3).
 ///
-/// The multiplier is the *soft* half of invariant #13 and is not what enforces
+/// The multiplier is the *soft* half of the `origin = SELF` rule and is not what enforces
 /// it. The hard half is [`Hit::can_support_a_claim`], which is a flag a caller
 /// checks, not a number it compares.
 pub const SELF_WRITTEN_MULTIPLIER: f32 = 0.5;
@@ -232,7 +232,7 @@ pub struct AppliedMultiplier {
 ///
 /// Only two of the seven rows in that table are here, and on purpose: these two
 /// are **correctness**, not ranking. A `SELF`-written file that outranks the
-/// document it summarised is a citation loop (invariant #13); an `APPROXIMATE`
+/// document it summarised is a citation loop (the `origin = SELF` rule); an `APPROXIMATE`
 /// hit that outranks an exact one is silent precision loss (CONV-005). The rest
 /// of the table — pins, exact-filename boosts, staleness, recency decay — is
 /// tuning, and §113.4 says tuning waits for measurement.
@@ -292,7 +292,7 @@ pub struct Hit {
     /// `/Users/…/proj/src/auth/token.rs`. Falls back to the absolute path when
     /// no root matches.
     pub relative_path: String,
-    /// **Invariant #13.** `false` for `origin = SelfWritten`: the content is
+    /// **The `origin = SELF` rule.** `false` for `origin = SelfWritten`: the content is
     /// findable and rendered, and may never support a claim. A caller that
     /// assembles evidence filters on this flag, never on the score.
     pub can_support_a_claim: bool,
@@ -594,12 +594,31 @@ pub fn search_hybrid(
 
     // Semantic-only candidates need their text fetched: the lexical branch
     // never saw them, so there is no `TextHit` to render from.
+    //
+    // **And hydrating them is an optional stage, so it fails open** (see the
+    // crate doc). It reads rows nothing else in this function needs: a failure
+    // here costs the semantic-only candidates, which the loop below then drops
+    // for want of a hit, and leaves every lexical result intact. Propagating it
+    // — which is what `?` did — turned one undecodable chunk row into a search
+    // that returned nothing at all, on a machine where the lexical half was
+    // sitting in hand and answers with no model, no GPU and no network
+    // (search works with no LLM, no GPU and no network).
     let semantic_only: Vec<ChunkId> = vector_hits
         .iter()
         .map(|h| h.chunk_id)
         .filter(|id| !text_hits.iter().any(|t| t.chunk_id == *id))
         .collect();
-    let hydrated = hydrate_chunks(&reader, &semantic_only)?;
+    let hydrated = match hydrate_chunks(&reader, &semantic_only) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                candidates = semantic_only.len(),
+                "semantic candidates could not be hydrated; answering with the lexical half"
+            );
+            Vec::new()
+        }
+    };
 
     let mut by_chunk: HashMap<ChunkId, &TextHit> =
         text_hits.iter().map(|h| (h.chunk_id, h)).collect();

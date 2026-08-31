@@ -17,7 +17,7 @@
 //! | breadcrumb, dimmed, last | [`TextHit::title`] (the chunker's context prefix) |
 //! | age (`2d`, `3w`) | [`TextHit::modified`] |
 //! | citation badge | [`TextHit::provenance`] |
-//! | `origin = SELF` down-weight (§113.3, invariant #13) | [`TextHit::origin`] |
+//! | `origin = SELF` down-weight (§113.3, the self-poisoning rule) | [`TextHit::origin`] |
 //!
 //! Fusion is **not** this crate's job (Part 6 §113 belongs to `query`). What is
 //! this crate's job is producing one branch's ranked candidates and the
@@ -290,15 +290,15 @@ pub struct TextDoc {
     pub version_id: VersionId,
     pub workspace_id: WorkspaceId,
     /// The file's current path. Display and filtering only — **never
-    /// identity** (invariant #2); `file_id` is the key.
+    /// identity**: a path is never identity, `file_id` is the key.
     pub path: String,
     /// Structural context prefix (CHK-002). May be empty.
     pub title: String,
     pub body: String,
-    /// Invariant #1: where in the source this came from.
+    /// A `source_span` on every node: where in the source this came from.
     pub span: SourceSpan,
     pub provenance: ProvenanceClass,
-    /// Invariant #13: `SelfWritten` is indexed and findable, but the `query`
+    /// The `origin = SELF` rule: `SelfWritten` is indexed and findable, but the `query`
     /// crate down-weights it and bars it from evidence authority.
     pub origin: Origin,
     /// The source file's mtime, for the recency filter and the `2d`/`3w` age.
@@ -569,8 +569,8 @@ impl VectorQuery {
 /// Semantic retrieval (§113.2's vector branch).
 ///
 /// A separate port from [`TextIndex`] rather than a method on it: lexical
-/// search must keep working with no model, no GPU and no network (hard rule
-/// 10), and a single trait would make the vector half's absence a special case
+/// search must keep working with no model, no GPU and no network, and a
+/// single trait would make the vector half's absence a special case
 /// in every implementation instead of a missing object.
 pub trait VectorIndex: Send + Sync {
     /// Insert or replace by `chunk_id`.

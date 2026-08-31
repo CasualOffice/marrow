@@ -10,7 +10,7 @@
 //!
 //! The rule that decides the layout: **scratch is outside every workspace
 //! root** (SUP-011). A model writing into an indexed folder would have its own
-//! output re-indexed and cited back — invariant #13, and the reason `Origin`
+//! output re-indexed and cited back — the `origin = SELF` rule, and the reason `Origin`
 //! exists in `marrow-core`.
 
 use std::fs;
@@ -196,7 +196,7 @@ impl Scratch {
     /// relative `../../` is the whole attack, and it arrives as data.
     ///
     /// **Canonicalized, not folded.** An earlier version of this resolved `..`
-    /// as a string and compared prefixes, which invariant #5 says outright is
+    /// as a string and compared prefixes, which the operation-time symlink check says outright is
     /// not sufficient — and it is not: a worker that creates a symlink *inside
     /// its own scratch* pointing at `~/.ssh` and then resolves a path through
     /// it escapes cleanly, because lexical folding says `link/../x` is `x`
@@ -271,7 +271,7 @@ impl Scratch {
 
     /// The scratch root as the kernel sees it.
     ///
-    /// Resolved every time rather than cached: invariant #5 says the check
+    /// Resolved every time rather than cached: symlink escape is re-checked at operation time, so the check
     /// happens at operation time, and a root that was replaced by a symlink
     /// since construction is exactly the case a cached value would miss.
     fn canonical_root(&self) -> Result<PathBuf> {
@@ -312,7 +312,7 @@ fn normalise(p: &Path) -> PathBuf {
 ///
 /// Canonicalized, not folded, for the same reason `Scratch::resolve` is:
 /// a model area that reaches an indexed root *through a symlink* passes a
-/// string comparison and fails the rule (invariant #5, SUP-011).
+/// string comparison and fails the rule (symlink escape at operation time, SUP-011).
 ///
 /// Neither path need exist yet, so each is resolved as deeply as it can be and
 /// the unresolved tail is appended. That is conservative in the right
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn the_model_area_refuses_to_live_inside_an_indexed_folder() {
-        // SUP-011 / invariant #13. By the time a warning is read, the model's
+        // SUP-011 and the `origin = SELF` rule. By the time a warning is read, the model's
         // output is already in the index.
         let t = temp();
         let indexed = t.path().join("Documents");
@@ -443,7 +443,7 @@ mod tests {
 
     #[test]
     fn a_symlink_inside_scratch_cannot_be_used_to_climb_out() {
-        // Invariant #5: a string prefix check is not sufficient, and this is
+        // Symlink escape at operation time: a string prefix check is not sufficient, and this is
         // the case that proves it. Lexical folding says `link/../x` is `x`;
         // the kernel says it is `x` beside whatever `link` points at. The
         // worker owns its scratch directory, so it can create the link.

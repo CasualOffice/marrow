@@ -166,7 +166,7 @@ fn load_rows(conn: &Connection) -> Result<Vec<Row>> {
             row.map_err(|e| marrow_store::map_sqlite(e, "reading an embedding"))?;
         // A row that cannot be parsed is skipped rather than failing the
         // search: one corrupt blob must not take the whole branch offline,
-        // and the derived index is rebuildable (hard rule 8).
+        // and the derived index is rebuildable, by the rule that says so.
         let (Ok(chunk_id), Ok(file_id), Ok(workspace_id)) = (
             chunk.parse::<ChunkId>(),
             file.parse::<FileId>(),
@@ -632,7 +632,8 @@ mod tests {
     #[test]
     fn an_empty_index_answers_nothing_rather_than_failing() {
         // Semantic search being unavailable is not an error; it is the state
-        // before a backfill has run, and search must still work (hard rule 10).
+        // before a backfill has run, and search must still work with no LLM,
+        // no GPU and no network.
         let f = fixture();
         let idx = SqliteVectorIndex::open(&f.store).unwrap();
         let q = VectorQuery::new(Embedding::new(vec![1.0, 0.0]).unwrap());

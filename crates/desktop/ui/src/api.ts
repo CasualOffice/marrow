@@ -52,7 +52,7 @@ export interface UiError {
 
 /** Stable codes this UI gives a distinct affordance to. Others render generically. */
 export const Code = {
-  /** The file is cloud-only; reading it would trigger a download (invariant #5). */
+  /** The file is cloud-only; reading it would trigger a download (never hydrate a placeholder). */
   PlaceholderSkipped: "FS_PLACEHOLDER_SKIPPED",
   /** Not indexed. The fix is to add a workspace, not to retry. */
   NotFound: "FS_NOT_FOUND",
@@ -102,7 +102,7 @@ export interface SearchHit {
   readonly provenance: string;
   /** Why it matched: `exact` | `semantic` | `path` | `recent`. */
   readonly reason: string;
-  /** Invariant #13: `false` means an agent wrote it and it cannot be cited. */
+  /** The `origin = SELF` rule: `false` means an agent wrote it and it cannot be cited. */
   readonly citable: boolean;
   readonly modifiedMs: number;
   readonly fileId: string;
@@ -779,12 +779,30 @@ export function dismissModelDownload(modelId: string): Promise<ModelsSnapshot> {
 
 // ── ask (Part 8 §148) ─────────────────────────────────────────────────────
 
+/** Where in a file a span points. Mirrors `marrow_core::SourceSpan`. */
+export type SourceSpan =
+  | { readonly kind: "bytes"; readonly start: number; readonly end: number }
+  | { readonly kind: "lines"; readonly start: number; readonly end: number }
+  | { readonly kind: "page"; readonly page: number; readonly bbox: readonly number[] | null }
+  | { readonly kind: "cells"; readonly sheet: string; readonly range: string }
+  | { readonly kind: "x_path"; readonly path: string }
+  | { readonly kind: "time"; readonly startMs: number; readonly endMs: number }
+  | { readonly kind: "whole" };
+
 export interface Citation {
   readonly id: string;
   readonly path: string;
   readonly relativePath: string;
   readonly location: string;
   readonly line: number | null;
+  /**
+   * Where in the file, structurally.
+   *
+   * `line` cannot express a PDF page, a bounding box or a spreadsheet cell,
+   * and those are the citations this product exists for. The bbox rides along
+   * so that showing the region itself does not need another IPC round trip.
+   */
+  readonly span: SourceSpan;
   readonly excerpt: string;
   readonly provenance: string;
 }
@@ -835,6 +853,15 @@ export type AskEvent =
     }
   | { readonly kind: "token"; readonly text: string }
   | { readonly kind: "thinking"; readonly text: string }
+  /**
+   * Something the provider needed to say that is neither answer nor failure —
+   * a setting it could not honour, an SSE frame it could not read, an account
+   * limit about to bite. The answer keeps arriving underneath it.
+   *
+   * `code` is absent when no §108 class fits, because §108 classifies
+   * *failures* and this is not one.
+   */
+  | { readonly kind: "notice"; readonly message: string; readonly code: string | null }
   | {
       readonly kind: "done";
       readonly promptTokens: number;

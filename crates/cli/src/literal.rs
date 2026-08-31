@@ -194,7 +194,7 @@ fn walk_scope(store: &Store, req: &Request<'_>) -> Result<Scope> {
     let policy = WalkPolicy::default();
 
     for (name, path) in granted {
-        // Invariant #7 at operation time: canonicalised now, not trusted from
+        // Symlink escape at operation time: canonicalised now, not trusted from
         // the string the workspace row holds. A root that has since become a
         // symlink to somewhere else resolves here, before anything is read.
         let root = match AuthorizedRoot::open(&path) {
@@ -227,7 +227,7 @@ fn walk_scope(store: &Store, req: &Request<'_>) -> Result<Scope> {
                     continue;
                 }
             }
-            // Invariant #5: the tier is this walk's `lstat`, decided by
+            // Never hydrate a placeholder: the tier is this walk's `lstat`, decided by
             // `marrow_scan::tier` from metadata, with nothing opened. A
             // placeholder arrives at `literal_search` labelled as one and is
             // skipped unread.
@@ -235,7 +235,7 @@ fn walk_scope(store: &Store, req: &Request<'_>) -> Result<Scope> {
             // The identity is a fresh `FileId` because this scope is the disk,
             // not the index: most of these files have no row, and inventing a
             // path→id lookup to fill the field in would be keying on a path
-            // (invariant #2) for a value nothing here displays or stores.
+            // (path is never identity) for a value nothing here displays or stores.
             scope.targets.push(LiteralTarget::new(
                 marrow_core::FileId::new(),
                 entry.path,
@@ -549,7 +549,7 @@ fn render_json(
             "files_considered": outcome.files_considered,
             "files_never_reached": outcome.files_unreached(),
             "files_scanned": outcome.files_scanned,
-            // Invariant #5: skipped without being opened.
+            // Never hydrate a placeholder: skipped without being opened.
             "files_skipped_cloud_only": outcome.files_skipped_not_resident,
             "files_skipped_binary": outcome.files_skipped_binary,
             "files_skipped_too_large": outcome.files_skipped_too_large,
@@ -694,7 +694,7 @@ mod tests {
         assert!(out.stopped.is_complete());
     }
 
-    /// Invariant #5. The tier travels with the target, decided by
+    /// Never hydrate a placeholder. The tier travels with the target, decided by
     /// `marrow_scan` from the walk's own `lstat` — the point of probing per
     /// file is that the answer is current, rather than whatever the last sweep
     /// wrote into `files.tier_state`.

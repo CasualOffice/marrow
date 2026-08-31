@@ -470,7 +470,7 @@ fn drain(inflight: &mut Vec<Pending<()>>, progress: &Progress, outcome: &mut Ing
 
 /// Re-examine a set of hinted paths.
 ///
-/// **Invariant #6.** A hint says a path is worth looking at, not what happened
+/// **Watchers are hints; reconciliation is truth.** A hint says a path is worth looking at, not what happened
 /// to it. Every path is re-stated and re-fingerprinted here; the watcher's
 /// opinion of create-vs-modify-vs-delete is never believed.
 ///
@@ -610,8 +610,13 @@ pub fn apply_hints(
             Ok((_, Some(ids))) => {
                 outcome.stored += 1;
                 progress.bump(Stage::Stored);
-                if policy.extract_content {
-                    if let Ok(n) = extract(
+                // `hash_error.is_none()` mirrors the sweep. A file we could stat
+                // and not read is recorded from its metadata and must not then
+                // be handed to a parser that will fail on the same `open` — the
+                // failure is already counted above, and counting it twice makes
+                // the hint path report more failures than there are files.
+                if policy.extract_content && h.hash_error.is_none() {
+                    match extract(
                         store,
                         index,
                         &router,
@@ -622,9 +627,24 @@ pub fn apply_hints(
                         &self_written,
                         &mut inflight,
                     ) {
-                        outcome.chunks += n as u64;
-                        if n > 0 {
-                            outcome.parsed += 1;
+                        Ok(n) => {
+                            outcome.chunks += n as u64;
+                            if n > 0 {
+                                outcome.parsed += 1;
+                            }
+                        }
+                        // Failing open is right — the file is recorded and stays
+                        // findable by name (FS-011) — but this was `if let Ok`,
+                        // which failed open *silently*. A watcher-driven
+                        // re-parse that broke on every save produced an outcome
+                        // reporting zero failures, so the desktop's own edit
+                        // loop was the one path where a parser regression left
+                        // no trace anywhere. The sweep in `ingest_root` has
+                        // always counted this; the hint path is the same event.
+                        Err(e) => {
+                            debug!(path = %h.path, error = %e, "content extraction failed");
+                            progress.bump(Stage::Failed);
+                            outcome.note_failure(&e, &h.path);
                         }
                     }
                 }
@@ -743,7 +763,7 @@ fn hash_one(entry: &ScanEntry, max_bytes: u64, progress: &Progress) -> Option<Ha
     let f = &entry.facts;
     let path = entry.path.to_string_lossy().into_owned();
 
-    // **Invariant #5.** A placeholder is recorded from metadata and never
+    // **Never hydrate a placeholder.** One is recorded from metadata and never
     // opened; opening it is what triggers the download.
     let hash = if !f.tier.safe_to_read() {
         progress.bump(Stage::SkippedPlaceholder);
@@ -785,7 +805,7 @@ fn hash_one(entry: &ScanEntry, max_bytes: u64, progress: &Progress) -> Option<Ha
     })
 }
 
-/// Whether this system wrote these bytes (invariant #9).
+/// Whether this system wrote these bytes — the `origin = SELF` rule.
 ///
 /// Keyed on content, not path: a copy of agent output is still agent output,
 /// and a file the user edits stops matching and becomes theirs again — which
@@ -802,7 +822,7 @@ fn origin_of(h: &Hashed, self_written: &HashSet<ContentHash>) -> Origin {
 
 /// Record one observation. Returns `true` if anything was written.
 ///
-/// **Path is never identity** (invariant #2): a file is found by filesystem
+/// **Path is never identity**: a file is found by filesystem
 /// identity first, so a rename keeps its `FileId` and its derived data. Only
 /// when identity is unavailable or unknown do we fall back to path.
 #[allow(clippy::too_many_arguments)] // Each is a distinct input; a struct would
@@ -877,7 +897,7 @@ fn record(
             current_path: Some(h.path.clone()),
             fs_identity: Some(h.fs_identity.clone()),
             tier_state: h.tier,
-            // **Invariant #9.** `files.origin` defaults to `'USER'` and a scan
+            // **The `origin = SELF` rule.** `files.origin` defaults to `'USER'` and a scan
             // cannot tell agent output from something the user typed, so
             // without this lookup everything the write tools produced comes
             // back as the user's own work and becomes citable — and the system
@@ -913,6 +933,43 @@ fn record(
     }
 
     let current = marrow_store::read::current_version(conn, file.file_id)?;
+    // **The content hash decides. An mtime that advanced on its own does not,
+    // and that is a considered position rather than an oversight.**
+    //
+    // Onyx gates the same decision on *either* an advancing `doc_updated_at`
+    // *or* a changed content hash, and its comment names the case it was
+    // written for: "a timestamp advance is authoritative … (e.g. GDrive
+    // in-place image replacement)" — a document whose hash-relevant content is
+    // byte-identical while the document genuinely changed. That is a real
+    // counterexample to *their* hash. It is not one to this hash.
+    //
+    // Onyx hashes the text it extracted. Replace an image inside a Google Doc
+    // and the extracted text is unchanged, so their hash cannot see an edit
+    // that happened, and the timestamp is the only signal left. Marrow's
+    // `content_hash` is blake3 over the whole file — every byte, streamed by
+    // `marrow_scan::hash_file_with_tier` *before* any parser runs. Every
+    // parser downstream reads a subset of what the hash already read, so there
+    // is no edit this gate can miss that an mtime would have caught. The
+    // dominance runs the other way too: a sync client that rewrites a file and
+    // restores its mtime is invisible to a timestamp gate and caught here, and
+    // on a cloud-synced root that is the case that actually costs a stale
+    // index. `a_rewrite_that_restores_the_mtime_is_still_a_change` pins it.
+    //
+    // Adding "or the mtime advanced" would therefore add no detection and one
+    // failure mode. `touch`, a sync client's metadata pass, a restore from
+    // backup and a `cp -p` all move mtime without moving a byte, and each
+    // would mint a version and re-parse — on an iCloud or Dropbox root, the
+    // whole root at once, and again on the next pass, because the pass that
+    // re-examines them is itself the thing that keeps moving the timestamps.
+    // A corpus that never converges is the failure that idempotent, resumable jobs exist to
+    // prevent, which is why idempotency is keyed to content and not to a clock.
+    //
+    // What that gives up is real and small: `file_versions.mtime_ms` is the
+    // mtime of the bytes the row holds, not of the last `utimes` call, so a
+    // search result's `modified` and the `--modified-after` filter answer
+    // "when did this content last change" rather than "when was this inode
+    // last touched". On a sync-managed root that is the more truthful of the
+    // two answers, and it is the one a citation needs.
     let changed = match (&current, &h.hash) {
         // No hash on either side (placeholder or over budget): fall back to the
         // cheap signals. This is the only place we trust size+mtime, and only
@@ -973,7 +1030,7 @@ fn record(
 
     let mut ids = None;
     if changed {
-        // Authorship follows the bytes (invariant #9). Decided once at
+        // Authorship follows the bytes — the `origin = SELF` rule. Decided once at
         // discovery and never revisited, a file the user edited would stay
         // marked as the system's own and be silently excluded from their own
         // answers — and one the system rewrote would stay citable.
@@ -1097,7 +1154,7 @@ fn extract(
     self_written: &HashSet<ContentHash>,
     inflight: &mut Vec<Pending<()>>,
 ) -> Result<usize> {
-    // **Invariant #5** guards the open itself, not a caller's discipline.
+    // **Never hydrate a placeholder** guards the open itself, not a caller's discipline.
     let Some(bytes) = read_for_parsing(&h.path, h.tier, policy.max_parse_bytes)? else {
         return Ok(0);
     };

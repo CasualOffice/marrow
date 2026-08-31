@@ -80,7 +80,7 @@ export function ProvenanceBadge({ provenance }: { provenance: string }) {
 const SELF_MEANING =
   "Written by an agent, not by you. It cannot be cited as a source.";
 
-/** Invariant #13. `citable === false` means the agent wrote it. */
+/** The `origin = SELF` rule. `citable === false` means the agent wrote it. */
 export function SelfBadge({ citable }: { citable: boolean }) {
   if (citable) return null;
   return (

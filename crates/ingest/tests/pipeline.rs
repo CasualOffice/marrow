@@ -127,7 +127,7 @@ impl Fixture {
 
 #[test]
 fn a_rename_keeps_the_file_id_and_records_path_history() {
-    // **Invariant #2, the load-bearing one.** If a rename minted a new FileId,
+    // **Path is never identity — the load-bearing one.** If a rename minted a new FileId,
     // every derived artifact — chunks, vectors, evidence — would be orphaned
     // on every `mv`.
     let f = fixture();
@@ -212,6 +212,77 @@ fn changed_content_produces_a_new_current_version() {
         .filter(|v| v.status == marrow_core::VersionStatus::Current)
         .count();
     assert_eq!(current, 1);
+}
+
+#[test]
+fn a_touch_that_changes_no_bytes_is_not_a_change() {
+    // Onyx re-indexes when *either* the timestamp advanced or the content hash
+    // moved, for a document whose extracted text is identical while the
+    // document changed. Marrow hashes the whole file before any parser runs, so
+    // that case cannot arise here — and adopting the timestamp half would make
+    // `touch`, a sync client's metadata pass, `cp -p` and a restore from backup
+    // each mint a version and re-parse the file. On a cloud-synced root that is
+    // the whole root, on every sweep, for ever. See the gate in `record`.
+    let f = fixture();
+    let p = f.write("a.txt", "unchanged");
+    let (first, _) = f.run();
+    assert_eq!(first.stored, 1);
+
+    // Ten minutes into the future: far enough that no filesystem timestamp
+    // granularity can hide it, which is what makes this an assertion about the
+    // gate rather than about the clock.
+    let handle = std::fs::File::options().write(true).open(&p).unwrap();
+    let touched = std::time::SystemTime::now() + std::time::Duration::from_secs(600);
+    handle.set_modified(touched).unwrap();
+    drop(handle);
+
+    let (second, _) = f.run();
+    assert_eq!(
+        second.stored, 0,
+        "an mtime advance with identical bytes must not be a change"
+    );
+    assert_eq!(second.unchanged, 1);
+
+    let conn = f.store.reader().unwrap();
+    let file = marrow_store::read::find_file_by_path(&conn, f.root_id, &p.to_string_lossy())
+        .unwrap()
+        .unwrap();
+    let versions = marrow_store::read::versions_for(&conn, file.file_id).unwrap();
+    assert_eq!(versions.len(), 1, "a touch is not an edit");
+}
+
+#[test]
+fn a_rewrite_that_restores_the_mtime_is_still_a_change() {
+    // The other half of the argument, and the reason the hash gate is strictly
+    // stronger than a timestamp gate rather than merely different. A sync
+    // client that rewrites a file and puts its mtime back — every one of them
+    // does, restoring from its own server copy — is invisible to
+    // `doc_updated_at` and caught here. Missing this is a stale index, which is
+    // the failure the author has said is worse than no index at all.
+    let f = fixture();
+    let p = f.write("a.txt", "one");
+    f.run();
+
+    let before = std::fs::metadata(&p).unwrap().modified().unwrap();
+    std::fs::write(&p, "two").unwrap();
+    let handle = std::fs::File::options().write(true).open(&p).unwrap();
+    handle.set_modified(before).unwrap();
+    drop(handle);
+    assert_eq!(
+        std::fs::metadata(&p).unwrap().modified().unwrap(),
+        before,
+        "the fixture must actually have restored the mtime, or this proves nothing"
+    );
+
+    let (out, _) = f.run();
+    assert_eq!(out.stored, 1, "different bytes are a change at any mtime");
+
+    let conn = f.store.reader().unwrap();
+    let file = marrow_store::read::find_file_by_path(&conn, f.root_id, &p.to_string_lossy())
+        .unwrap()
+        .unwrap();
+    let versions = marrow_store::read::versions_for(&conn, file.file_id).unwrap();
+    assert_eq!(versions.len(), 2);
 }
 
 #[test]
@@ -412,8 +483,37 @@ fn an_unreadable_file_is_counted_not_fatal() {
 }
 
 #[test]
+fn a_hinted_file_that_cannot_be_read_is_recorded_and_counted_exactly_once() {
+    // The hint path fails open on the content stage, which is right — the file
+    // stays findable by name (FS-011) — but it used to do so *silently*, with
+    // `if let Ok(n) = extract(..)`, and it ran the parser over a file the hash
+    // stage had already failed to open. So a watcher-driven re-parse reported
+    // either nothing at all or two failures for one file, and the desktop's own
+    // edit loop was the one path where a parser regression left no trace.
+    use std::os::unix::fs::PermissionsExt;
+    let f = fixture();
+    let bad = f.write("locked.txt", "secret");
+    std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let out = f.hint(std::slice::from_ref(&bad));
+
+    // restore so the tempdir can clean up
+    std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    assert!(
+        f.is_indexed(&bad),
+        "a file that could not be read is still recorded from its metadata"
+    );
+    assert_eq!(
+        out.failed, 1,
+        "one unreadable file is one failure, reported: {:?}",
+        out.failures
+    );
+}
+
+#[test]
 fn files_are_recorded_as_user_origin_not_self() {
-    // **Invariant #13.** Content the agent wrote is barred from supporting a
+    // **The `origin = SELF` rule.** Content the agent wrote is barred from supporting a
     // claim; content the user wrote is not. Ingest must never mark discovered
     // files as SELF.
     let f = fixture();

@@ -1,5 +1,5 @@
-//! Cloud-placeholder detection. **Invariant #5 — the highest-severity item in
-//! this crate.**
+//! Cloud-placeholder detection. **Never hydrate a placeholder — the
+//! highest-severity item in this crate.**
 //!
 //! Reading a dehydrated file makes the sync client download it. On
 //! `~/Library/CloudStorage` or `~/Library/Mobile Documents` that is hundreds of
@@ -130,7 +130,7 @@ pub fn tier_of(path: &Path) -> Result<TierState> {
     }
 }
 
-/// Guard every read path must pass. **Invariant #5.**
+/// Guard every read path must pass. **Never hydrate a placeholder.**
 ///
 /// Returns [`marrow_core::Code::FsPlaceholderSkipped`] for anything that is not
 /// [`TierState::Resident`]. Default policy is TIER-005: index metadata only,

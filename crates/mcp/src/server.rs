@@ -199,7 +199,7 @@ impl Server {
                     "breadcrumb": h.title,
                     "excerpt": h.snippet.text,
                     "provenance": lower(&h.provenance),
-                    // Invariant #13, surfaced in the payload rather than left
+                    // The `origin = SELF` rule, surfaced in the payload rather than left
                     // for the caller to infer.
                     "origin": lower(&h.origin),
                     "citable": h.origin == marrow_core::Origin::User,
@@ -285,7 +285,7 @@ impl Server {
             .iter()
             .map(|h| {
                 let path = h.path.display().to_string();
-                // Invariant #13 again: a literal hit in a file this system
+                // The `origin = SELF` rule again: a literal hit in a file this system
                 // wrote is not independent corroboration, and the payload has
                 // to say so rather than leaving the caller to infer it.
                 let origin = origins
@@ -321,7 +321,7 @@ impl Server {
     ///
     /// The tier comes from the index rather than a fresh `stat` — it is what
     /// the last scan recorded, and `literal_search` re-checks nothing. A caller
-    /// that supplies a wrong tier is how invariant #5 gets broken by the
+    /// that supplies a wrong tier is how a placeholder gets hydrated by the
     /// caller rather than by the engine, so this is the one place that decides
     /// it.
     #[allow(clippy::type_complexity)]
@@ -427,7 +427,7 @@ impl Server {
             )
             .map_err(|e| marrow_store::map_sqlite(e, "reading tier state"))?;
         if tier != "RESIDENT" {
-            // **Invariant #5.** Reading it is what triggers the download.
+            // **Never hydrate a placeholder.** Reading it is what triggers the download.
             return Err(bad(
                 "That file is cloud-only. Its contents are not on this machine, and \
                  reading it would download them.",
@@ -510,7 +510,7 @@ impl Server {
         let conn = self.store.reader()?;
         // The same two refusals `read_file` makes, for the same reasons: this
         // is not a general filesystem tool, and reading a cloud placeholder is
-        // what downloads it (invariant #5). Tables come from the index rather
+        // what downloads it (never hydrate a placeholder). Tables come from the index rather
         // than the disk, so the second is about consistency of behaviour rather
         // than about this call touching bytes.
         let row: Option<(String, String)> = conn
@@ -677,13 +677,13 @@ impl Server {
         //
         // `symlink_metadata`, not `metadata`: it stats the path itself and
         // opens nothing, so it cannot follow a link out of the workspace and
-        // cannot hydrate a cloud placeholder (invariant #3). A placeholder is
+        // must never hydrate a cloud placeholder. A placeholder is
         // a real directory entry, so it still reports present — which is
         // right, and `tier_state` is what says it cannot be read.
         let present = std::fs::symlink_metadata(path).is_ok();
 
         // Path history is the point of a stable file id: it is how a rename
-        // stays the same file (invariant #2).
+        // stays the same file — path is never identity.
         let mut stmt = conn
             .prepare("SELECT path FROM file_paths WHERE file_id = ?1 ORDER BY observed_from")
             .map_err(|e| marrow_store::map_sqlite(e, "reading path history"))?;
@@ -1036,7 +1036,7 @@ fn coverage(o: &marrow_index::LiteralOutcome, in_scope: usize) -> Value {
         "stopped_because": stopped,
         "files_in_scope": in_scope,
         "files_scanned": o.files_scanned,
-        // Invariant #5: skipped without being opened. Never a silent zero —
+        // Never hydrate a placeholder: skipped without being opened. Never a silent zero —
         // a scan that quietly omitted the cloud-only half of a folder is the
         // most misleading possible "no matches".
         "files_skipped_cloud_only": o.files_skipped_not_resident,
@@ -1105,13 +1105,14 @@ fn relative(path: &str, roots: &[String]) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
+/// Delegates to [`marrow_core::SourceSpan::locate`].
+///
+/// This function was the correct implementation and the desktop had a worse
+/// copy that matched only `Lines`, so a PDF cited through an agent carried its
+/// page and the same PDF cited in the app did not. Kept as a named function
+/// because the call sites read better with it.
 fn location(path: &str, span: &marrow_core::SourceSpan) -> String {
-    match span {
-        marrow_core::SourceSpan::Lines { start, .. } => format!("{path}:{start}"),
-        marrow_core::SourceSpan::Page { page, .. } => format!("{path}:p{page}"),
-        marrow_core::SourceSpan::Cells { sheet, range } => format!("{path}:{sheet}!{range}"),
-        _ => path.to_string(),
-    }
+    span.locate(path)
 }
 
 /// Run the stdio loop until stdin closes.
@@ -1212,7 +1213,7 @@ impl Server {
 
     /// Record a write so the index cannot mistake it for the user's own work.
     ///
-    /// **This is the half of invariant #9 that is easy to skip.** The guard
+    /// **This is the half of the `origin = SELF` rule that is easy to skip.** The guard
     /// returns `origin = SELF`, but `files.origin` defaults to `'USER'` and a
     /// scan cannot tell the difference — so without this row the next
     /// reconciliation reclassifies the file as the user's and it becomes

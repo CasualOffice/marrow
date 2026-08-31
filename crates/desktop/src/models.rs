@@ -26,7 +26,9 @@ use marrow_model::detect::{self, Scan};
 use marrow_model::download::{self, Https, Progress, Stage};
 use marrow_model::envelope::{Envelope, Session};
 use marrow_model::openai::{OpenAiProvider, SystemDns};
-use marrow_model::provider::{Boundary, Completion, GenerateRequest, GenerationProvider, Token};
+use marrow_model::provider::{
+    Boundary, Completion, GenerateRequest, GenerationProvider, StreamEvent,
+};
 use marrow_model::queue::Cancel;
 use marrow_model::registry::Registry;
 use marrow_model::request::Reasoning;
@@ -792,7 +794,7 @@ impl Hub {
         envelope: &Envelope,
         thorough: bool,
         cancel: &Cancel,
-        on_token: &mut dyn FnMut(Token),
+        on_event: &mut dyn FnMut(StreamEvent),
     ) -> marrow_core::Result<Completion> {
         self.generate_with_progress(
             selection,
@@ -800,7 +802,7 @@ impl Hub {
             thorough,
             cancel,
             &mut |_, _| {},
-            on_token,
+            on_event,
         )
     }
 
@@ -820,7 +822,7 @@ impl Hub {
         thorough: bool,
         cancel: &Cancel,
         on_stage: &mut dyn FnMut(&str, &str),
-        on_token: &mut dyn FnMut(Token),
+        on_event: &mut dyn FnMut(StreamEvent),
     ) -> marrow_core::Result<Completion> {
         let reasoning = if thorough {
             Reasoning::THOROUGH
@@ -850,7 +852,7 @@ impl Hub {
                         max_output_tokens: provider.endpoint().max_output_tokens,
                         cancel,
                     },
-                    on_token,
+                    on_event,
                 )
             }
             Kind::Local => self.generate_locally(
@@ -860,7 +862,7 @@ impl Hub {
                 thorough,
                 cancel,
                 on_stage,
-                on_token,
+                on_event,
             ),
         }
     }
@@ -875,7 +877,7 @@ impl Hub {
         thorough: bool,
         cancel: &Cancel,
         on_stage: &mut dyn FnMut(&str, &str),
-        on_token: &mut dyn FnMut(Token),
+        on_event: &mut dyn FnMut(StreamEvent),
     ) -> marrow_core::Result<Completion> {
         let entry = self
             .registry
@@ -989,7 +991,7 @@ impl Hub {
                 ),
                 cancel,
             },
-            on_token,
+            on_event,
         )
     }
 
@@ -2429,7 +2431,7 @@ mod tests {
 
     #[test]
     fn a_model_directory_inside_an_indexed_folder_is_reported_not_worked_around() {
-        // SUP-011 / invariant #13. The page says so; it does not quietly pick
+        // SUP-011 and the `origin = SELF` rule. The page says so; it does not quietly pick
         // somewhere else, which would leave the user's setting a lie.
         let t = tempfile::tempdir().unwrap();
         let indexed = t.path().join("Documents");

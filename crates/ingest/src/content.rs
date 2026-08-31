@@ -56,7 +56,7 @@ pub fn documents_for(
     input: &ContentInput,
     bytes: &[u8],
 ) -> Result<Extracted> {
-    // **Invariant #5.** Reaching here with a non-Resident file would mean the
+    // **Never hydrate a placeholder.** Reaching here with a non-Resident file would mean the
     // bytes were already read, which is the thing that triggers the download.
     // The caller must not have opened it; assert rather than trust.
     debug_assert!(
@@ -121,7 +121,7 @@ pub fn documents_for(
             body: c.text,
             span: to_line_span(&c.span, lines.as_ref()),
             provenance: c.provenance,
-            // **Invariant #13.** Carried through so the query layer can bar
+            // **The `origin = SELF` rule.** Carried through so the query layer can bar
             // agent-written content from supporting a claim without having to
             // re-derive where it came from.
             origin: input.origin,
@@ -206,7 +206,7 @@ fn tables_for(
 ///
 /// Fallible rather than defaulted. A `null` fallback would satisfy the
 /// `json_valid` CHECK and store a cell that claims no location — which is
-/// exactly the state invariant #1 exists to make unrepresentable, so it has to
+/// exactly the state a required `source_span` exists to make unrepresentable, so it has to
 /// be an error rather than a placeholder.
 fn span_json(span: &marrow_core::SourceSpan) -> Result<String> {
     serde_json::to_string(span).map_err(|e| {

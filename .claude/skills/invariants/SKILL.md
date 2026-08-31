@@ -5,9 +5,11 @@ description: The non-negotiable correctness and safety rules for Marrow. Load be
 
 # Marrow invariants
 
-Fourteen rules that survive the solo re-scope, because they protect the author's own files, bandwidth and ability to trust the output. Source: [Part 7 §126](../../../docs/Part_7_Solo_Rescope.md).
+Fifteen rules that survive the solo re-scope, because they protect the author's own files, bandwidth and ability to trust the output. Derived from [Part 7 §126](../../../docs/Part_7_Solo_Rescope.md) and expanded — §126 lists fourteen, this adds the content-hash rule and splits others by subject.
 
 **Test:** if a change violates one of these, it's wrong even if it works.
+
+> **The numbering below is local to this skill.** It is **not** §126's numbering and **not** CLAUDE.md's ten hard rules. `origin = SELF` is **13** here, **10** in §126 and **9** in CLAUDE.md. **Cite these rules by name in code and prose** — "the `origin = SELF` rule", "never hydrate a placeholder". A bare `invariant #N` resolves differently under each of the three lists and is banned; see CLAUDE.md, "How to cite a hard rule".
 
 ---
 

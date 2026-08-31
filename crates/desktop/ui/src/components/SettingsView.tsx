@@ -136,7 +136,7 @@ const CANNOT: ReadonlyArray<{ what: string; why: string; cmd: string }> = [
   },
   {
     what: "Download cloud-only files",
-    why: "Their contents are not on this machine. Reading one is what triggers the download, which is a decision this window will not make on your behalf (invariant #5).",
+    why: "Their contents are not on this machine. Reading one is what triggers the download, which is a decision this window will not make on your behalf (never hydrate a placeholder).",
     cmd: "workspace_hydrate",
   },
   {

@@ -14,7 +14,8 @@ use crate::ir::{ParsedArtifact, ParserTier};
 /// The orchestration layer maps one to the other — that mapping is four field
 /// copies and it keeps every parser testable from a string literal.
 ///
-/// Note what is *not* here: no path. Invariant #2 — a path is history, not
+/// Note what is *not* here: no path. Path is never identity — a path is
+/// history, not
 /// identity — and a parser has no business knowing where a file lives. The file
 /// name survives because extensions route, and because a name like
 /// `Cargo.lock` or `.gitignore` is a real routing signal that an extension is
@@ -32,7 +33,7 @@ pub struct FileProbe {
     /// holding a ZIP still hints `text/plain`, which is exactly why every
     /// parser confirms against the bytes before committing.
     pub mime_hint: Option<String>,
-    /// **Invariant #5.** A non-`Resident` file is never content-parsed.
+    /// **Never hydrate a placeholder.** A non-`Resident` file is never content-parsed.
     pub tier: TierState,
 }
 
@@ -88,7 +89,8 @@ fn extension_of(file_name: &str) -> Option<String> {
 /// Everything a parser gets. Bytes plus facts — never a path, never a handle.
 ///
 /// Reading files is `marrow-scan`'s job, and it has already answered the one
-/// question that matters (invariant #5) by the time these bytes exist. Keeping
+/// question that matters (never hydrate a placeholder) by the time these
+/// bytes exist. Keeping
 /// the parser at arm's length from the filesystem is also what makes every test
 /// in this crate a string literal rather than a tempdir.
 #[derive(Clone, Copy, Debug)]
@@ -113,7 +115,7 @@ pub trait ContentParser: Send + Sync + std::fmt::Debug {
     fn id(&self) -> &'static str;
 
     /// Bumped whenever output would change for the same input. Drives automatic
-    /// reprocessing after an upgrade (invariant #4).
+    /// reprocessing after an upgrade — the processor-version rule.
     fn version(&self) -> &'static str;
 
     fn tier(&self) -> ParserTier;
@@ -153,7 +155,7 @@ mod tests {
 
     #[test]
     fn a_probe_carries_no_path() {
-        // Invariant #2, enforced by the absence of a field. If a future edit
+        // Path is never identity, enforced by the absence of a field. If a future edit
         // adds `path: PathBuf` here, this test is the place it should be
         // argued out, not the place it quietly compiles.
         let p = FileProbe::new("notes.md", 12);

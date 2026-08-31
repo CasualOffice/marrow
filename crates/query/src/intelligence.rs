@@ -45,7 +45,7 @@ use crate::search::{relative_path, workspace_of};
 
 /// How to name the file to look up.
 ///
-/// A path is a **lookup**, never an identity (invariant #2). Resolving one
+/// A path is a **lookup**, never an identity (path is never identity). Resolving one
 /// yields a [`FileId`], and everything after that is keyed on the id — which is
 /// why [`FileRef::Path`] and [`FileRef::Id`] produce identical panels for the
 /// same file.
@@ -88,7 +88,7 @@ pub struct FileIntelligence {
     /// obviously has headings would be a lie the panel tells itself.
     pub structure: Option<Vec<OutlineEntry>>,
 
-    /// §99.1 Entities & relations, each with an authority class (invariant #14).
+    /// §99.1 Entities & relations, each with an authority class — a fact never loses it.
     ///
     /// **Always `None`.** The graph tables are deliberately absent from M1.
     pub entities: Option<Vec<EntityMention>>,
@@ -187,7 +187,7 @@ pub struct Identity {
     pub current_path: Option<String>,
     pub status: FileStatus,
     pub origin: Origin,
-    /// **Invariant #13.** `false` for agent-written files: findable, never
+    /// **The `origin = SELF` rule.** `false` for agent-written files: findable, never
     /// citable.
     pub can_support_a_claim: bool,
     /// Other files whose current version has the same content hash (FS-008).
@@ -200,7 +200,7 @@ pub struct Identity {
 
 /// Another file with identical content.
 ///
-/// Invariant #3: a shared hash is dedup information, not shared identity. These
+/// A content hash is identity for dedup, not for files: a shared hash is dedup information, not shared identity. These
 /// are separate files that happen to hold the same bytes.
 #[derive(Clone, Debug, Serialize)]
 pub struct Duplicate {
@@ -222,7 +222,7 @@ pub struct FileLocation {
     pub relative_path: Option<String>,
     /// TIER-001 hydration state.
     pub tier_state: TierState,
-    /// **Invariant #5.** `false` means the bytes must not be read: doing so
+    /// **Never hydrate a placeholder.** `false` means the bytes must not be read: doing so
     /// would trigger a cloud download.
     pub safe_to_read: bool,
     /// `workspace_roots.storage_kind` — `LOCAL`, `TIERED_CLOUD`, …
@@ -328,7 +328,7 @@ pub struct IndexState {
     pub provenance_class: Option<ProvenanceClass>,
     /// Every provenance class present, best first.
     pub provenance_classes: Vec<ProvenanceClass>,
-    /// `parse_results` for the current version (PAR-003, invariant #4:
+    /// `parse_results` for the current version (PAR-003:
     /// `(source_version, processor_id, processor_version)`).
     ///
     /// **`None` in practice on M1 data.** The table is in the schema and this
@@ -432,7 +432,7 @@ pub struct MetadataField {
 pub struct OutlineEntry {
     pub kind: String,
     pub title: String,
-    /// Invariant #1: an outline entry you cannot navigate to is decoration.
+    /// A `source_span` on every node: an outline entry you cannot navigate to is decoration.
     pub span: SourceSpan,
 }
 
@@ -441,7 +441,7 @@ pub struct OutlineEntry {
 pub struct EntityMention {
     pub name: String,
     pub kind: String,
-    /// Invariant #14: a fact never loses its authority class.
+    /// Authority class on every fact: a fact never loses its authority class.
     pub authority: String,
 }
 
