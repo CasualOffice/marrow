@@ -693,9 +693,8 @@ impl Hub {
     /// Which generator answers this question, and where it runs.
     ///
     /// The gateway. A configured, enabled remote endpoint wins — the user
-    /// turned it on and can turn it off — and otherwise the largest installed
-    /// local model that still fits, because within the profile's budget a
-    /// larger model is better at the one job this is for.
+    /// turned it on and can turn it off — and otherwise the local choice
+    /// [`pick_generator`] makes from the pin, the profile and what fits.
     ///
     /// Returns the reason rather than `None`: "there is nothing to answer
     /// with" and "the endpoint you configured does not resolve" are different
@@ -757,10 +756,14 @@ impl Hub {
         }
     }
 
-    /// The largest installed generative model that still fits.
+    /// The installed generative model this machine, this pin and this profile
+    /// point at.
     ///
-    /// Embedders are excluded — they do not answer — and so is anything the
-    /// current conditions would refuse anyway.
+    /// Reads the live memory sample and then hands the decision to
+    /// [`pick_generator`], which is where the rules are written down and where
+    /// they are tested — a decision made inside a method that needs a running
+    /// supervisor, a real registry and whatever memory the machine happened to
+    /// have free is a decision no test can pin.
     fn local_generator(&self) -> Option<String> {
         self.sampler.tick();
         let available = self
@@ -768,47 +771,15 @@ impl Hub {
             .conditions(SAMPLE_INTERVAL * 4)
             .min_available_bytes;
         let registry = self.registry.lock().ok()?;
-
-        // **A pin wins, if it is still installed.** Not filtered by `offerable`
-        // — that is a memory assessment made at this instant, and letting it
-        // veto an explicit choice would put the automatic behaviour back
-        // whenever a browser happened to be open. Admission and the memory
-        // budget both still apply downstream; what this decides is *which*
-        // model, not whether there is room, and a user who pinned a model
-        // should get that model or a clear failure rather than a quiet
-        // substitution.
-        //
-        // An id that is no longer installed is ignored: models are deleted from
-        // the Models page, and a stale preference must not stop questions being
-        // answered.
-        if let Some(pinned) = self.pinned.lock().ok().and_then(|p| p.clone()) {
-            if registry
-                .iter()
-                .any(|e| e.id == pinned && e.installed && !e.capabilities.embedding)
-            {
-                return Some(pinned);
-            }
-            tracing::info!(
-                model = %pinned,
-                "the pinned model is not installed; choosing automatically"
-            );
-        }
-
-        let mut candidates: Vec<(f64, String)> = registry
-            .iter()
-            .filter(|e| e.installed && !e.capabilities.embedding)
-            .filter(|e| {
-                assess(
-                    &self.machine,
-                    &e.shape(e.default_context, KvPrecision::F16),
-                    available,
-                )
-                .offerable()
-            })
-            .map(|e| (e.params_b, e.id.clone()))
-            .collect();
-        candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        candidates.into_iter().next().map(|(_, id)| id)
+        let pinned = self.pinned.lock().ok().and_then(|p| p.clone());
+        let profile = self.profile.lock().map(|p| *p).unwrap_or_default();
+        pick_generator(
+            registry.iter(),
+            &self.machine,
+            available,
+            profile,
+            pinned.as_deref(),
+        )
     }
 
     /// Generate an answer, loading the model on first use (LLM-024).
@@ -1801,6 +1772,114 @@ fn poisoned() -> marrow_core::Error {
     marrow_core::Error::invariant("the model registry lock was poisoned")
 }
 
+/// Which installed model answers a question, given a pin and a profile.
+///
+/// **The bug this exists to fix: the AI preference persisted and changed
+/// nothing.** `set_ai_profile` wrote `preferences.json`, the choice survived a
+/// restart, the radio list showed it selected — and the only readers of
+/// `choose(profile, …)` were the caption on that same radio list and a display
+/// table. Picking Efficient on an 8 GB machine still loaded the 4B. A control
+/// that persists a choice and has no effect is worse than one that is not
+/// offered, because the user has no way to find out.
+///
+/// Three rules, in order, and the order is the whole design:
+///
+/// 1. **An explicit pin wins over a preference.** A profile is a standing
+///    preference about memory and battery; a pin is "use this model". Letting a
+///    profile veto a pin would make the Models page's own model list a
+///    suggestion. Not filtered by `offerable` either — that is a memory reading
+///    taken at this instant, and letting a browser being open silently swap the
+///    user's model out is the quiet substitution the pin exists to refuse.
+///    Admission and the memory budget still apply downstream; what this decides
+///    is *which* model, not whether there is room.
+/// 2. **The profile is a ceiling, not a target.** `choose(profile,
+///    Generation).params_b` is the parameter class the user asked to stay
+///    within — 2B, 4B, 8B — so the answer is the largest installed model at or
+///    under it. Largest, because within a budget a bigger model is better at
+///    the one job this is for.
+/// 3. **The ceiling never makes the app stop answering.** If nothing installed
+///    fits under it, the smallest model that does not is used and the
+///    substitution is logged. A user who installed only a 4B and then chose
+///    Efficient asked for less memory, not for questions to start failing —
+///    and `no_generator_message` would have told them to download a model they
+///    already have.
+///
+/// Profile::Cloud is the exception to rule 2: its budget is 0.0 B because
+/// nothing loads locally, which is a statement about a remote endpoint and not
+/// a local ceiling. Reaching here at all means no remote provider is enabled,
+/// so it falls through to the unconstrained choice rather than to rule 3's
+/// fallback, which would otherwise hand every Cloud user the smallest model on
+/// the machine.
+fn pick_generator<'a>(
+    entries: impl Iterator<Item = &'a marrow_model::registry::Entry>,
+    machine: &Machine,
+    available: u64,
+    profile: Profile,
+    pinned: Option<&str>,
+) -> Option<String> {
+    // Embedders are excluded — they do not answer — and so is anything not
+    // installed. Collected once because the pin is checked against the same
+    // set the automatic choice draws from.
+    let installed: Vec<&marrow_model::registry::Entry> = entries
+        .filter(|e| e.installed && !e.capabilities.embedding)
+        .collect();
+
+    // Rule 1. An id that is no longer installed is ignored rather than
+    // refused: models are deleted from the Models page, and a stale preference
+    // must not stop questions being answered.
+    if let Some(pinned) = pinned {
+        if installed.iter().any(|e| e.id == pinned) {
+            return Some(pinned.to_string());
+        }
+        tracing::info!(
+            model = %pinned,
+            "the pinned model is not installed; choosing automatically"
+        );
+    }
+
+    let mut candidates: Vec<(f64, &str)> = installed
+        .iter()
+        .filter(|e| {
+            assess(
+                machine,
+                &e.shape(e.default_context, KvPrecision::F16),
+                available,
+            )
+            .offerable()
+        })
+        .map(|e| (e.params_b, e.id.as_str()))
+        .collect();
+    // Largest first, and ties broken by id so the same registry never produces
+    // two different answers on two runs — a generator that changes under you
+    // between questions is indistinguishable from a bug.
+    candidates.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.1.cmp(b.1))
+    });
+
+    let ceiling = choose(profile, Workload::Generation).params_b;
+    if ceiling <= 0.0 {
+        return candidates.first().map(|(_, id)| id.to_string());
+    }
+
+    // Rule 2, then rule 3.
+    if let Some((_, id)) = candidates.iter().find(|(p, _)| *p <= ceiling) {
+        return Some(id.to_string());
+    }
+    let smallest = candidates.last().copied();
+    if let Some((params_b, id)) = smallest {
+        tracing::info!(
+            model = %id,
+            params_b,
+            ceiling,
+            profile = ?profile,
+            "nothing installed fits under the profile's budget; using the smallest that is"
+        );
+    }
+    smallest.map(|(_, id)| id.to_string())
+}
+
 fn role_row(profile: Profile, workload: Workload) -> RoleRow {
     let c = choose(profile, workload);
     RoleRow {
@@ -2266,6 +2345,144 @@ mod tests {
         // put it.
         assert!(hub.start_download("qwen3.5-4b-mlx-q4").is_err());
         hub.shutdown();
+    }
+
+    /// A library of installed models, sized so every rule has something to
+    /// choose between: a 0.6B router, a 3B, a 4B, an 8B and an embedder.
+    ///
+    /// The 8B is a clone of the 4B with its parameter count moved, because the
+    /// catalogue tops out at 4B and `LargerLocal` has to have something to
+    /// select or the test proves nothing.
+    fn library() -> Vec<marrow_model::Entry> {
+        let mut entries: Vec<marrow_model::Entry> = marrow_model::catalogue::builtin()
+            .into_iter()
+            .filter(|e| {
+                [
+                    "qwen3-0.6b-mlx-q4",
+                    "granite-4.1-3b-mlx-q4",
+                    "embeddinggemma-300m-mlx-q4",
+                ]
+                .contains(&e.id.as_str())
+                    || e.id == "qwen3.5-4b-mlx-q4"
+            })
+            .collect();
+        let mut eight = qwen();
+        eight.id = "pretend-8b-mlx-q4".into();
+        eight.params_b = 8.0;
+        entries.push(eight);
+        for e in &mut entries {
+            e.installed = true;
+        }
+        entries
+    }
+
+    /// A machine large enough that nothing is refused for memory, so what the
+    /// tests below observe is the profile and not the sampler.
+    fn big_machine() -> (Machine, u64) {
+        let m = Machine {
+            total_memory_bytes: 64 * 1_073_741_824,
+            unified_memory: true,
+            ..Machine::unknown()
+        };
+        let free = 48 * 1_073_741_824;
+        (m, free)
+    }
+
+    #[test]
+    fn the_ai_profile_chooses_the_generator_rather_than_only_captioning_itself() {
+        // **The audit's finding.** `set_ai_profile` persisted a choice across
+        // restarts and `local_generator` never read it, so all four radio
+        // buttons produced the same model. The same registry and the same
+        // machine must now give three different answers.
+        let (m, free) = big_machine();
+        let lib = library();
+        let at = |p| pick_generator(lib.iter(), &m, free, p, None);
+        assert_eq!(at(Profile::Efficient).as_deref(), Some("qwen3-0.6b-mlx-q4"));
+        assert_eq!(at(Profile::Balanced).as_deref(), Some("qwen3.5-4b-mlx-q4"));
+        assert_eq!(
+            at(Profile::LargerLocal).as_deref(),
+            Some("pretend-8b-mlx-q4")
+        );
+        // And never the embedder, at any profile: it does not answer.
+        for p in [Profile::Efficient, Profile::Balanced, Profile::LargerLocal] {
+            assert_ne!(at(p).as_deref(), Some("embeddinggemma-300m-mlx-q4"));
+        }
+    }
+
+    #[test]
+    fn an_explicit_pin_beats_the_profile() {
+        // A profile is a standing preference; a pin is "use this model". If the
+        // preference could veto the pin, the model list on the Models page
+        // would be a suggestion — which is the same defect as the profile
+        // doing nothing, pointed the other way.
+        let (m, free) = big_machine();
+        let lib = library();
+        let picked = pick_generator(
+            lib.iter(),
+            &m,
+            free,
+            Profile::Efficient,
+            Some("pretend-8b-mlx-q4"),
+        );
+        assert_eq!(picked.as_deref(), Some("pretend-8b-mlx-q4"));
+    }
+
+    #[test]
+    fn a_pin_that_is_no_longer_installed_falls_back_to_the_profile() {
+        // Models are deleted from the Models page. A stale preference must not
+        // stop questions being answered.
+        let (m, free) = big_machine();
+        let lib = library();
+        let picked = pick_generator(
+            lib.iter(),
+            &m,
+            free,
+            Profile::Balanced,
+            Some("deleted-last-week"),
+        );
+        assert_eq!(picked.as_deref(), Some("qwen3.5-4b-mlx-q4"));
+    }
+
+    #[test]
+    fn the_profile_ceiling_never_leaves_a_question_unanswerable() {
+        // Efficient with only a 4B installed asked for less memory, not for
+        // answering to stop. Returning `None` here would raise
+        // MOD_NOT_INSTALLED and tell the user to download a model they have.
+        let (m, free) = big_machine();
+        let only_a_4b: Vec<marrow_model::Entry> = library()
+            .into_iter()
+            .filter(|e| e.id == "qwen3.5-4b-mlx-q4")
+            .collect();
+        let picked = pick_generator(only_a_4b.iter(), &m, free, Profile::Efficient, None);
+        assert_eq!(picked.as_deref(), Some("qwen3.5-4b-mlx-q4"));
+    }
+
+    #[test]
+    fn the_cloud_profile_still_answers_locally_when_no_endpoint_is_configured() {
+        // Cloud's budget is 0.0 B because nothing loads locally — a statement
+        // about a remote endpoint, not a local ceiling. Reading it as one would
+        // hand every Cloud user the smallest model on the machine, which is a
+        // silent downgrade rather than the frontier model they chose.
+        let (m, free) = big_machine();
+        let lib = library();
+        let picked = pick_generator(lib.iter(), &m, free, Profile::Cloud, None);
+        assert_eq!(picked.as_deref(), Some("pretend-8b-mlx-q4"));
+    }
+
+    #[test]
+    fn nothing_installed_means_nothing_to_answer_with_at_every_profile() {
+        // The one case that must still be `None`: the caller turns it into
+        // MOD_NOT_INSTALLED with the download instructions.
+        let (m, free) = big_machine();
+        let none: Vec<marrow_model::Entry> = Vec::new();
+        for p in [
+            Profile::Efficient,
+            Profile::Balanced,
+            Profile::LargerLocal,
+            Profile::Cloud,
+        ] {
+            assert_eq!(pick_generator(none.iter(), &m, free, p, None), None);
+        }
     }
 
     #[test]

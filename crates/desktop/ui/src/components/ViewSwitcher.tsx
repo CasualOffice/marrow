@@ -25,39 +25,58 @@
 import styles from "./ViewSwitcher.module.css";
 import { cx } from "../lib/cx";
 import { Icon, type IconName } from "./Icon";
-import { useUi, type View } from "../store";
+import { useUi, VIEWS, type View } from "../store";
 
-const SECTIONS: ReadonlyArray<{ view: View; label: string; icon: IconName }> = [
-  { view: "search", label: "Search", icon: "search" },
-  { view: "ask", label: "Ask", icon: "ask" },
-  { view: "files", label: "Files", icon: "file" },
-  { view: "models", label: "Models", icon: "chip" },
-  { view: "status", label: "Status", icon: "activity" },
-  { view: "settings", label: "Settings", icon: "settings" },
-];
+/**
+ * What each section is called and what it is drawn as.
+ *
+ * The *order* is not here — it is `VIEWS` in the store, which is also what the
+ * `⌘⌥n` keys count through. Two lists would let the third button and `⌘⌥3`
+ * drift apart, and nothing would have failed when they did.
+ */
+const SECTION: Record<View, { label: string; icon: IconName }> = {
+  search: { label: "Search", icon: "search" },
+  ask: { label: "Ask", icon: "ask" },
+  files: { label: "Files", icon: "file" },
+  models: { label: "Models", icon: "chip" },
+  status: { label: "Status", icon: "activity" },
+  settings: { label: "Settings", icon: "settings" },
+};
 
 export function ViewSwitcher() {
   const view = useUi((s) => s.view);
   const setView = useUi((s) => s.setView);
 
   return (
-    <nav className={styles.switcher} aria-label="Sections">
-      {SECTIONS.map((s) => (
-        <button
-          key={s.view}
-          type="button"
-          className={cx(styles.item, view === s.view && styles.active)}
-          aria-current={view === s.view ? "page" : undefined}
-          aria-label={s.label}
-          title={s.label}
-          onClick={() => setView(s.view)}
-        >
-          <Icon name={s.icon} size={13} />
-          <span className={styles.label} aria-hidden="true">
-            {s.label}
-          </span>
-        </button>
-      ))}
+    /*
+     * `data-switcher` is read by `App`'s focus effect, which moves focus off
+     * this control and into the view it just opened. A marker attribute rather
+     * than a class name because the class is a CSS-module hash and matching on
+     * one is matching on a build artifact.
+     */
+    <nav className={styles.switcher} aria-label="Sections" data-switcher="">
+      {VIEWS.map((v, i) => {
+        const s = SECTION[v];
+        return (
+          <button
+            key={v}
+            type="button"
+            className={cx(styles.item, view === v && styles.active)}
+            aria-current={view === v ? "page" : undefined}
+            aria-label={s.label}
+            // The shortcut belongs on the tooltip: this control's labels drop
+            // out on a narrow window, and in Search and Files Tab is spent on
+            // the pane cycle, so `⌘⌥n` is how these are reached from there.
+            title={`${s.label} (⌘⌥${i + 1})`}
+            onClick={() => setView(v)}
+          >
+            <Icon name={s.icon} size={13} />
+            <span className={styles.label} aria-hidden="true">
+              {s.label}
+            </span>
+          </button>
+        );
+      })}
     </nav>
   );
 }

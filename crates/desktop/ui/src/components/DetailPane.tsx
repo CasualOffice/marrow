@@ -21,7 +21,6 @@ import {
   copyCitation,
   openInSystem,
   revealInFileManager,
-  unavailable,
 } from "../actions";
 import type { SearchHit } from "../api";
 
@@ -112,11 +111,13 @@ export const DetailPane = forwardRef<HTMLDivElement, DetailPaneProps>(
                 <div className={styles.previewError}>
                   <ErrorNotice
                     error={region.error}
-                    action={
-                      region.error.code === "FS_PLACEHOLDER_SKIPPED"
-                        ? { label: "Download it", onClick: () => unavailable("hydrate") }
-                        : null
-                    }
+                    /* No action for a cloud placeholder. Hard rule 3 makes
+                       this a refusal rather than a missing command, and
+                       "Download it" calling `unavailable("hydrate")` read as
+                       "not built yet". The error's own message already names
+                       the cause and what to do — open it in its own app —
+                       which is more than the button ever did. */
+                    action={null}
                   />
                 </div>
               ) : (

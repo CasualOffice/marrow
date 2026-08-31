@@ -100,6 +100,29 @@ impl Fixture {
         .unwrap();
         (out, progress)
     }
+
+    /// The watcher path: hand the pipeline a set of paths rather than a tree.
+    fn hint(&self, paths: &[std::path::PathBuf]) -> marrow_ingest::IngestOutcome {
+        marrow_ingest::apply_hints(
+            &self.store,
+            self.ws,
+            self.root_id,
+            &self.root,
+            &IngestPolicy::default(),
+            &paths.iter().cloned().collect(),
+            &Arc::new(Progress::new()),
+            &Cancel::new(),
+            None,
+        )
+        .unwrap()
+    }
+
+    fn is_indexed(&self, p: &std::path::Path) -> bool {
+        let conn = self.store.reader().unwrap();
+        marrow_store::read::find_file_by_path(&conn, self.root_id, &p.to_string_lossy())
+            .unwrap()
+            .is_some()
+    }
 }
 
 #[test]
@@ -215,6 +238,108 @@ fn noise_directories_never_reach_the_store() {
     assert_eq!(
         out.discovered, 1,
         "only src/real.rs should be discovered, got {out:?}"
+    );
+}
+
+/// **A hint is a prompt to look, not an exemption from the walk policy.**
+///
+/// The sweep prunes noise directories by never descending into them.
+/// `apply_hints` descends nothing — it is handed finished paths — so it used to
+/// index anything a watcher noticed, including files created inside
+/// `node_modules`, `.git` and `target`. The next full sweep pruned them again,
+/// which churns the index and poisons ranking for as long as the window lasts:
+/// `.git/config` outranked the real documentation for "admission control".
+///
+/// The pairing with `noise_directories_never_reach_the_store` is the point. The
+/// two entry points have to reach the same verdict, and only one of them was
+/// ever asserted.
+#[test]
+fn a_hinted_file_under_an_excluded_directory_is_never_indexed() {
+    let f = fixture();
+    let real = f.write("src/real.rs", "fn main() {}");
+    let excluded = [
+        f.write("node_modules/pkg/index.js", "module.exports = {}"),
+        f.write(".git/config", "[core]\n"),
+        f.write("target/debug/build.rs", "// generated"),
+        // Not a noise directory — the other half of the same policy, which the
+        // hint path was also skipping.
+        f.write(".env", "SECRET=1\n"),
+    ];
+
+    let mut hinted = vec![real.clone()];
+    hinted.extend(excluded.iter().cloned());
+    let out = f.hint(&hinted);
+
+    assert_eq!(
+        out.discovered, 1,
+        "only src/real.rs should survive the policy, got {out:?}"
+    );
+    assert_eq!(out.stored, 1, "{out:?}");
+    assert!(f.is_indexed(&real), "the one legitimate hint was dropped");
+    for p in &excluded {
+        assert!(
+            !f.is_indexed(p),
+            "{} was indexed by a hint; the next sweep would prune it again",
+            p.display()
+        );
+    }
+}
+
+/// A row an earlier build wrote under a directory that is excluded *now* still
+/// has to be retirable.
+///
+/// The exclusion check sits after the vanished-path branch for exactly this
+/// reason. Refusing to look at an excluded path at all would strand every such
+/// row ACTIVE forever, because the sweep can no longer reach the directory to
+/// notice the file is gone — the failure `persistable.rs` records for the
+/// 43,686 files an earlier build left behind.
+#[test]
+fn a_hint_still_retires_a_row_under_a_directory_that_is_excluded_now() {
+    let f = fixture();
+    let stale = f.write("vendor/lib.rs", "// indexed before vendor was pruned");
+
+    // Put the row there the way the earlier build would have: a hint under a
+    // policy that did not exclude `vendor`.
+    let lenient = IngestPolicy {
+        walk: marrow_scan::WalkPolicy::default().include_dir("vendor"),
+        ..Default::default()
+    };
+    marrow_ingest::apply_hints(
+        &f.store,
+        f.ws,
+        f.root_id,
+        &f.root,
+        &lenient,
+        &[stale.clone()].into_iter().collect(),
+        &Arc::new(Progress::new()),
+        &Cancel::new(),
+        None,
+    )
+    .unwrap();
+    let conn = f.store.reader().unwrap();
+    let file_id = marrow_store::read::find_file_by_path(&conn, f.root_id, &stale.to_string_lossy())
+        .unwrap()
+        .expect("the fixture never got its stale row")
+        .file_id;
+    drop(conn);
+
+    std::fs::remove_file(&stale).unwrap();
+    f.hint(std::slice::from_ref(&stale));
+
+    // By id, not by path: retiring a row clears `current_path`, which is what
+    // makes the soft delete a soft delete rather than a second row waiting to
+    // be minted at the same path.
+    let conn = f.store.reader().unwrap();
+    let status: String = conn
+        .query_row(
+            "SELECT status FROM files WHERE file_id = ?1",
+            [file_id.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        status, "DELETED",
+        "an excluded path that vanished must still retire its row"
     );
 }
 

@@ -54,6 +54,17 @@
   box-shadow: var(--el1);
 }
 
+/*
+ * The sheet takes focus when a view opens, so it can show a focus ring — and
+ * the ring is wanted: arriving here by `⌘⌥n` should be visible. What is not
+ * wanted is the rest of the global rule. `:focus-visible` sets
+ * `border-radius: var(--r-ctrl)` so a ring hugs an ordinary control, which on
+ * this box squares off the one corner the whole layout is built around.
+ */
+.sheet:focus-visible {
+  border-radius: var(--r-sheet);
+}
+
 /* At the 720px window minimum the sheet's inset is the first thing to go: the
    detail pane needs those 8px more than the corner does. */
 @media (max-width: 820px) {

@@ -362,8 +362,37 @@ impl Core {
         }
     }
 
+    /// The search field, with no embedder behind it.
+    ///
+    /// Kept as the two-argument call every caller already makes. It is
+    /// [`Core::search_semantic`] with no embedding, which is the ordinary state
+    /// on a machine with no model installed — hard rule 10.
     pub fn search(&self, query: &str, limit: usize) -> Result<SearchResponse> {
-        self.search_with(query, limit, marrow_index::MatchMode::Prefix)
+        self.search_semantic(query, limit, None)
+    }
+
+    /// The search field, with the semantic branch when the caller could embed
+    /// the query.
+    ///
+    /// **The bug this exists to fix: the Models page said searches match on
+    /// meaning, and the search field only ever matched words.** `branches` was
+    /// the literal `["lexical"]` at both exits of this function, so the footer
+    /// whose whole job is to make a missing branch visible was hard-coded to
+    /// report the branch that was there. A field that says what it did and is
+    /// wrong is worse than one that says nothing.
+    ///
+    /// `embedding` is `None` whenever there is no embedding model, no runtime,
+    /// or the query could not be embedded, and in every one of those cases the
+    /// lexical branch answers alone. The semantic half is strictly additive and
+    /// its absence is never an error (hard rule 10) — there is no
+    /// semantic-only mode here and there must not be one.
+    pub fn search_semantic(
+        &self,
+        query: &str,
+        limit: usize,
+        embedding: Option<&marrow_index::Embedding>,
+    ) -> Result<SearchResponse> {
+        self.search_with(query, limit, marrow_index::MatchMode::Prefix, embedding)
     }
 
     fn search_with(
@@ -371,6 +400,7 @@ impl Core {
         query: &str,
         limit: usize,
         mode: marrow_index::MatchMode,
+        embedding: Option<&marrow_index::Embedding>,
     ) -> Result<SearchResponse> {
         let started = std::time::Instant::now();
         let trimmed = query.trim();
@@ -381,7 +411,9 @@ impl Core {
                 matched: 0,
                 elapsed_ms: 0,
                 hits: Vec::new(),
-                branches: vec!["lexical".into()],
+                // No branch ran, so naming one is a claim about work that did
+                // not happen. The footer renders an empty list as a dash.
+                branches: Vec::new(),
             });
         }
 
@@ -398,15 +430,76 @@ impl Core {
         if mode == marrow_index::MatchMode::Any {
             q = q.with_snippet(Self::evidence_snippet());
         }
-        let raw = self.index.search(&q)?;
+        let lexical = self.index.search(&q)?;
+
+        // The branches are collected as they run rather than declared. That is
+        // the whole correction: a hard-coded list cannot go wrong loudly, and
+        // this one is now the only statement about what happened.
+        let mut branches: Vec<String> = vec![marrow_query::search::LEXICAL.to_string()];
+        // `None` until something reorders the lexical result, so the ordinary
+        // as-you-type path — no embedder, one branch, one keystroke — does not
+        // copy two hundred hits and their snippets to hand them straight back.
+        let mut fused_order: Option<Vec<marrow_index::TextHit>> = None;
+        if let Some(e) = embedding {
+            match self
+                .vectors
+                .search(&marrow_index::VectorQuery::new(e.clone()).limit(capped))
+            {
+                // Nothing back means the backfill has not run over this corpus.
+                // The branch is not named in that case: "semantic" in the
+                // footer beside a result set it contributed nothing to is the
+                // same false claim in smaller type.
+                Ok(semantic) if !semantic.is_empty() => {
+                    // Fused by rank, so neither branch's scores need
+                    // normalizing against the other's (§113.2). The same
+                    // helper `retrieve` uses, with the same weights — two
+                    // fusions that could drift apart would make the Search view
+                    // and the Ask view disagree about the same corpus.
+                    let fused = [
+                        marrow_query::search::Branch {
+                            name: marrow_query::search::LEXICAL,
+                            weight: marrow_query::search::LEXICAL_WEIGHT,
+                            ranked: lexical.iter().map(|h| h.chunk_id).collect(),
+                        },
+                        marrow_query::search::Branch {
+                            name: marrow_query::search::SEMANTIC,
+                            weight: marrow_query::search::SEMANTIC_WEIGHT,
+                            ranked: semantic.iter().map(|h| h.chunk_id).collect(),
+                        },
+                    ];
+                    let order: Vec<marrow_core::ChunkId> =
+                        marrow_query::search::rrf(&fused, marrow_query::search::RRF_K)
+                            .into_iter()
+                            .map(|c| c.chunk_id)
+                            .collect();
+                    let mut hydrated = self.hydrate_in_order(&order, &lexical)?;
+                    // Fusing two branches of `capped` candidates each yields up
+                    // to twice as many, and the caller asked for a page.
+                    hydrated.truncate(capped);
+                    fused_order = Some(hydrated);
+                    branches.push(marrow_query::search::SEMANTIC.to_string());
+                }
+                Ok(_) => {}
+                // Never an error. A vector index that will not open is a
+                // missing branch, not a broken search (hard rule 10).
+                Err(err) => {
+                    tracing::warn!(error = %err, "the semantic branch failed; searching lexically")
+                }
+            }
+        }
 
         // How many documents actually matched, so the footer does not report
         // the page size as the result count. Asking for one more than the page
         // is enough to distinguish "exactly a page" from "more than a page";
         // beyond that the number is a count, not a ranking, so a cheap
         // over-fetch is the honest trade.
-        let matched = if raw.len() < capped {
-            raw.len()
+        //
+        // Counted on the lexical branch, because that is the one that can be
+        // counted without embedding the corpus — so it is a floor, and
+        // `max(hits.len())` keeps it from reporting fewer matches than the page
+        // it is sitting under, which is what a semantic-only hit would cause.
+        let matched = if lexical.len() < capped {
+            lexical.len()
         } else {
             self.index
                 .search(
@@ -415,10 +508,11 @@ impl Core {
                         .limit(capped * 10),
                 )
                 .map(|r| r.len())
-                .unwrap_or(raw.len())
+                .unwrap_or(lexical.len())
         };
         let roots = self.roots()?;
-        let hits: Vec<SearchHit> = raw
+        let ranked: &[marrow_index::TextHit] = fused_order.as_deref().unwrap_or(&lexical);
+        let hits: Vec<SearchHit> = ranked
             .iter()
             .enumerate()
             .map(|(i, h)| to_hit(i + 1, h, &roots))
@@ -427,10 +521,10 @@ impl Core {
         Ok(SearchResponse {
             query: trimmed.to_string(),
             total: hits.len(),
-            matched,
+            matched: matched.max(hits.len()),
             elapsed_ms: started.elapsed().as_millis() as u64,
             hits,
-            branches: vec!["lexical".into()],
+            branches,
         })
     }
 
@@ -1550,5 +1644,138 @@ mod conversation_search_tests {
             snippet_around("naïve — RESUME notes", "resume").as_deref(),
             Some("naïve — RESUME notes")
         );
+    }
+}
+
+/// **What the Search field actually did, as opposed to what it claimed.**
+///
+/// `SearchResponse.branches` was the literal `["lexical"]` at both exits of
+/// `search_with`, so the footer that exists to make a missing branch visible
+/// could not report one — while the Models page told the user that searches
+/// match on meaning as well as words. These pin the correction: the list is
+/// collected from work that happened, and the semantic half is additive.
+#[cfg(test)]
+mod search_branch_tests {
+    use std::sync::Arc;
+
+    use super::Core;
+    use marrow_index::{Embedding, VectorDoc, VectorIndex};
+
+    /// Two dropped files, really parsed, chunked and indexed — no model, no
+    /// network. The scratch path is used because it is the one route that
+    /// produces a searchable corpus in a single call.
+    fn corpus() -> (tempfile::TempDir, tempfile::TempDir, Arc<Core>) {
+        let data = tempfile::tempdir().expect("data dir");
+        let elsewhere = tempfile::tempdir().expect("source dir");
+        let core = Arc::new(Core::open(data.path().join("marrow.db")).expect("core"));
+        let lease = elsewhere.path().join("lease.md");
+        let menu = elsewhere.path().join("menu.md");
+        std::fs::write(
+            &lease,
+            "# Unit 7B\n\nThe agreement renews on 31 December 2031.\n",
+        )
+        .expect("write lease");
+        std::fs::write(
+            &menu,
+            "# Canteen\n\nTomato soup, bread, and a pot of tea.\n",
+        )
+        .expect("write menu");
+        crate::scratch::accept(&core, None, &[lease, menu]).expect("accept");
+        (data, elsewhere, core)
+    }
+
+    /// The chunk id of the one chunk whose file path ends in `name`.
+    fn chunk_of(core: &Core, name: &str) -> marrow_core::ChunkId {
+        let conn = core.store().reader().expect("reader");
+        let id: String = conn
+            .query_row(
+                "SELECT c.chunk_id FROM chunks c
+                   JOIN file_versions v ON v.version_id = c.version_id
+                   JOIN file_paths p ON p.file_id = v.file_id
+                  WHERE p.path LIKE ?1 LIMIT 1",
+                [format!("%{name}")],
+                |r| r.get(0),
+            )
+            .expect("a chunk for that file");
+        id.parse().expect("a well-formed chunk id")
+    }
+
+    #[test]
+    fn a_search_names_the_branch_it_ran_and_no_other() {
+        let (_data, _elsewhere, core) = corpus();
+        let found = core.search("renews", 10).expect("search");
+        assert_eq!(found.hits.len(), 1);
+        assert_eq!(found.branches, vec!["lexical".to_string()]);
+    }
+
+    #[test]
+    fn an_empty_query_claims_no_branch_at_all() {
+        // It used to report "lexical" for a query it never ran. A footer that
+        // names a branch on an empty result set is the same lie as the page
+        // that started this, one line long.
+        let (_data, _elsewhere, core) = corpus();
+        let found = core.search("   ", 10).expect("search");
+        assert!(found.branches.is_empty(), "{:?}", found.branches);
+    }
+
+    #[test]
+    fn the_semantic_branch_is_additive_and_its_absence_is_never_an_error() {
+        // Hard rule 10. An embedding with no vectors behind it — the ordinary
+        // state before a backfill has run — must return the lexical results
+        // unchanged, must not error, and must not claim the branch ran.
+        let (_data, _elsewhere, core) = corpus();
+        let query = Embedding::new(vec![1.0, 0.0]).expect("an embedding");
+        let lexical = core.search("renews", 10).expect("lexical");
+        let both = core
+            .search_semantic("renews", 10, Some(&query))
+            .expect("search must not fail without vectors");
+        assert_eq!(both.hits.len(), lexical.hits.len());
+        assert_eq!(both.branches, vec!["lexical".to_string()]);
+    }
+
+    #[test]
+    fn the_search_field_fuses_the_semantic_branch_when_there_is_one() {
+        // The substance behind the claim. `menu.md` contains none of the
+        // query's words, so lexical alone can never return it; the vector
+        // branch can, and the fused result has to carry it *and* say so.
+        let (_data, _elsewhere, core) = corpus();
+        let menu = chunk_of(&core, "menu.md");
+        let vector = Embedding::new(vec![1.0, 0.0]).expect("an embedding");
+        core.vectors()
+            .upsert(&[VectorDoc {
+                chunk_id: menu,
+                file_id: marrow_core::FileId::new(),
+                version_id: marrow_core::VersionId::new(),
+                workspace_id: marrow_core::WorkspaceId::new(),
+                embedding: vector.clone(),
+            }])
+            .expect("upsert");
+
+        let lexical = core.search("renews", 10).expect("lexical");
+        assert!(
+            !lexical.hits.iter().any(|h| h.path.ends_with("menu.md")),
+            "the lexical branch should not find the menu at all"
+        );
+
+        let fused = core
+            .search_semantic("renews", 10, Some(&vector))
+            .expect("hybrid");
+        assert!(
+            fused.hits.iter().any(|h| h.path.ends_with("menu.md")),
+            "the semantic branch contributed nothing: {:?}",
+            fused.hits.iter().map(|h| &h.path).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            fused.branches,
+            vec!["lexical".to_string(), "semantic".to_string()]
+        );
+        // A semantic-only hit still has to be renderable and citable: it is
+        // hydrated from the canonical store, not from the vector row.
+        let hit = fused
+            .hits
+            .iter()
+            .find(|h| h.path.ends_with("menu.md"))
+            .expect("the menu");
+        assert!(!hit.excerpt.is_empty(), "a hit with no text is not a hit");
     }
 }

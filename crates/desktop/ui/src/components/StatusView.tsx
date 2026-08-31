@@ -24,6 +24,16 @@
  * screen — `noParser + parseFailed + notProcessed` sums to `unindexed` — and
  * only the last two raise the card's tone.
  *
+ * **The same correction, applied to the buttons.** "Retry parsing", "Keep as
+ * is" and "Download" all called `unavailable()`: three controls whose entire
+ * behaviour was to explain that they have no behaviour. Two of them could not
+ * be built as offered — a retry over unchanged bytes with the same parser gets
+ * the same result, and hydrating a placeholder is refused by hard rule 3, not
+ * unimplemented — and the third asked the user to confirm what was already
+ * happening. All three are gone and their reasons are in the detail text, on
+ * the principle this page was rewritten for: state the situation, and offer an
+ * action only when there is one.
+ *
  * GUI §11 — every degraded state visible without navigating, so whatever tones
  * a card here also appears on that workspace's row in the sidebar.
  */
@@ -37,7 +47,7 @@ import { StateBadge, type StateTone } from "./Badges";
 import { ErrorNotice } from "./ErrorNotice";
 import { Icon } from "./Icon";
 import { useIndexHealth, useWorkspaces } from "../queries";
-import { pickFiles, runIndex, unavailable } from "../actions";
+import { pickFiles, runIndex } from "../actions";
 import { addWorkspace, asUiError } from "../api";
 import { useUi } from "../store";
 import { useQueryClient } from "@tanstack/react-query";
@@ -241,17 +251,23 @@ export function StatusView() {
                   {/* The only bucket where the text exists and Marrow does not
                       have it. `noParser` gets no issue at all — there is
                       nothing to fix about a photograph. */}
+                  {/*
+                    No "Retry parsing" button, and that is the fix rather than
+                    a gap. It called `unavailable()` — a button whose entire
+                    behaviour was to explain that it does nothing — and the
+                    command it wanted would not have helped either: a parse is
+                    keyed on (file version, parser, parser version), so running
+                    one again over unchanged bytes with the same parser
+                    produces the same nothing. What re-reads these files is the
+                    file changing or the parser improving, and both happen on
+                    their own. Saying so is worth more than a button that
+                    cannot act (BUGS B2).
+                  */}
                   {w.parseFailed > 0 && (
                     <Issue
                       tone="warn"
                       title={`${count(w.parseFailed)} files could not be read in full`}
-                      detail="A parser ran on these and came away with nothing searchable — corrupt, truncated, or a scan with no text layer. Unlike a file with no parser, the text is there and Marrow does not have it."
-                      actions={[
-                        {
-                          label: "Retry parsing",
-                          onClick: () => unavailable("retry"),
-                        },
-                      ]}
+                      detail="A parser ran on these and came away with nothing searchable — corrupt, truncated, or a scan with no text layer. Unlike a file with no parser, the text is there and Marrow does not have it. Nothing here retries them: the same parser over the same bytes gets the same result, so they are re-read when the file changes or when a build ships a better parser for it."
                     />
                   )}
                   {w.notProcessed > 0 && (
@@ -267,21 +283,29 @@ export function StatusView() {
                       ]}
                     />
                   )}
+                  {/*
+                    Neither "Download" nor "Keep as is", and for two different
+                    reasons.
+
+                    **Download is not a missing feature; it is a refusal.**
+                    Hard rule 3: Marrow never hydrates a cloud placeholder.
+                    Opening one is what makes the sync client fetch it, and a
+                    button here would fetch every one of them — hundreds of
+                    gigabytes on the author's own disk — from a page the user
+                    opened to look at counts. The audit (§5) settles this as a
+                    decision rather than a preference, so the honest form is
+                    the reason in words and no control. It used to be a button
+                    calling `unavailable("hydrate")`, which read as "this will
+                    work later".
+
+                    **Keep as is was a button for the thing already
+                    happening.** Not doing something needs no affordance.
+                  */}
                   {w.cloudOnly > 0 && (
                     <Issue
                       tone="warn"
                       title={`${count(w.cloudOnly)} files are cloud-only and were not read`}
-                      detail="Their metadata is indexed; their contents are not on this machine. Reading them is what triggers the download."
-                      actions={[
-                        {
-                          label: "Keep as is",
-                          onClick: () => unavailable("policy"),
-                        },
-                        {
-                          label: "Download",
-                          onClick: () => unavailable("hydrate"),
-                        },
-                      ]}
+                      detail="Their metadata is indexed and they are findable by name, date and folder; their contents are not on this machine. Marrow will not download them — reading a placeholder is what makes your sync client fetch it, and doing that here would pull every one of them at once. Open one in Finder or its own app and it downloads; the next sweep then indexes its contents."
                     />
                   )}
                 </div>
@@ -467,16 +491,25 @@ function Total({ k, v }: { k: string; v: string }) {
   );
 }
 
+/**
+ * A degraded state, and the button that clears it when there is one.
+ *
+ * `actions` is optional because two of the states on this page have no action
+ * that can honestly be offered — a parse that will not change, and a
+ * placeholder Marrow refuses to hydrate (hard rule 3). The empty container is
+ * not rendered at all: a button that explains it does nothing is worse than no
+ * button, and so is the gap where one used to be.
+ */
 function Issue({
   tone,
   title,
   detail,
-  actions,
+  actions = [],
 }: {
   tone: StateTone;
   title: string;
   detail: string;
-  actions: ReadonlyArray<{ label: string; onClick: () => void }>;
+  actions?: ReadonlyArray<{ label: string; onClick: () => void }>;
 }) {
   return (
     <div className={styles.issue}>
@@ -489,18 +522,20 @@ function Issue({
         <span className={styles.issueTitle}>{title}</span>
         <span className={styles.issueDetail}>{detail}</span>
       </div>
-      <div className={styles.issueActions}>
-        {actions.map((a) => (
-          <button
-            key={a.label}
-            type="button"
-            className={styles.issueAction}
-            onClick={a.onClick}
-          >
-            {a.label}
-          </button>
-        ))}
-      </div>
+      {actions.length > 0 && (
+        <div className={styles.issueActions}>
+          {actions.map((a) => (
+            <button
+              key={a.label}
+              type="button"
+              className={styles.issueAction}
+              onClick={a.onClick}
+            >
+              {a.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -470,9 +470,19 @@ export function ModelsView() {
 
             <section className={styles.section}>
               <h2 className={styles.heading}>AI</h2>
+              {/*
+                This is the control the audit found persisting a choice and
+                changing nothing: `local_generator` never read the profile, so
+                all four buttons loaded the same model. It picks the generator
+                now — "Answering with" below shows the result change as you
+                click — and a pinned model still overrides it, which is why the
+                sentence names what it does *not* move as well as what it does.
+              */}
               <p className={styles.lede}>
-                Moves the model that writes answers. The router and the embedder
-                are unaffected — inflating them would cost memory for no gain.
+                Sets the size of the model that writes answers — the largest
+                installed one that stays within it. Pinning a model below
+                overrides this. The router and the embedder are unaffected;
+                inflating them would cost memory for no gain.
               </p>
               <div className={styles.profiles} role="radiogroup" aria-label="AI preference">
                 {s.profiles.map((p) => (
@@ -593,6 +603,14 @@ export function ModelsView() {
  * made this confusing in the first place. A configured remote endpoint wins
  * over any local pin, and says so — a page showing a pinned local model while
  * a cloud endpoint answers would be lying about where the question goes.
+ *
+ * **Three controls on one page decide this, so the order has to be on the page
+ * too**: a remote endpoint in Settings, then this pin, then the AI preference
+ * above. An explicit choice beats a preference — which is why the automatic
+ * option names the preference rather than describing itself as unconstrained,
+ * and why the pinned line says the preference is being overridden. Two
+ * controls that quietly contend for the same decision is how the AI preference
+ * came to persist a choice and change nothing.
  */
 function Answering({
   snapshot,
@@ -618,7 +636,7 @@ function Answering({
         disabled={busy || remote || usable.length === 0}
         onChange={(e) => onPin(e.target.value === "" ? null : e.target.value)}
       >
-        <option value="">Whatever fits this machine</option>
+        <option value="">Largest that fits the AI preference</option>
         {usable.map((m) => (
           <option key={m.id} value={m.id}>
             {m.displayName}
@@ -636,13 +654,15 @@ function Answering({
         ) : snapshot.pinnedModelId ? (
           <>
             <strong>{snapshot.activeModel}</strong> answers every question, whatever else is
-            running.
+            running and whatever the AI preference above says — an explicit choice beats a
+            preference.
           </>
         ) : (
           <>
-            <strong>{snapshot.activeModel ?? "None"}</strong> would answer right now. Left on
-            automatic this can change with the memory that happens to be free, so pin one if
-            you want the same model every time.
+            <strong>{snapshot.activeModel ?? "None"}</strong> would answer right now: the
+            largest installed model within the AI preference above. Left on automatic this
+            can change with that preference and with the memory that happens to be free, so
+            pin one if you want the same model every time.
           </>
         )}
       </p>
@@ -708,6 +728,15 @@ function useEta(status: SemanticStatus): string | null {
  * The coverage figure is the point. A half-built index is not broken, but a
  * user whose results are quietly worse than they will be in ten minutes, with
  * nothing saying why, has no way to tell the two apart.
+ *
+ * **And the copy names the surface, because the surfaces differ.** This block
+ * used to read "Searches match on meaning as well as words" once the backfill
+ * finished, which was false: the vector index has one consumer in the window,
+ * and it is the Ask page. Someone who ran a 2¼-hour backfill and then typed
+ * into the Search field got exactly the results they had before, with this
+ * page's word for it that they had not. A sentence that describes a feature by
+ * the surface it does not reach is the same defect as the backfill that no
+ * caller read — see BUGS C2, where it was found the first time.
  */
 function Semantic({
   status,
@@ -741,10 +770,10 @@ function Semantic({
 
       <p className={styles.lede}>
         {complete
-          ? "Every chunk has a vector. Searches match on meaning as well as words."
+          ? "Every chunk has a vector, so Ask and Search both match on meaning as well as on words."
           : status.embedded === 0
-            ? "Not built. Search matches words exactly — which always works, with no model and no network. Building this adds matching on meaning."
-            : `Covers ${pct}% of what is indexed. The rest is still keyword-only.`}
+            ? "Not built. Everything matches words exactly — which always works, with no model and no network. Building this adds matching on meaning, to Ask and to Search."
+            : `Covers ${pct}% of what is indexed. The rest is answered from words alone.`}
         {!complete && eta && ` ${eta}`}
       </p>
 

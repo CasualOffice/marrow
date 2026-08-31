@@ -24,8 +24,9 @@
 //! with its siblings.
 
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use marrow_core::{Code, Error};
@@ -121,6 +122,84 @@ impl WalkPolicy {
         self.excluded_dirs.remove(name);
         self
     }
+
+    /// Whether this policy prunes one path component, given whether that
+    /// component names a directory.
+    ///
+    /// The single place the name-based rules are decided. [`walk`] asks it once
+    /// per entry as it descends; [`Self::excludes`] asks it for every component
+    /// of a path that arrived whole. One function so the two cannot drift —
+    /// they did drift, and the drift is the bug [`Self::excludes`] describes.
+    fn prunes_component(&self, name: &OsStr, is_dir: bool) -> bool {
+        // Only *directory* names are pruned by name. A file called `target` is
+        // a file, and pruning it would be a different rule than the one the
+        // measurement in the module note justified.
+        if is_dir {
+            if let Some(n) = name.to_str() {
+                if self.excluded_dirs.contains(n) {
+                    tracing::trace!(dir = n, "pruned noise directory");
+                    return true;
+                }
+            }
+        }
+
+        if self.skip_hidden {
+            let hidden = name.to_str().map(|n| n.starts_with('.')).unwrap_or(false);
+            if hidden && !tier::is_icloud_stub_name(name) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Whether this policy excludes `path`, which the caller must already have
+    /// proved lies under `root`.
+    ///
+    /// The walk decides exclusion one directory at a time on the way down, so a
+    /// pruned directory takes its whole subtree with it and no descendant is
+    /// ever offered to anything. **A watcher hint has no way down** — it
+    /// arrives as a finished path — so the ancestors have to be re-read here.
+    ///
+    /// Without this, the exclusion policy existed only on the sweep path: a
+    /// file created inside `node_modules`, `.git` or `target` *was* indexed
+    /// when a watcher hinted it, and pruned again by the next full sweep. That
+    /// churns the index and, for as long as the window lasts, poisons ranking —
+    /// `.git/config` outranking the real documentation for "admission control"
+    /// is the recorded instance.
+    ///
+    /// **`respect_gitignore` is deliberately not evaluated here.** Matching it
+    /// needs the stack of per-directory matchers `ignore` accumulates while
+    /// descending, and a hint has no descent to accumulate from; re-deriving it
+    /// per path would be a second implementation of git's semantics, which is
+    /// exactly what this function exists to avoid. So a gitignored file can
+    /// still reach the index by hint on a root that opted into gitignore, and
+    /// the next sweep still retires it. Smaller and rarer than the name-based
+    /// hole — `respect_gitignore` is off by default (D47) — and it wants a
+    /// cached matcher, not a copy of the rules.
+    pub fn excludes(&self, root: &AuthorizedRoot, path: &Path, is_dir: bool) -> bool {
+        // Only the part *below* the root is policy. `ignore` never offers depth
+        // 0 to its predicate, so a root that is itself named `target` still
+        // walks — and a hint inside that root must too.
+        //
+        // Counted rather than `strip_prefix`ed, because the root is canonical
+        // and a hint is whatever the OS handed the watcher: on a
+        // case-insensitive volume the two can name the same directory and still
+        // not match as strings. Containment is the caller's precondition, so
+        // the component count is all that is needed to skip past the root.
+        let depth = root.path().components().count();
+        let mut below = path.components().skip(depth).peekable();
+        while let Some(c) = below.next() {
+            let Component::Normal(name) = c else { continue };
+            // Every component but the last is a directory by construction; the
+            // last one is whatever the caller says it is.
+            let component_is_dir = below.peek().is_some() || is_dir;
+            if self.prunes_component(name, component_is_dir) {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 /// One discovered path, with the facts its single `lstat` produced.
@@ -203,31 +282,17 @@ pub fn walk(root: &AuthorizedRoot, policy: &WalkPolicy) -> Scan {
     // this subsequent times overrides previous filter predicates." Calling it
     // in a loop over patterns silently keeps only the last one, which looks
     // like it works because the last pattern does get excluded.
-    let excluded: Arc<BTreeSet<String>> = Arc::new(policy.excluded_dirs.clone());
-    let skip_hidden = policy.skip_hidden;
+    //
+    // The rules themselves live in `WalkPolicy::prunes_component`, because the
+    // watcher-hint path has to reach the same verdict for a path it was handed
+    // whole (see `WalkPolicy::excludes`). Two copies of "is this pruned?" is
+    // how the hint path came to index `node_modules` in the first place.
+    let rules = Arc::new(policy.clone());
     b.filter_entry(move |entry| {
         // Depth 0 (the root itself) is never offered to the predicate by
         // `ignore`, so a root named `target` still walks.
-        let name = entry.file_name();
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-
-        if is_dir {
-            if let Some(n) = name.to_str() {
-                if excluded.contains(n) {
-                    tracing::trace!(dir = n, "pruned noise directory");
-                    return false;
-                }
-            }
-        }
-
-        if skip_hidden {
-            let hidden = name.to_str().map(|n| n.starts_with('.')).unwrap_or(false);
-            if hidden && !tier::is_icloud_stub_name(name) {
-                return false;
-            }
-        }
-
-        true
+        !rules.prunes_component(entry.file_name(), is_dir)
     });
 
     Scan {
@@ -340,6 +405,87 @@ mod tests {
 
     fn root_of(p: &Path) -> AuthorizedRoot {
         AuthorizedRoot::open(p).unwrap()
+    }
+
+    /// **The walk and a watcher hint must reach the same verdict.**
+    ///
+    /// The walk prunes by descending: it never offers a descendant of
+    /// `node_modules` to anyone, so nothing downstream ever had to ask. A hint
+    /// arrives as a finished path with no descent behind it, and
+    /// `marrow_ingest::apply_hints` used to index it — which is how a file
+    /// created in `node_modules` got indexed and then pruned again by the next
+    /// sweep. This asserts the two agree on the same tree.
+    #[test]
+    fn excludes_agrees_with_what_the_walk_prunes() {
+        let td = tempfile::tempdir().unwrap();
+        let base = td.path();
+        for rel in [
+            "src/real.rs",
+            "node_modules/pkg/index.js",
+            ".git/config",
+            "target/debug/build.rs",
+            ".env",
+            "docs/notes.md",
+        ] {
+            let p = base.join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, b"x").unwrap();
+        }
+        let root = root_of(base);
+        let policy = WalkPolicy::default();
+
+        let walked: BTreeSet<PathBuf> = walk(&root, &policy)
+            .filter_map(ScanEvent::entry)
+            .filter(|e| e.is_file())
+            .map(|e| e.path)
+            .collect();
+
+        for rel in [
+            "src/real.rs",
+            "node_modules/pkg/index.js",
+            ".git/config",
+            "target/debug/build.rs",
+            ".env",
+            "docs/notes.md",
+        ] {
+            let p = root.path().join(rel);
+            assert_eq!(
+                policy.excludes(&root, &p, false),
+                !walked.contains(&p),
+                "{rel}: `excludes` and the walk disagree"
+            );
+        }
+    }
+
+    /// A root that is itself named `target` still walks, so a hint inside it
+    /// must too. `ignore` never offers depth 0 to its predicate; `excludes`
+    /// skips the root's components for the same reason.
+    #[test]
+    fn excludes_never_judges_the_root_by_its_own_name() {
+        let td = tempfile::tempdir().unwrap();
+        let base = td.path().join("target");
+        fs::create_dir_all(base.join("sub")).unwrap();
+        fs::write(base.join("sub/a.txt"), b"x").unwrap();
+        let root = root_of(&base);
+        let policy = WalkPolicy::default();
+
+        assert!(!policy.excludes(&root, &root.path().join("sub/a.txt"), false));
+        assert!(
+            policy.excludes(&root, &root.path().join("target/a.txt"), false),
+            "a nested `target` is still pruned"
+        );
+    }
+
+    /// A *file* named `target` is a file. The name rule prunes directories, and
+    /// pruning a file by the same name would be a different rule than the one
+    /// the measurement justified.
+    #[test]
+    fn excludes_prunes_directory_names_not_file_names() {
+        let td = tempfile::tempdir().unwrap();
+        let root = root_of(td.path());
+        let policy = WalkPolicy::default();
+        assert!(!policy.excludes(&root, &root.path().join("target"), false));
+        assert!(policy.excludes(&root, &root.path().join("target"), true));
     }
 
     /// Names of every file yielded, relative to the root.

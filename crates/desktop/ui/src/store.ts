@@ -14,6 +14,22 @@ export type View = "search" | "ask" | "files" | "models" | "status" | "settings"
 export type Pane = "sidebar" | "results" | "detail";
 
 /**
+ * The sections, in the order the switcher shows them and the order `⌘⌥n`
+ * counts them.
+ *
+ * One list, so "⌘⌥3 is the third button" cannot quietly stop being true by
+ * someone reordering the switcher.
+ */
+export const VIEWS: readonly View[] = [
+  "search",
+  "ask",
+  "files",
+  "models",
+  "status",
+  "settings",
+];
+
+/**
  * A generated page or diagram, while it is open in the side panel.
  *
  * This is the one piece of window state whose two ends have no common ancestor
@@ -273,8 +289,45 @@ const THOROUGH_KEY = "marrow.thorough";
 /** The sidebar folded away to its rail. */
 const COLLAPSED_KEY = "marrow.sidebarCollapsed";
 
-/** Tab order across panes. The sidebar drops out when it is collapsed. */
-const PANES: Pane[] = ["sidebar", "results", "detail"];
+/**
+ * The panes each view actually mounts, in Tab order.
+ *
+ * This used to be one fixed three-pane list for the whole app, and only Search
+ * mounts three. Files attaches `detailRef` and nothing else; Models, Status,
+ * Settings and Ask attach none. So the cycle stepped onto refs that were
+ * `null` — and because `App` swallowed Tab to run the cycle, **no control on
+ * those pages could be reached by keyboard at all**, the API-key field
+ * included.
+ *
+ * A view with fewer than two panes therefore has no cycle, and `App` leaves Tab
+ * to the browser there. Native tab order is the thing a browser gives away for
+ * free; taking it away and putting nothing in its place is how a whole page
+ * goes dark.
+ */
+const VIEW_PANES: Record<View, readonly Pane[]> = {
+  search: ["sidebar", "results", "detail"],
+  files: ["sidebar", "detail"],
+  ask: [],
+  models: [],
+  status: [],
+  settings: [],
+};
+
+/**
+ * The panes `view` cycles right now. The sidebar drops out when it is
+ * collapsed — there is nothing to focus behind a rail.
+ *
+ * Fewer than two means the cycle is not a cycle, and Tab belongs to the
+ * browser. `App` asks this the same way `cyclePane` does, so the key and the
+ * action can never disagree about which views have panes.
+ */
+export function panesFor(
+  view: View,
+  sidebarCollapsed: boolean,
+): readonly Pane[] {
+  const panes = VIEW_PANES[view];
+  return sidebarCollapsed ? panes.filter((p) => p !== "sidebar") : panes;
+}
 
 export const useUi = create<UiState>((set, get) => ({
   view: "search",
@@ -324,12 +377,17 @@ export const useUi = create<UiState>((set, get) => ({
   focusPane: (focusedPane) => set({ focusedPane }),
   cyclePane: (back) =>
     set((s) => {
-      const panes = s.sidebarCollapsed
-        ? PANES.filter((p) => p !== "sidebar")
-        : PANES;
+      const panes = panesFor(s.view, s.sidebarCollapsed);
+      // Nothing to cycle: leave `focusedPane` alone rather than parking it on a
+      // pane this view does not mount. The old code moved it anyway, so the
+      // effect that follows `focusedPane` then focused `null`.
+      if (panes.length === 0) return {};
+      // `indexOf` is -1 when the focused pane is not one of this view's, which
+      // lands on the first pane. That is the right answer for arriving from a
+      // view with a different set.
       const i = panes.indexOf(s.focusedPane);
       const next = panes[(i + (back ? -1 : 1) + panes.length) % panes.length];
-      return { focusedPane: next ?? "results" };
+      return { focusedPane: next ?? panes[0] ?? "results" };
     }),
   setAnchor: (anchor) => set({ anchor }),
 

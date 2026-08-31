@@ -32,7 +32,7 @@
 }
 
 .semantic {
-  color: var(--reason-semantic);
+  color: var(--reason-semantic-text);
   background: var(--tint-semantic);
 }
 
@@ -63,7 +63,7 @@
 /* ── origin: invariant #13, an agent wrote it and it cannot be cited ─────── */
 
 .self {
-  color: var(--danger);
+  color: var(--danger-text);
   background: var(--tint-danger);
   font-family: var(--mono);
   font-size: var(--fs-xs);
@@ -92,7 +92,7 @@
 }
 
 .ok {
-  color: var(--ok);
+  color: var(--ok-text);
   background: var(--tint-ok);
 }
 .warn {
@@ -100,7 +100,7 @@
   background: var(--tint-warn);
 }
 .error {
-  color: var(--danger);
+  color: var(--danger-text);
   background: var(--tint-danger);
 }
 .plain {

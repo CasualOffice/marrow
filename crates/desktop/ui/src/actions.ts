@@ -264,12 +264,13 @@ export async function runIndex(): Promise<void> {
 export const MISSING: Record<string, string> = {
   editor:
     'Opening at a line in $EDITOR needs a desktop command that does not exist yet ("open_in_editor"). ⌘↵ opens the file in the system default instead.',
-  hydrate:
-    'Downloading cloud-only files needs a desktop command that does not exist yet ("workspace_hydrate").',
-  policy:
-    'Changing what a workspace indexes needs a desktop command that does not exist yet ("workspace_set_policy").',
-  retry:
-    'Retrying failed parses needs a desktop command that does not exist yet ("job_retry").',
+  // `hydrate`, `policy` and `retry` were here and are gone. Each described a
+  // command that "does not exist yet", and none of them was waiting on one:
+  // hydrating a cloud placeholder is refused by hard rule 3, "keep as is" was
+  // a button for the thing already happening, and re-running a parse over
+  // unchanged bytes with the same parser produces the same nothing — what
+  // re-reads a file is the file changing or a better parser shipping. A
+  // promise of a future command is a worse answer than the reason.
 };
 
 export function unavailable(what: keyof typeof MISSING | string): void {

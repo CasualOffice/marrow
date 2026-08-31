@@ -1,10 +1,16 @@
 /**
  * The window.
  *
- * Every keybinding in GUI §5.1 is registered here, in one place, and every one
- * of them calls the same function the mouse calls. That is what makes "every
- * action reachable by mouse is reachable by keyboard" true by construction
- * rather than by review.
+ * Every keybinding this app has is registered here, in one place, and every one
+ * of them calls the same function the mouse calls. That is most of what makes
+ * "every action reachable by mouse is reachable by keyboard" true by
+ * construction rather than by review — the rest is not swallowing Tab in views
+ * that have nothing to do with it, which is the other half of the rule and the
+ * half this file used to break.
+ *
+ * It is not the whole of GUI §5.1. The command palette that section lists is
+ * not built, and `ShortcutsDialog` says so rather than quietly relabelling the
+ * key next to it.
  *
  * The open verbs, after `open_path` / `reveal_path` arrived — Enclave's
  * *peek before open*, which is the pattern this layout already implies:
@@ -45,7 +51,7 @@ import {
   useSettledFlag,
   useWorkspaces,
 } from "./queries";
-import { anchorOf, hitKey, useUi } from "./store";
+import { anchorOf, hitKey, panesFor, useUi, VIEWS } from "./store";
 import {
   copyCitation,
   grantFolder,
@@ -97,6 +103,8 @@ export function App() {
   const sidebarRef = useRef<HTMLElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
   const detailRef = useRef<HTMLDivElement>(null);
+  /** The content sheet, as a place to put focus when a view opens. */
+  const sheetRef = useRef<HTMLDivElement>(null);
 
   /** Bumped only when a keypress moved the cursor, so a re-rank never scrolls. */
   const [scrollNonce, setScrollNonce] = useState(0);
@@ -229,6 +237,44 @@ export function App() {
         toggleSidebar();
         return;
       }
+      /*
+       * ⌘⌥1–6 — the six sections, counted in `VIEWS` order.
+       *
+       * Three spellings were possible and two of them are already taken:
+       *
+       *  - `⌘1-6` is jump-to-result, right below, and has been since there were
+       *    results to jump to. Making it mean something else *outside* Search
+       *    was the tempting third option and it is the one this file argues
+       *    against a few lines down — a key that does two things at once does
+       *    neither predictably, and "which one did I get" is answered by
+       *    remembering which screen you are on.
+       *  - `⌃1-6` collides too, invisibly: `meta` here is `metaKey || ctrlKey`,
+       *    so `⌃1` already *is* `⌘1` to this handler and would jump to the
+       *    first result. Un-aliasing Ctrl for one binding and not the rest is a
+       *    worse trade than the extra modifier.
+       *
+       * Read from `e.code`, never `e.key`. On macOS Option rewrites the
+       * character — `⌥1` is `¡`, `⌥2` is `™` — so `e.key` never sees a digit
+       * and a `/^[1-9]$/` test here would silently match nothing.
+       *
+       * Before the result-jump check so the two can never be ambiguous, even
+       * on a layout where Option leaves the digit alone.
+       */
+      if (meta && e.altKey && e.code.startsWith("Digit")) {
+        const next = VIEWS[Number(e.code.slice("Digit".length)) - 1];
+        if (next) {
+          e.preventDefault();
+          ui.setView(next);
+        }
+        return;
+      }
+      // ⌘, — Settings. The macOS convention, and the one place a user will try
+      // a shortcut before looking for a button.
+      if (meta && !e.altKey && e.key === ",") {
+        e.preventDefault();
+        ui.setView("settings");
+        return;
+      }
       if (meta && /^[1-9]$/.test(e.key)) {
         e.preventDefault();
         const hit = s.hits[Number(e.key) - 1];
@@ -258,28 +304,45 @@ export function App() {
         ui.closeArtifact();
         return;
       }
+      /*
+       * Escape belongs to the view that has something to clear.
+       *
+       * It used to be unguarded: from *any* screen it wiped the search query —
+       * a query nothing on that screen was showing — and when the query was
+       * already empty it blurred whatever had focus, which on Ask is the
+       * composer someone is mid-sentence in. Ask needs the key for "stop
+       * generating", the artifact panel and the dialogs handle their own, and
+       * nowhere else has a query at all. So: Search clears, everyone else keeps
+       * it.
+       */
       if (e.key === "Escape") {
+        if (ui.view !== "search") return;
         e.preventDefault();
-        if (s.query !== "") {
-          ui.setQuery("");
-          searchRef.current?.focus();
-        } else {
-          (document.activeElement as HTMLElement | null)?.blur();
-          searchRef.current?.focus();
-        }
+        if (s.query !== "") ui.setQuery("");
+        // Either way focus lands back on the field, which is where the next
+        // keystroke is meant to go. The old blur-then-focus pair was the same
+        // thing said twice.
+        searchRef.current?.focus();
         return;
       }
       if (e.key === "Tab") {
         /*
-         * Ask has no panes. The cycle moves between the sidebar, the results
-         * column and the detail pane, and two of those three are not even
-         * mounted here — so swallowing Tab in this view spent it on nothing and
-         * took the only key that reaches a button with it. A conversation is
-         * full of controls that have to be reachable: the artifact cards, the
-         * sources disclosure, the composer's mode switch, and everything in the
-         * artifact panel. Here Tab means Tab.
+         * Tab is the browser's unless this view genuinely has panes to cycle.
+         *
+         * The reasoning that released it for Ask holds everywhere the pane
+         * model does not apply, and it applies in two views. Ask has no panes;
+         * Models, Status and Settings have none either, and swallowing Tab
+         * there focused `null` — which is why the API key could not be typed
+         * into by keyboard. Files had the cycle stepping onto a `resultsRef`
+         * nothing attaches. Native tab order is what a browser hands you for
+         * free, and every one of those pages is a column of ordinary controls
+         * that it orders correctly.
+         *
+         * `panesFor` is the same question `cyclePane` asks itself, so the key
+         * and the action cannot disagree. In the two views that keep the cycle
+         * the switcher is off the tab path, which is what `⌘⌥1-6` above is for.
          */
-        if (ui.view === "ask") return;
+        if (panesFor(ui.view, ui.sidebarCollapsed).length < 2) return;
         e.preventDefault();
         cyclePane(e.shiftKey);
         return;
@@ -338,6 +401,36 @@ export function App() {
     searchRef.current?.focus();
   }, []);
 
+  /*
+   * Opening a view puts focus inside it.
+   *
+   * Without this, clicking a section left focus on the switcher button, so the
+   * first Tab in the new view started from the chrome and walked back through
+   * it. Pressing `⌘⌥n` was worse: the control focus was on has just been
+   * unmounted, so focus falls to `<body>` and Tab starts from the top of the
+   * document.
+   *
+   * **Only focus that is idle is taken.** A view that claims its own focus on
+   * arrival has already decided better than this effect can — Ask focuses its
+   * composer on every conversation epoch, and `⌘N` is exactly that path — so
+   * anything already holding focus keeps it. What counts as idle is the
+   * switcher itself, and nothing at all.
+   */
+  useEffect(() => {
+    const active = document.activeElement as HTMLElement | null;
+    const idle =
+      active === null ||
+      active === document.body ||
+      active.closest("[data-switcher]") !== null;
+    if (!idle) return;
+    // Search opens in its field, which is GUI §4's opening state and what ⌘F
+    // does. Everywhere else the sheet takes it: a container, not a control, so
+    // arriving on a page never types into it or presses anything, and the next
+    // Tab starts at the top of the view rather than at the top of the window.
+    if (view === "search") searchRef.current?.focus();
+    else sheetRef.current?.focus();
+  }, [view]);
+
   const mounted = useRef(false);
   useEffect(() => {
     if (!mounted.current) {
@@ -378,7 +471,10 @@ export function App() {
           so a pane that miscalculates its own height can no longer paint over
           the window edge — the failure the user saw as "lower part is hidden".
         */}
-        <div className={styles.sheet}>
+        {/* `tabIndex={-1}` makes it a focus target without putting it in the
+            tab order: it is where focus lands when a view opens, and nothing
+            more. */}
+        <div ref={sheetRef} tabIndex={-1} className={styles.sheet}>
           {view === "search" && (
             <SearchView
               query={query}

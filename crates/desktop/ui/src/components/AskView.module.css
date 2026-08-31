@@ -353,13 +353,48 @@
   min-width: 0;
 }
 
-.sourcePath {
+/* The citation, as a control. The directory is allowed to truncate; the
+   filename and its line are not — that suffix is what makes this a citation
+   rather than a filename, and under a single `text-overflow: ellipsis` it was
+   the first thing to go. */
+.sourceOpen {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg2);
   font-family: var(--mono);
   font-size: var(--fs-micro);
-  color: var(--fg2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sourceOpen:hover .sourceName,
+.sourceOpen:focus-visible .sourceName {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+.sourceDir {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--fg3);
+}
+
+.sourceName {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  color: var(--fg2);
+}
+
+.sourceLine {
+  color: var(--fg3);
 }
 
 .sourceExcerpt {
@@ -590,9 +625,16 @@
 .scopeSelect {
   max-width: 22ch;
   padding: var(--sp-2) var(--sp-3);
-  border: 1px solid var(--line);
+  /* `--raised` is defined nowhere, so this control had no background at all —
+     an undefined custom property computes to nothing rather than failing. It
+     sits on the composer's `--sheet`, so `--sunken` is the token that was
+     meant. The border goes with it: tokens.css:26 states the rule is
+     shadow-as-border, and a `1px solid` here was the second half of the same
+     slip. `check.sh` now fails on an unresolvable `var()`. */
+  border: 0;
   border-radius: var(--r-ctrl);
-  background: var(--raised);
+  background: var(--sunken);
+  box-shadow: var(--hairline);
   color: var(--fg2);
   font: inherit;
   font-size: var(--fs-micro);
@@ -846,4 +888,13 @@
   font-size: var(--fs-ctl);
   font-weight: 500;
   cursor: pointer;
+}
+
+/* Beside "N not used" and "across N projects", and for the same reason: it
+   changes how the answer should be read, so it has to be legible without
+   opening the list. */
+.sourcesInexact {
+  margin-left: var(--sp-3);
+  color: var(--fg3);
+  font-size: var(--fs-micro);
 }

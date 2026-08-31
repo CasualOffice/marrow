@@ -14,7 +14,7 @@
 import styles from "./ZeroResults.module.css";
 import { cx } from "../lib/cx";
 import { count, ms } from "../lib/format";
-import { grantFolder, runIndex, unavailable } from "../actions";
+import { grantFolder, runIndex } from "../actions";
 import { useIndexHealth, useWorkspaces } from "../queries";
 import type { UiError } from "../api";
 import { ErrorNotice } from "./ErrorNotice";
@@ -25,8 +25,9 @@ interface Gap {
   tone: "warn" | "dim";
   title: string;
   detail: string;
-  action: string;
-  onClick: () => void;
+  /** Optional: a gap whose honest answer is a reason, not a control. */
+  action?: string;
+  onClick?: () => void;
 }
 
 /**
@@ -114,10 +115,15 @@ export function ZeroResults({
       n: count(cloudOnly),
       tone: "warn",
       title: "cloud-only files were not read",
+      // No button, and the reason instead. Hard rule 3: reading a placeholder
+      // is what makes the sync client fetch it, so a "Download" here would
+      // pull every one of them at once — from a screen the user opened
+      // because a search found nothing. StatusView says the same thing in the
+      // same words; this was the last place still offering the button and
+      // calling `unavailable("hydrate")`, which reads as "this will work
+      // later" rather than "this is refused".
       detail:
-        "Their metadata is indexed; their contents are not on this machine. Reading them downloads them.",
-      action: "Download",
-      onClick: () => unavailable("hydrate"),
+        "Their metadata is indexed and they are findable by name, date and folder; their contents are not on this machine. Marrow will not download them — reading a placeholder is what makes your sync client fetch it. Open one in Finder or its own app and it downloads; the next sweep indexes its contents.",
     });
   }
 
@@ -160,13 +166,18 @@ export function ZeroResults({
                   <span className={styles.gapTitle}>{g.title}</span>
                   <span className={styles.gapDetail}>{g.detail}</span>
                 </div>
-                <button
-                  type="button"
-                  className={styles.gapAction}
-                  onClick={g.onClick}
-                >
-                  {g.action}
-                </button>
+                {/* Only when there is one. A gap whose honest answer is a
+                    reason renders no control, rather than a button that
+                    explains it does nothing. */}
+                {g.action && g.onClick && (
+                  <button
+                    type="button"
+                    className={styles.gapAction}
+                    onClick={g.onClick}
+                  >
+                    {g.action}
+                  </button>
+                )}
               </div>
             ))}
           </section>

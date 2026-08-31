@@ -6,6 +6,13 @@
  * now. What is left marked is genuinely absent. A shortcut that exists but does
  * nothing is a bug; a shortcut that exists and says what is missing is a to-do
  * list.
+ *
+ * **The third case is the dangerous one, and this file had it: a binding
+ * relabelled to match what was built.** `⌘K` was listed as the quick-find
+ * overlay, which is honest about the key and silent about the gap — GUI §5.1
+ * asks for a command palette there, and nobody reading this list could tell it
+ * was missing. Marking it costs one row and is the only reason the absence is
+ * visible at all.
  */
 
 import { useEffect, useRef } from "react";
@@ -28,9 +35,38 @@ const GROUPS: ReadonlyArray<{ title: string; items: Binding[] }> = [
   {
     title: "Finding",
     items: [
-      { keys: "⌘K", label: "Command K", action: "Quick-find overlay" },
+      // `⌘K` was listed as "Quick-find overlay", which is what it does — but
+      // GUI §5.1 spells `⌘K / ⌘P` as a *command palette*, and relabelling the
+      // key was how the app came to look as though it had one. It has a
+      // five-result file lens. Both facts are on the list now: the lens says
+      // what it is, and the palette is marked absent beside it, the same way
+      // `⌥Space` has been since it was written.
+      { keys: "⌘K", label: "Command K", action: "Quick find — files, by name" },
+      {
+        keys: "⌘P",
+        label: "Command P",
+        action: "Command palette (GUI §5.1)",
+        missing: "not built — ⌘K is a file lens, not this",
+      },
       { keys: "⌘F", label: "Command F", action: "Focus the search field" },
-      { keys: "Esc", action: "Clear the query · close the overlay" },
+      {
+        keys: "Esc",
+        action: "Close the overlay · clear the query on Search",
+      },
+    ],
+  },
+  {
+    // The sections had no key at all, and Tab does not reach the switcher in
+    // the two views that still cycle panes, so these were the whole keyboard
+    // route to Models, Status and Settings — of which there was none.
+    title: "Sections",
+    items: [
+      {
+        keys: "⌘⌥1–6",
+        label: "Command Option one to six",
+        action: "Search · Ask · Files · Models · Status · Settings",
+      },
+      { keys: "⌘,", label: "Command comma", action: "Settings" },
     ],
   },
   {
@@ -58,7 +94,9 @@ const GROUPS: ReadonlyArray<{ title: string; items: Binding[] }> = [
       { keys: "↓ / ↑", action: "Move the selection" },
       { keys: "j / k", action: "Move the selection (when the list has focus)" },
       { keys: "⌘1–9", label: "Command one to nine", action: "Jump to result n" },
-      { keys: "Tab", action: "Cycle panes" },
+      // Named, because "Cycle panes" was true of one view and swallowed in
+      // five. Everywhere else Tab is the browser's ordinary tab order.
+      { keys: "Tab", action: "Cycle panes (Search and Files)" },
       { keys: "⌘\\", label: "Command backslash", action: "Toggle the sidebar" },
     ],
   },

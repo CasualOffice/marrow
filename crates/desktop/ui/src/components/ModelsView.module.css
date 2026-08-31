@@ -453,8 +453,13 @@
   color: var(--fg2);
 }
 
+/* `--fg4` is a non-text tone — tokens.css:172-180 says so and measures it:
+   3.47:1 light, 2.78:1 dark, against the 4.5:1 a `--fs-micro` glyph needs. This
+   separator is rendered text, not a rule, so it takes the faint *text* step.
+   Fixing the use rather than the token: `--fg4` is still correct for the rules
+   and disabled glyphs that are graphical objects at a 3:1 bar. */
 .licenceDot {
-  color: var(--fg4);
+  color: var(--fg3);
 }
 
 .actions {

@@ -7,6 +7,7 @@
       "Bash(git log:*)",
       "Bash(git diff:*)",
       "Bash(git show:*)",
+      "Bash(git push:*)",
 
       "Bash(cargo build:*)",
       "Bash(cargo check:*)",
@@ -42,7 +43,6 @@
 
     "deny": [
       "Bash(cargo clean:*)",
-      "Bash(git push:*)",
       "Bash(git reset --hard:*)",
       "Bash(rm -rf:*)",
 

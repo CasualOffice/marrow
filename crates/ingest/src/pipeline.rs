@@ -476,7 +476,9 @@ fn drain(inflight: &mut Vec<Pending<()>>, progress: &Progress, outcome: &mut Ing
 ///
 /// A path that has vanished is marked deleted. A path outside the root is
 /// dropped — a watcher can report one, and acting on it would index a file the
-/// workspace grant never authorised.
+/// workspace grant never authorised. A path the walk policy excludes is dropped
+/// too, for the reason spelled out at the check below: a hint is a prompt to
+/// look, never a reason to index something a sweep would prune.
 #[allow(clippy::too_many_arguments)]
 pub fn apply_hints(
     store: &Store,
@@ -551,6 +553,28 @@ pub fn apply_hints(
             }
         };
         if facts.is_dir {
+            continue;
+        }
+        /*
+         * The walk policy applies to a hint too.
+         *
+         * A hint used to be an exemption from it: the sweep prunes
+         * `node_modules`, `.git` and `target` by descending past them, and this
+         * loop never descends anything, so a file created in one of them was
+         * indexed the moment a watcher noticed it and pruned again by the next
+         * full sweep. Churn, and a ranking briefly poisoned by build output —
+         * `.git/config` outranking real documentation for "admission control".
+         *
+         * The verdict comes from `WalkPolicy` rather than from a second copy of
+         * the rules here, because a second copy is what produced the gap.
+         *
+         * Placed *after* the vanished-path branch on purpose. A row that an
+         * earlier build wrote under an excluded directory still has to be
+         * retirable when its file disappears; refusing to look at the path at
+         * all would strand it ACTIVE forever.
+         */
+        if policy.walk.excludes(root, path, facts.is_dir) {
+            debug!(path = %path.display(), "hint excluded by the walk policy; ignored");
             continue;
         }
         outcome.discovered += 1;

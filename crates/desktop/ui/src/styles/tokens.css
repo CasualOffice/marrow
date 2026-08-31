@@ -195,18 +195,51 @@
   --accent-text: #a49fff;
 }
 
-/* Warn used as TEXT.
+/* Status tones used as TEXT.
  *
- * `--warn` (#B7791F) is a plate-and-icon tone: 3.64:1 on the sheet and 2.94:1
- * on its own tint, so a warning *sentence* in it fails the moment it matters.
- * Darkened for light only — the dark `--warn` (#E0A83A) already clears 4.5:1
- * on every surface it lands on.
+ * `--ok`, `--warn`, `--danger`, `--info` and `--reason-semantic` are
+ * plate-and-icon tones, measured against the 3:1 a graphical object needs. The
+ * pills below set an 11px *word* in one of them on a 12–14% tint of the same
+ * tone, which is the hardest surface each one lands on, and there the 3:1 tone
+ * is 0.4–1.2 short of the 4.5:1 that text needs.
+ *
+ * The lift for dark was done once and recorded (see the `--ok: #4EC98A` block
+ * above); **the same pass was never re-run for light**, so every light pill was
+ * failing while every dark one passed. What follows is that pass. Darkening the
+ * text rather than lightening the tint, because the tint percentage is the
+ * reference's and the plate is what makes the pill legible as a pill.
+ *
+ * Measured on the composite, both plates the pills actually sit on
+ * (`--tint-*` over `--sheet` / over `--sunken`) — before → after:
+ *
+ *   --ok               #1D8A55  3.75 / 3.31   →  #187045  5.25 / 4.64
+ *   --info             #2F6FDB  4.06 / 3.59   →  #225DC2  5.26 / 4.65
+ *   --danger           #C0392B  4.55 / 4.02   →  #AF3427  5.25 / 4.64
+ *   --reason-semantic  #7C4DCC  4.69 / 4.14   →  #7443C9  5.24 / 4.63
+ *   --warn-text        #8A5A12  5.06 / 4.49   →  #875812  5.23 / 4.64
+ *
+ * `--warn-text` already existed and still missed on `--sunken` by 0.01, which
+ * is the whole argument for computing these rather than eyeballing them.
+ *
+ * Light only. The dark tones clear 4.5:1 on their own tints already — 6.74/6.20
+ * ok, 5.61/5.17 info, 5.22/4.82 danger, 5.19/4.79 semantic, 6.32/5.81 warn — so
+ * dark aliases straight back to the tone and there is one value to maintain.
  */
 :root {
-  --warn-text: #8a5a12;
+  --ok-text: #187045;
+  --warn-text: #875812;
+  --danger-text: #af3427;
+  --info-text: #225dc2;
+  /* `--reason-semantic` is defined under Marrow's vocabulary below; a custom
+     property resolves at use time, so the forward reference is fine. */
+  --reason-semantic-text: #7443c9;
 }
 [data-theme="dark"] {
+  --ok-text: var(--ok);
   --warn-text: var(--warn);
+  --danger-text: var(--danger);
+  --info-text: var(--info);
+  --reason-semantic-text: var(--reason-semantic);
 }
 
 /* The contrast-safe label on the accent.
@@ -247,7 +280,8 @@
  * (`exact`, `path`, `~approx`, `[self]`). Remove the colour and the row still
  * says what it is (A11Y-003). */
 :root {
-  /* why it matched */
+  /* why it matched. These are plate-and-dot tones like the status set: the
+     `semantic` pill sets its *word* in `--reason-semantic-text` above. */
   --reason-exact: var(--accent);
   --reason-semantic: #7c4dcc;
   --reason-path: var(--fg3);

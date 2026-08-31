@@ -12,13 +12,22 @@
  * they were found to fit.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import styles from "./AskView.module.css";
 import { cx } from "../lib/cx";
 import { age, bytes, duration } from "../lib/format";
 import { Answer } from "./Answer";
+import { ProvenanceBadge } from "./Badges";
+import { openInSystem, revealInFileManager } from "../actions";
 import { Icon } from "./Icon";
 import { Kbd } from "./Kbd";
 import {
@@ -283,6 +292,34 @@ export function AskView() {
     stickToBottom.current = false;
   }, []);
 
+  /**
+   * The keyboard scrolls too, and the first version of this fix forgot.
+   *
+   * `release` was bound to `wheel` and `touchmove` only, which covers a
+   * trackpad and a finger and nothing else. Page Up, the arrows, Home, End and
+   * space all move the scroller without emitting either, so the layout effect
+   * won the same race it used to win and yanked the reader back on the next
+   * token — for the input GUI §5.1 calls primary.
+   *
+   * Only fires for keys that actually scroll, and only from inside the
+   * scroller: the composer is not a descendant, so typing an arrow key in it
+   * never reaches here.
+   */
+  const onKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      const scrolls =
+        e.key === "PageUp" ||
+        e.key === "PageDown" ||
+        e.key === "Home" ||
+        e.key === "End" ||
+        e.key === "ArrowUp" ||
+        e.key === "ArrowDown" ||
+        e.key === " ";
+      if (scrolls) release();
+    },
+    [release],
+  );
+
   const onScroll = useCallback(() => {
     const el = scroller.current;
     if (!el) return;
@@ -473,6 +510,8 @@ export function AskView() {
       const turn = newTurn(q, mode);
       setTurns((all) => [...all, turn]);
       setQuestion("");
+      // Or it keeps the height of the question that has just gone.
+      if (field.current) grow(field.current);
       setRunning(true);
       stickToBottom.current = true;
 
@@ -638,6 +677,8 @@ export function AskView() {
     if (running || inFlight.current) {
       setQueued({ text: q, thorough, atEpoch: epoch, held: false });
       setQuestion("");
+      // Or it keeps the height of the question that has just gone.
+      if (field.current) grow(field.current);
       return;
     }
     void send(q, thorough);
@@ -692,6 +733,7 @@ export function AskView() {
         onScroll={onScroll}
         onWheel={release}
         onTouchMove={release}
+        onKeyDown={onKeyDown}
       >
         {opening ? (
           <Empty />
@@ -730,7 +772,10 @@ export function AskView() {
                 : "Ask about your files…"
           }
           rows={1}
-          onChange={(e) => setQuestion(e.target.value)}
+          onChange={(e) => {
+            setQuestion(e.target.value);
+            grow(e.currentTarget);
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
@@ -1146,6 +1191,40 @@ function Empty() {
   );
 }
 
+/**
+ * Size the composer to what has been typed, up to the CSS `max-height`.
+ *
+ * It was `rows={1}` with nothing resizing it, so a three-line question was
+ * typed into a one-line box that scrolled its own first line out of sight —
+ * and the only remedy was the drag handle, which nothing advertises. Done here
+ * rather than with `field-sizing: content`, which WebKit did not ship until
+ * recently and this app targets the WebView it is given.
+ *
+ * Reset to `auto` first: without it `scrollHeight` is measured against the
+ * height already set, so the field can grow and never shrink again.
+ */
+function grow(el: HTMLTextAreaElement): void {
+  el.style.height = "auto";
+  el.style.height = `${el.scrollHeight}px`;
+}
+
+/** Everything up to and including the last `/`, or empty for a bare filename. */
+function dirOf(rel: string): string {
+  const cut = rel.lastIndexOf("/");
+  return cut === -1 ? "" : rel.slice(0, cut + 1);
+}
+
+/** The filename. Never truncated — see the note at its call site. */
+function nameOf(rel: string): string {
+  const cut = rel.lastIndexOf("/");
+  return cut === -1 ? rel : rel.slice(cut + 1);
+}
+
+/** How many of these citations point at something less than an exact span. */
+function inexact(sources: readonly { provenance: string }[]): number {
+  return sources.filter((s) => s.provenance !== "exact").length;
+}
+
 function TurnBlock({
   turn,
   onRetry,
@@ -1230,13 +1309,56 @@ function TurnBlock({
                 across {turn.projects.length} projects: {turn.projects.join(", ")}
               </span>
             )}
+            {/* Same rule as the two above: it changes how the answer should be
+                read, so it must be answerable without opening anything. A
+                count of inexact sources is the difference between "quoted"
+                and "recovered from a scan". */}
+            {inexact(turn.sources) > 0 && (
+              <span className={styles.sourcesInexact}>
+                {inexact(turn.sources)} not exact
+              </span>
+            )}
           </summary>
           <ol className={styles.sourceList}>
             {turn.sources.map((s) => (
               <li key={s.id} id={`cite-${turn.id}-${s.id}`} className={styles.source}>
                 <span className={styles.sourceId}>{s.id}</span>
                 <div className={styles.sourceBody}>
-                  <span className={styles.sourcePath}>{s.location}</span>
+                  {/* **The citation opens the file.** This was a `<span>`.
+                      `path` and `line` crossed the IPC boundary on every
+                      source and were dropped on the floor, and `openPath` —
+                      which works, and which the Files and Search views both
+                      call — was never called from the one screen the promise
+                      was written for. Getting from a sentence to its source
+                      meant reading a path off the screen, leaving for Search
+                      and typing it again. GUI §11 asks for one action. */}
+                  <button
+                    type="button"
+                    className={styles.sourceOpen}
+                    onClick={(e) =>
+                      void (e.shiftKey
+                        ? revealInFileManager(s.path, s.relativePath)
+                        : openInSystem(s.path, s.relativePath))
+                    }
+                    title={`${s.relativePath}${s.line === null ? "" : `:${s.line}`}\nClick to open · Shift-click to reveal in Finder`}
+                  >
+                    {/* Split so the **end** survives. `location` is
+                        `path:line` in one string under `text-overflow:
+                        ellipsis`, so on any real path the ellipsis ate the
+                        `:line` — the part that makes it a citation rather
+                        than a filename. The directory truncates; the file and
+                        its line never do. */}
+                    <span className={styles.sourceDir}>{dirOf(s.relativePath)}</span>
+                    <span className={styles.sourceName}>
+                      {nameOf(s.relativePath)}
+                      {s.line !== null && <span className={styles.sourceLine}>:{s.line}</span>}
+                    </span>
+                  </button>
+                  {/* Computed in Rust for every citation and rendered nowhere,
+                      so an answer built from degraded OCR looked exactly like
+                      one built from exact PDF spans. Renders nothing when the
+                      provenance is `exact`, which is most of the time. */}
+                  <ProvenanceBadge provenance={s.provenance} />
                   <span className={styles.sourceExcerpt}>{s.excerpt}</span>
                 </div>
               </li>

@@ -300,19 +300,33 @@
 }
 
 /* The one action on this page that changes anything, so it looks like one.
-   Everything else here reports. */
+   Everything else here reports.
+
+   This shipped with a radius of `--r-md` on a background of `--raised`, and
+   neither token exists anywhere in `styles/`. An undefined custom property
+   computes to nothing rather than failing, so the button rendered with no plate
+   and square corners in an app where every control is `--r-ctrl` — invisible
+   instead of loud. It is the secondary button (`Welcome.module.css .secondary`)
+   and is now built from the same three declarations: `--sunken`, `--r-ctrl` and
+   the hairline as a shadow, because tokens.css:26 says no surface in this app
+   draws a CSS border of its own.
+
+   `120ms` was written out too, which made this the one thing in the app that
+   still animated under `prefers-reduced-motion` — that media query zeroes the
+   two motion tokens and nothing else (scale.css:105-107). */
 .add {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-4);
-  border-radius: var(--r-md);
-  border: 1px solid var(--line);
-  background: var(--raised);
+  border: 0;
+  border-radius: var(--r-ctrl);
+  box-shadow: var(--hairline);
+  background: var(--sunken);
   color: var(--fg);
   font-size: var(--fs-row);
   cursor: pointer;
-  transition: background 120ms var(--ease);
+  transition: background var(--motion-rerank) var(--ease);
 }
 
 .add:hover:not(:disabled) {

@@ -151,5 +151,42 @@ for name in $INVARIANTS; do
 done
 [ "$missing" -eq 0 ] || exit 1
 
+# Every `var(--x)` in the UI resolves to something.
+#
+# An undefined custom property is not an error anywhere in the stack: CSS drops
+# the declaration at computed-value time, the bundler never looks inside a
+# `var()`, and TypeScript cannot see a stylesheet. The control simply renders
+# without the thing, which is why this class of bug is found by eye months
+# later. `--raised` and `--r-md` on the Status page's Add-workspace button left
+# it with no plate and square corners in an app where every control is
+# `--r-ctrl`, and it was the third instance in a month (UI_AUDIT §4).
+echo "→ every css var resolves"
+UI=crates/desktop/ui/src
+# Set from TSX with an inline `style`, so no stylesheet will ever define them.
+# One entry per property, naming who sets it — anything not on this list and not
+# in a stylesheet is a typo or a phantom token:
+#   --result-row-h  ResultList.tsx:98      (virtualiser row height)
+#   --artifact-w    ArtifactPanel.tsx:800  (drag-resized panel width)
+#   --zoom          ArtifactPanel.tsx:554  (artifact zoom factor)
+INLINE='--result-row-h|--artifact-w|--zoom'
+defined=$(grep -rho '^[[:space:]]*--[A-Za-z0-9_-]*[[:space:]]*:' "$UI" --include='*.css' \
+          | tr -d ' \t:' | sort -u)
+used=$(grep -rho 'var([[:space:]]*--[A-Za-z0-9_-]*' "$UI" --include='*.css' \
+       | sed 's/.*--/--/' | sort -u)
+undefined=
+for name in $used; do
+    if echo "$defined" | grep -qx -- "$name"; then continue; fi
+    if echo "$name" | grep -qxE -- "$INLINE"; then continue; fi
+    undefined="$undefined $name"
+done
+if [ -n "$undefined" ]; then
+    echo "  used in a stylesheet, defined nowhere in $UI and not set inline:" >&2
+    for name in $undefined; do
+        grep -rn "var([[:space:]]*$name[[:space:]]*[,)]" "$UI" --include='*.css' >&2
+    done
+    exit 1
+fi
+echo "  ok"
+
 echo
 echo "all green"

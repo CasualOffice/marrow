@@ -128,7 +128,7 @@
 
 .stepDone .marker {
   background: var(--tint-ok);
-  color: var(--ok);
+  color: var(--ok-text);
 }
 
 .stepBody {
@@ -169,7 +169,7 @@
 }
 
 .stepDone .stepState {
-  color: var(--ok);
+  color: var(--ok-text);
 }
 
 .lede {
@@ -250,7 +250,7 @@
   gap: var(--sp-4);
   margin: 0;
   font-size: var(--fs-body);
-  color: var(--ok);
+  color: var(--ok-text);
 }
 
 .blocked {

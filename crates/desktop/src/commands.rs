@@ -88,14 +88,33 @@ pub struct SearchResponse {
     pub branches: Vec<String>,
 }
 
+/// The Search field, with the semantic branch when there is one.
+///
+/// **This is the line that made the Models page honest.** `Core::search_semantic`
+/// and the fusion behind it were built and tested, and this command still
+/// called `Core::search`, which passes `None` — so the Search view had never
+/// run the semantic branch while the Models page said "searches match on
+/// meaning as well as words". The embedder lives on `Hub` and this command only
+/// took `Core`, which is the whole reason the two halves never met.
+///
+/// `embed_query` returns `Option` and never errors, so a machine with no
+/// embedder, no vectors, or a query that will not embed falls back to lexical
+/// with a log line rather than a failure. Hard rule 10: search works with no
+/// model, no GPU and no network, and the semantic branch stays additive.
 #[tauri::command]
 pub async fn search(
     core: State<'_, Arc<Core>>,
+    hub: State<'_, Arc<crate::models::Hub>>,
     query: String,
     limit: usize,
 ) -> Res<SearchResponse> {
     let core = Arc::clone(&core);
-    blocking(move || core.search(&query, limit)).await
+    let hub = Arc::clone(&hub);
+    blocking(move || {
+        let embedding = hub.embed_query(&query);
+        core.search_semantic(&query, limit, embedding.as_ref())
+    })
+    .await
 }
 
 #[derive(Debug, Serialize)]
