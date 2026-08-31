@@ -43,7 +43,7 @@ import type {
  * from somewhere. Kept equal to `tauri.conf.json`'s `version` by hand, which is
  * the same hand-mirroring rule the rest of this file already lives under.
  */
-export const APP_VERSION = "0.1.0";
+export const APP_VERSION = "0.0.1";
 
 /**
  * What the user is called, in dev.

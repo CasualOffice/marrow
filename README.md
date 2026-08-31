@@ -2,7 +2,9 @@
 
 A local knowledge runtime. It indexes folders you point it at, understands their structure, answers questions with citations to the **exact page, cell or line**, and exposes all of it over MCP so the agent you already use — Claude Code, Codex, Cursor — can search everything you own.
 
-**Status:** `v0.0.0` — first public tag. M0–M2 done; **M3 nearly done** (tables now read from CSV, Markdown, HTML, XLSX and DOCX; PDF *ruled* tables and `table compute` are not built). The model runtime ([Part 8](docs/Part_8_Model_Runtime.md)) answers questions locally, and cloud providers landed so a machine without a GPU still works. M4 semantic is **partial** — vectors reach the desktop's Ask and `marrow search --semantic`, not yet the desktop's Search view or the MCP `search` tool. [TRACKER.md](TRACKER.md) is the real state; [BUGS.md](BUGS.md) is what is currently wrong.
+**Status:** `v0.0.1`. M0–M2 done; **M3 nearly done** (tables now read from CSV, Markdown, HTML, XLSX and DOCX; PDF *ruled* tables and `table compute` are not built). The model runtime ([Part 8](docs/Part_8_Model_Runtime.md)) answers questions locally, and cloud providers landed so a machine without a GPU still works. M4 semantic reaches the desktop's Ask **and its Search view** and `marrow search --semantic`; the MCP `search` tool is still lexical-only.
+
+**v0.0.0 was broken and should not be used.** The MLX worker script was never put in the bundle and the app declared no macOS folder-usage strings, so the released build could neither load a model nor read a granted folder. Both are fixed in `v0.0.1`. [TRACKER.md](TRACKER.md) is the real state; [BUGS.md](BUGS.md) is what is currently wrong.
 **Platform:** macOS on Apple Silicon. Windows and Linux **do not work yet** — see [Platforms](#platforms), which says exactly why and what a port needs.
 **Scope:** Personal project, built in the open. One author. Not a product, no SLA.
 **Licence:** Apache-2.0
