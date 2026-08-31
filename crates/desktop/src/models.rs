@@ -1669,11 +1669,41 @@ struct Loaded {
 /// Shipped next to the executable rather than embedded, so a broken worker can
 /// be read and fixed without a rebuild — this is a personal tool, and that
 /// trade is the right way round.
+///
+/// **Three places, because a `.app` is not a directory of loose files.** This
+/// used to check next to the executable and then fall back to a path baked in
+/// at compile time by `CARGO_MANIFEST_DIR`. In a bundle neither is right: Tauri
+/// puts resources in `Contents/Resources` while the binary sits in
+/// `Contents/MacOS`, so the first check missed and the fallback resolved to the
+/// *build machine's* source tree — on a release build, a directory on a GitHub
+/// runner that has never existed on any user's disk.
+///
+/// The consequence was total and silent. `Runtime::discover` only checked for a
+/// Python interpreter, so it reported a healthy runtime, the worker was started
+/// with a script that was not there, and it died immediately — surfacing as
+/// "the model runtime stopped", which describes a process that never began. No
+/// released build could answer a question on any machine.
+///
+/// The compile-time fallback is kept for `cargo run` from a checkout and only
+/// there: shipping a binary that reaches for an absolute path on the machine
+/// that built it is how this happened in the first place.
 fn worker_script() -> PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("mlx_worker.py")))
-        .filter(|p| p.is_file())
+    let exe = std::env::current_exe().ok();
+    let beside = exe
+        .as_ref()
+        .and_then(|p| p.parent())
+        .map(|d| d.join("mlx_worker.py"));
+    // `Contents/MacOS/marrow-desktop` -> `Contents/Resources/mlx_worker.py`.
+    let bundled = exe
+        .as_ref()
+        .and_then(|p| p.parent())
+        .and_then(|d| d.parent())
+        .map(|c| c.join("Resources").join("mlx_worker.py"));
+
+    beside
+        .into_iter()
+        .chain(bundled)
+        .find(|p| p.is_file())
         .unwrap_or_else(|| {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../model/worker/mlx_worker.py")
         })

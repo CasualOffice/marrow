@@ -124,7 +124,26 @@ impl Runtime {
     /// proves it by talking to it.
     pub fn discover(data_dir: &Path, script: PathBuf) -> Option<Self> {
         let candidate = data_dir.join("runtime/mlx/bin/python");
-        candidate.is_file().then_some(Self {
+        if !candidate.is_file() {
+            return None;
+        }
+        // **The script too, not just the interpreter.** Checking only for
+        // Python let discovery report a healthy runtime while the worker was
+        // being handed a script that was not on disk. It started, died at once,
+        // and the window said "the model runtime stopped" — a sentence about a
+        // process that never ran, offering no way to find out why.
+        //
+        // Loud, because at this point it is a packaging fault rather than
+        // anything the user did or can fix: the script ships in the bundle, so
+        // its absence means the bundle is wrong.
+        if !script.is_file() {
+            tracing::error!(
+                script = %script.display(),
+                "the MLX worker script is missing, so no model can be loaded"
+            );
+            return None;
+        }
+        Some(Self {
             python: candidate,
             script,
         })
@@ -997,6 +1016,32 @@ sleep 5"#
     fn discovery_finds_nothing_when_there_is_nothing() {
         let t = tempfile::tempdir().unwrap();
         assert!(Runtime::discover(t.path(), "x.py".into()).is_none());
+    }
+
+    #[test]
+    fn an_interpreter_without_its_script_is_not_a_runtime() {
+        // How the first release shipped. The worker script was not in the
+        // bundle at all, so the path resolved to the build machine's source
+        // tree; discovery checked only for Python, called the runtime healthy,
+        // and the worker died the moment it was started. The window reported
+        // "the model runtime stopped" — about a process that never ran — and
+        // no released build could answer a question on any machine.
+        let t = tempfile::tempdir().unwrap();
+        let python = t.path().join("runtime/mlx/bin/python");
+        std::fs::create_dir_all(python.parent().unwrap()).unwrap();
+        std::fs::write(&python, "#!/bin/sh\n").unwrap();
+
+        assert!(
+            Runtime::discover(t.path(), t.path().join("absent.py")).is_none(),
+            "a runtime was reported with no script to run"
+        );
+
+        let script = t.path().join("mlx_worker.py");
+        std::fs::write(&script, "print()").unwrap();
+        assert!(
+            Runtime::discover(t.path(), script).is_some(),
+            "both halves present and it still found nothing"
+        );
     }
 }
 

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Merged into the generated Info.plist by Tauri at bundle time.
+
+  **Without these keys macOS does not ask, it refuses.** Downloads, Documents
+  and Desktop are TCC-protected, and an app that has not declared why it wants
+  one of them is denied every read inside it — with no prompt, no error the app
+  can distinguish from an empty folder, and nothing in the window to explain it.
+  The first release granted a folder, swept it, and indexed nothing.
+
+  The strings are what the user reads in the permission dialog, so they say what
+  Marrow does with the folder rather than that it needs access. Each one is the
+  promise the rest of the program has to keep: read to index, never upload.
+-->
+<plist version="1.0">
+  <dict>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Marrow indexes the folders you grant it so you can search them and ask questions with citations. Files are read on this Mac and are not uploaded.</string>
+
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>Marrow indexes the folders you grant it so you can search them and ask questions with citations. Files are read on this Mac and are not uploaded.</string>
+
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Marrow indexes the folders you grant it so you can search them and ask questions with citations. Files are read on this Mac and are not uploaded.</string>
+
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>Marrow indexes the folders you grant it, including ones on an external disk. Files are read on this Mac and are not uploaded.</string>
+
+    <key>NSNetworkVolumesUsageDescription</key>
+    <string>Marrow indexes the folders you grant it, including ones on a network share. Files are read on this Mac and are not uploaded.</string>
+  </dict>
+</plist>

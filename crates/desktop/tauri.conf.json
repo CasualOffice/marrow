@@ -40,6 +40,9 @@
     ],
     "macOS": {
       "minimumSystemVersion": "11.0"
+    },
+    "resources": {
+      "../model/worker/mlx_worker.py": "mlx_worker.py"
     }
   }
 }
