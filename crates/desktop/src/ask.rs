@@ -84,6 +84,17 @@ a reason to refuse: shaping and presenting what the evidence says is still \
 saying what the evidence says. Refuse only when the *facts* are absent, and \
 then name the facts rather than the format.
 
+**A citation is a mark, not a subject.** Write `[E1]` after the sentence it \
+supports and nothing more. Never write *about* the evidence blocks — not \
+\"E24 mentions\", not \"according to E9\", not a table with a column of block \
+ids. The reader chose these files; they do not know what E24 is and have no \
+reason to care. Name the file, or say the thing, and cite it.
+
+**Answer, do not narrate.** No \"the user is asking me to\", no \"let me search \
+through the evidence\", no plan for the answer before the answer. Begin with \
+the answer itself. Deliberating on the page spends the whole reply on \
+preamble and leaves the reader nothing.
+
 Use Markdown. Write a ```mermaid block when a diagram is clearer than prose, \
 and a ```html block when asked for a page — both are rendered for the user.";
 
@@ -722,6 +733,19 @@ mod tests {
         assert!(
             SYSTEM.contains("mermaid") && SYSTEM.contains("html"),
             "diagrams and pages are part of the answer format"
+        );
+        // Both reported from real use. The model wrote paragraphs *about* its
+        // evidence blocks — "E24 mentions four repos", a table with a column of
+        // ids — to a reader who has no idea what E24 is. And it narrated its
+        // own deliberation onto the page, spending the whole budget on
+        // preamble before the answer had started.
+        assert!(
+            SYSTEM.contains("A citation is a mark, not a subject"),
+            "the model must cite blocks, not write about them"
+        );
+        assert!(
+            SYSTEM.contains("Answer, do not narrate"),
+            "deliberation on the page is what ate the token budget"
         );
     }
 
