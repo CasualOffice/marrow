@@ -26,6 +26,7 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type WheelEvent,
 } from "react";
 
 import styles from "./ArtifactPanel.module.css";
@@ -188,9 +189,17 @@ function useTheme(): string {
 
 let diagramSeq = 0;
 
+/** How far a diagram may be shrunk or enlarged, and by how much per step. */
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 6;
+const ZOOM_STEP = 1.25;
+
+const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
+
 function Diagram({ source }: { source: string }) {
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(1);
   const id = useMemo(() => `mmd-${(diagramSeq += 1)}`, []);
   const theme = useTheme();
 
@@ -228,6 +237,27 @@ function Diagram({ source }: { source: string }) {
     };
   }, [id, source, theme]);
 
+  /**
+   * **A diagram that cannot be enlarged is a picture of a diagram.**
+   *
+   * The SVG was pinned at `max-width: 100%`, so a dense graph was squeezed to
+   * the panel's width and the labels became unreadable — and because nothing
+   * ever exceeded the container, the surrounding `overflow: auto` had nothing
+   * to scroll either. Width, not `transform: scale`, precisely so that zooming
+   * changes the laid-out size and the scroller can then pan over it.
+   */
+  const nudge = useCallback((dir: number) => {
+    setZoom((z) => clampZoom(z * (dir > 0 ? ZOOM_STEP : 1 / ZOOM_STEP)));
+  }, []);
+
+  const onWheel = useCallback((e: WheelEvent<HTMLDivElement>) => {
+    // Only with a modifier. A plain wheel over a diagram is someone scrolling
+    // the panel past it, and stealing that would be its own bug.
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    setZoom((z) => clampZoom(z * Math.exp(-e.deltaY / 400)));
+  }, []);
+
   if (error) {
     return (
       <figure className={styles.diagramFailed}>
@@ -243,7 +273,22 @@ function Diagram({ source }: { source: string }) {
   // The SVG came from Mermaid in `strict` mode, which strips script and event
   // handlers; it never contains the model's raw text as markup.
   return (
-    <div className={styles.diagram} dangerouslySetInnerHTML={{ __html: svg }} />
+    <>
+      <div
+        className={styles.diagram}
+        style={{ "--zoom": zoom } as CSSProperties}
+        onWheel={onWheel}
+        dangerouslySetInnerHTML={{ __html: svg }}
+      />
+      <div className={styles.zoom} role="group" aria-label="Diagram zoom">
+        <button type="button" onClick={() => nudge(-1)} disabled={zoom <= MIN_ZOOM}
+                title="Zoom out" aria-label="Zoom out">−</button>
+        <button type="button" className={styles.zoomLevel} onClick={() => setZoom(1)}
+                title="Reset to fit">{Math.round(zoom * 100)}%</button>
+        <button type="button" onClick={() => nudge(1)} disabled={zoom >= MAX_ZOOM}
+                title="Zoom in" aria-label="Zoom in">+</button>
+      </div>
+    </>
   );
 }
 

@@ -232,6 +232,9 @@
   min-height: 0;
   padding: var(--sp-8);
   overflow: auto;
+  /* So the zoom control can stick to the bottom of the column. */
+  display: flex;
+  flex-direction: column;
 }
 
 .diagram {
@@ -240,8 +243,54 @@
 }
 
 .diagram svg {
-  max-width: 100%;
+  /* Width rather than a transform, so zooming changes the laid-out size and
+     `.diagramScroll` has something to pan over. `max-width` alone pinned every
+     diagram to the panel and left the scroller nothing to do. */
+  width: calc(100% * var(--zoom, 1));
+  max-width: none;
   height: auto;
+}
+
+/* Sits over the diagram rather than in the flow, so it does not move when the
+   drawing resizes underneath it. */
+.zoom {
+  position: sticky;
+  bottom: var(--sp-3);
+  align-self: flex-end;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-surf);
+  background: var(--surface);
+  box-shadow: var(--shadow-1, 0 1px 3px rgb(0 0 0 / 12%));
+}
+
+.zoom button {
+  min-width: 26px;
+  height: 24px;
+  border: 0;
+  border-radius: calc(var(--r-surf) - 2px);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.zoom button:hover:not(:disabled) {
+  background: var(--tint-hover, rgb(127 127 127 / 12%));
+  color: var(--ink-1);
+}
+
+.zoom button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.zoomLevel {
+  min-width: 46px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* A diagram that will not draw shows its source rather than vanishing. */
