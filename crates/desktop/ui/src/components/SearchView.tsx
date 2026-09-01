@@ -47,10 +47,12 @@ import styles from "./SearchView.module.css";
 import { count, ms } from "../lib/format";
 import { SearchField } from "./SearchField";
 import { ResultList } from "./ResultList";
+import { ResultSkeleton } from "./ResultSkeleton";
 import { DetailPane } from "./DetailPane";
 import { ZeroResults } from "./ZeroResults";
 import { ErrorNotice } from "./ErrorNotice";
 import { useUi, type Anchor } from "../store";
+import { useDelayed } from "../lib/useDelayed";
 import type { SearchHit, SearchResponse, UiError } from "../api";
 
 export interface SearchViewProps {
@@ -92,6 +94,25 @@ export function SearchView(props: SearchViewProps) {
   const focusPane = useUi((s) => s.focusPane);
   const hits = response?.hits ?? [];
 
+  /*
+   * **A skeleton only when there is nothing to keep.**
+   *
+   * `useSearch` holds the previous ranking on screen while a newer query is in
+   * flight, and a list of real results is a better thing to look at than a
+   * drawing of one — replacing it with bars would throw away information to
+   * show that work is happening. So this is the first search of a session, or
+   * the first after the field was cleared: the cases where the alternative is
+   * an empty pane.
+   *
+   * SKEL-002 delays it past the point where a fast search would make it flash.
+   * That threshold was written when a search here took single-digit
+   * milliseconds; on this corpus one took 3.4 seconds, so the delay now earns
+   * its place at both ends — it stays out of the way of the fast path and
+   * actually appears on the slow one.
+   */
+  const waiting = query.trim() !== "" && response === undefined && error === null;
+  const showSkeleton = useDelayed(waiting, 120);
+
   // A query that has been asked and answered with nothing. A query still in
   // flight keeps the previous ranking on screen instead (queries.ts).
   const answered = response !== undefined && response.query === query.trim();
@@ -108,7 +129,19 @@ export function SearchView(props: SearchViewProps) {
    * The pane's own null-anchor branch covers that single frame and draws
    * nothing, which is why no `idle` is passed to it from here.
    */
-  const split = !zero && hits.length > 0;
+  /*
+   * **The skeleton opens the split too, or arriving results move the pane.**
+   *
+   * `wide` is `!split`, so a skeleton drawn while `split` was false rendered
+   * across the whole sheet and then jumped into a 380px column the moment the
+   * ranking landed. A placeholder whose entire purpose is that the layout does
+   * not move (SKEL-004) cannot be the thing that moves it.
+   *
+   * The detail pane's own null-anchor branch draws nothing, so the right side
+   * is empty until a hit is selected — which is what it looks like for a real
+   * ranking before the anchoring effect runs, one frame later.
+   */
+  const split = (!zero && hits.length > 0) || showSkeleton;
 
   // One full-width surface for both empty states. They are different states —
   // "not yet asked" and "asked, nothing there" — but they are the same shape,
@@ -196,6 +229,8 @@ export function SearchView(props: SearchViewProps) {
             error={error}
             onTry={onQueryChange}
           />
+        ) : showSkeleton ? (
+          <ResultSkeleton label={`Searching for ${query.trim()}`} />
         ) : split ? (
           <ResultList
             hits={hits}

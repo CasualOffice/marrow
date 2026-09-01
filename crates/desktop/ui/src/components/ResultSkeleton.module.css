@@ -1,0 +1,108 @@
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/*
+ * The same height and padding as `ResultRow`, deliberately duplicated from its
+ * module rather than shared: these two must agree, and the day they stop
+ * agreeing is the day the list jumps when results arrive. The token is the
+ * shared part; the row is small enough that abstracting it would hide the
+ * thing that matters.
+ */
+.row {
+  height: var(--result-row-h);
+  padding: var(--sp-4) var(--sp-6) var(--sp-4) var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  justify-content: center;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+}
+
+.bar {
+  height: 9px;
+  border-radius: var(--r-ctrl);
+  background: var(--sunken);
+}
+
+.excerpt {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  /* The excerpt block is inset and tinted in a real row; matching that here is
+     what makes the shape read as a result rather than as stacked bars. */
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-ctrl);
+  background: color-mix(in srgb, var(--sunken) 45%, transparent);
+}
+
+.crumb {
+  height: 8px;
+  border-radius: var(--r-ctrl);
+  background: var(--sunken);
+  opacity: 0.7;
+}
+
+.meta {
+  height: 9px;
+  width: 34px;
+  margin-left: auto;
+  border-radius: var(--r-ctrl);
+  background: var(--sunken);
+  flex: none;
+}
+
+/*
+ * SKEL-007: the shimmer goes, the skeleton stays. Someone who has asked for
+ * less motion still needs to know something is coming — removing the shape
+ * along with the animation would answer a request about motion by taking away
+ * information.
+ *
+ * A travelling highlight rather than a whole-row pulse: the eye reads the
+ * sweep as "working" and a blink as "broken", and the row's own opacity never
+ * changes, so nothing appears to flicker.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .bar,
+  .crumb,
+  .meta {
+    background: linear-gradient(
+      90deg,
+      var(--sunken) 0%,
+      var(--hover) 40%,
+      var(--sunken) 80%
+    );
+    background-size: 300% 100%;
+    animation: sweep 1.6s var(--ease) infinite;
+  }
+
+  /* Staggered so the list reads as one surface waking up rather than eight
+     things blinking together. */
+  .row:nth-child(2) .bar, .row:nth-child(2) .meta { animation-delay: 0.08s; }
+  .row:nth-child(3) .bar, .row:nth-child(3) .meta { animation-delay: 0.16s; }
+  .row:nth-child(4) .bar, .row:nth-child(4) .meta { animation-delay: 0.24s; }
+  .row:nth-child(5) .bar, .row:nth-child(5) .meta { animation-delay: 0.32s; }
+  .row:nth-child(6) .bar, .row:nth-child(6) .meta { animation-delay: 0.40s; }
+  .row:nth-child(7) .bar, .row:nth-child(7) .meta { animation-delay: 0.48s; }
+  .row:nth-child(8) .bar, .row:nth-child(8) .meta { animation-delay: 0.56s; }
+}
+
+@keyframes sweep {
+  from { background-position: 150% 0; }
+  to   { background-position: -150% 0; }
+}
+
+/*
+ * Fading down the tail rather than cutting it: a hard edge at the fold reads as
+ * "the list ends here", which is the one thing this must not say.
+ */
+.row:nth-child(n + 6) { opacity: 0.66; }
+.row:nth-child(n + 8) { opacity: 0.4; }
