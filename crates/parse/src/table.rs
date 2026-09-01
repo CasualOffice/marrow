@@ -166,6 +166,9 @@ pub struct TableCell {
     pub raw_text: String,
     pub value: CellValue,
     pub value_type: ColumnType,
+    /// **TBL-006.** `"$"`, `"%"` and so on, when the cell's own text says so.
+    /// `None` when it does not — never inferred from a heading.
+    pub unit: Option<&'static str>,
     pub span: SourceSpan,
     /// TBL-013. 1.0 for anything read from bytes; below that only where reading
     /// the text was itself a guess (OCR).
@@ -439,6 +442,7 @@ fn build(artifact: &ParsedArtifact, table_idx: usize) -> TableIr {
                     col: n.attrs.col.unwrap_or(0),
                     rowspan: n.attrs.rowspan.unwrap_or(1).max(1),
                     colspan: n.attrs.colspan.unwrap_or(1).max(1),
+                    unit: unit_of(&raw, value_type),
                     raw_text: raw,
                     value,
                     value_type,
@@ -791,6 +795,39 @@ const CURRENCY: [char; 6] = ['$', '€', '£', '¥', '₹', '₽'];
 /// `12/03/2024` is deliberately **not** a date here: it is the third of December
 /// to half the world and the twelfth of March to the other half, and a citation
 /// that silently picks one is worse than a citation that says "text".
+/// **TBL-006.** The unit a cell is written in, when the text says so.
+///
+/// `$` and `€` are not decoration. [`classify`] already finds both and then
+/// throws the symbol away, collapsing them to [`ColumnType::Currency`] — so a
+/// range of dollars and euros added to a single confident number, which is the
+/// same silent coercion `marrow table sum` refuses one level up, one level
+/// finer. Recording which symbol is what lets it refuse this one too.
+///
+/// Only what the cell itself states. A column headed "Revenue (USD)" whose
+/// cells are bare numbers is the other half of TBL-006 and is not this: a unit
+/// inferred from a heading is a guess about every row beneath it, and a wrong
+/// guess here silently changes an answer rather than refusing one.
+pub fn unit_of(raw: &str, ty: ColumnType) -> Option<&'static str> {
+    let t = raw.trim();
+    match ty {
+        // The stored value is the ratio (`0.45`), so the unit is what says the
+        // display was a percentage — and percent-of-what is not knowable here.
+        ColumnType::Percent => Some("%"),
+        ColumnType::Currency => CURRENCY.iter().find_map(|c| {
+            let sym = t.starts_with(*c) || t.ends_with(*c);
+            sym.then_some(match c {
+                '$' => "$",
+                '€' => "€",
+                '£' => "£",
+                '¥' => "¥",
+                '₹' => "₹",
+                _ => "₽",
+            })
+        }),
+        _ => None,
+    }
+}
+
 fn classify(raw: &str) -> (ColumnType, CellValue) {
     let t = raw.trim();
     if t.is_empty() {

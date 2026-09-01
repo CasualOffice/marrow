@@ -162,6 +162,11 @@ fn tables_for(
                         raw_text: c.raw_text.clone(),
                         typed_value: c.typed_value(),
                         value_type: Some(c.value_type.as_str().to_string()),
+                        // TBL-006. The column has existed since migration 6 and
+                        // was unwritten; the classifier already found `$` and
+                        // `%` and then discarded which, so a range of dollars
+                        // and euros summed to one confident number.
+                        unit: c.unit.map(str::to_owned),
                         // TBL-007. The column has existed since migration 6 and
                         // was unwritten because nothing produced a formula;
                         // XLSX now does.

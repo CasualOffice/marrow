@@ -253,7 +253,17 @@ recorded only in the Log (`a8362be`, `c2141d1`, `cd9b50f`, `e883546`) and in
 - [ ] PDF ruled tables from line objects
 - [x] Header detection with confidence — four weighted signals; width is a gate, not a signal, which is what skips a title row
 - [x] Column type inference; raw text always retained
-- [ ] Unit extraction from headers/formats/captions
+- [~] Unit extraction from headers/formats/captions — **the cell's own text is
+      done** (TBL-006): `$`, `€`, `£`, `¥`, `₹`, `₽` and `%` are recorded in
+      `table_cells.unit`, a column that had existed unwritten since migration 6.
+      The classifier already recognised all six symbols and then discarded
+      *which*, so `$100 + €100` summed to one confident number. Headers and
+      captions are the other half and are deliberately not done: a unit read
+      from a column heading is a guess about every row beneath it, and a wrong
+      guess silently changes an answer instead of refusing one. XLSX cannot
+      contribute here at all — calamine resolves the format code to `Other`, so
+      `0.00%` and `$#,##0` are indistinguishable from a decimal (noted in
+      `xlsx.rs`); the units seen in practice come from Markdown and DOCX
 - [ ] `table compute`: sum / filter / group / lookup, citing cells
 - [x] Unit-mismatch blocks the operation (never coerce silently) — a range
       spanning currency and percent is refused, naming a cell of each kind.

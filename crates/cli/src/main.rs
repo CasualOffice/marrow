@@ -884,11 +884,16 @@ fn table(
         out,
         "{}",
         style.dim(&format!(
-            "{} over {} cell{} in {}!{}",
+            "{} over {} cell{} in {}{}",
             computed.op.as_str(),
             computed.contributing,
             if computed.contributing == 1 { "" } else { "s" },
-            computed.sheet,
+            // A Markdown table has no sheet, and a bare `!` reads as a typo.
+            if computed.sheet.is_empty() {
+                String::new()
+            } else {
+                format!("{}!", computed.sheet)
+            },
             computed.range,
         ))
     )?;

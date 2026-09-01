@@ -173,7 +173,7 @@ pub fn compute(
         .unwrap_or_default();
 
     let mut values: Vec<f64> = Vec::new();
-    let mut kinds: Vec<(Kind, String)> = Vec::new();
+    let mut kinds: Vec<(Kind, Option<String>, String)> = Vec::new();
     let mut skipped: Vec<Skipped> = Vec::new();
     for cell in cells_for(conn, &chosen.table_id)? {
         let (r, c) = (cell.row_idx as u32, cell.col_idx as u32);
@@ -182,14 +182,11 @@ pub fn compute(
         }
         match numeric(&cell) {
             Some((v, kind)) => {
-                kinds.push((
-                    kind,
-                    format!("{sheet_name}!{}", marrow_core::a1::cell_ref(r, c)),
-                ));
+                kinds.push((kind, cell.unit.clone(), at(&sheet_name, r, c)));
                 values.push(v)
             }
             None => skipped.push(Skipped {
-                reference: format!("{sheet_name}!{}", marrow_core::a1::cell_ref(r, c)),
+                reference: at(&sheet_name, r, c),
                 raw_text: cell.raw_text.clone(),
                 reason: if cell.raw_text.trim().is_empty() {
                     "blank"
@@ -205,25 +202,41 @@ pub fn compute(
     // no meaning that looks exactly as confident as a correct one. Counting is
     // exempt — it does not combine the values, so there is nothing to coerce.
     if op != Op::Count {
-        let mut seen: Vec<Kind> = Vec::new();
-        for (k, _) in &kinds {
-            if !seen.contains(k) {
-                seen.push(*k);
+        // Keyed on the unit too, not only the kind: `$` and `€` are both
+        // `Currency` and adding them is meaningless. A cell with no stated
+        // unit joins whichever kind it is, because a bare `1200` in a column
+        // of dollars is a dollar amount — inferring otherwise would refuse
+        // sums that are perfectly well posed.
+        // Two independent questions, because they fail differently. Different
+        // *kinds* — a percentage beside an amount — can never be added. Same
+        // kind, different *units* — dollars beside euros — cannot either.
+        //
+        // A cell that states no unit joins whatever kind it is: a bare `1200`
+        // in a column of dollars is a dollar amount, and refusing that sum
+        // would be a false alarm on the commonest table there is.
+        //
+        // Each group keeps the first cell that put it there, so the refusal can
+        // name an address rather than a category.
+        let mut groups: Vec<(Kind, Option<String>, &str)> = Vec::new();
+        for (k, u, at) in &kinds {
+            let same = groups.iter().any(|(gk, gu, _)| gk == k && gu == u);
+            if !same {
+                groups.push((*k, u.clone(), at.as_str()));
             }
         }
-        if seen.len() > 1 {
-            // Names one cell of each kind. "Mixed units" sends the reader
-            // hunting through forty rows; two addresses end the search.
-            let examples: Vec<String> = seen
+        // Collapse the unit-less members into a kind that already has a unit:
+        // they are the same quantity, described less completely.
+        let kinds_with_a_unit: Vec<Kind> = groups
+            .iter()
+            .filter(|(_, u, _)| u.is_some())
+            .map(|(k, _, _)| *k)
+            .collect();
+        groups.retain(|(k, u, _)| u.is_some() || !kinds_with_a_unit.contains(k));
+
+        if groups.len() > 1 {
+            let examples: Vec<String> = groups
                 .iter()
-                .map(|k| {
-                    let at = kinds
-                        .iter()
-                        .find(|(kk, _)| kk == k)
-                        .map(|(_, r)| r.as_str())
-                        .unwrap_or("?");
-                    format!("{} ({at})", k.describe())
-                })
+                .map(|(k, u, at)| format!("{} ({at})", k.describe(u.as_deref())))
                 .collect();
             return Err(Error::new(
                 Code::CfgInvalid,
@@ -275,11 +288,15 @@ enum Kind {
 }
 
 impl Kind {
-    const fn describe(self) -> &'static str {
-        match self {
-            Self::Number => "plain numbers",
-            Self::Currency => "currency amounts",
-            Self::Percent => "percentages",
+    fn describe(self, unit: Option<&str>) -> String {
+        match (self, unit) {
+            // **The symbol, when the cell gave one.** `Currency` alone cannot
+            // separate dollars from euros, and adding those is the same silent
+            // coercion one level finer — a number as confident as a right one.
+            (Self::Currency, Some(u)) => format!("amounts in {u}"),
+            (Self::Currency, None) => "currency amounts".into(),
+            (Self::Number, _) => "plain numbers".into(),
+            (Self::Percent, _) => "percentages".into(),
         }
     }
 }
@@ -301,6 +318,19 @@ fn numeric(cell: &CellRow) -> Option<(f64, Kind)> {
         _ => return None,
     };
     Some((cell.typed_value.as_deref()?.parse::<f64>().ok()?, kind))
+}
+
+/// `Q2!B4`, or just `B4` when the source has no sheets.
+///
+/// A Markdown or HTML table has no sheet name, and a bare leading `!` in a
+/// citation reads like a typo rather than an address.
+fn at(sheet: &str, row: u32, col: u32) -> String {
+    let cell = marrow_core::a1::cell_ref(row, col);
+    if sheet.is_empty() {
+        cell
+    } else {
+        format!("{sheet}!{cell}")
+    }
 }
 
 /// The sheet name out of a table's stored `Cells` span.
@@ -328,6 +358,7 @@ mod tests {
             raw_text: raw.into(),
             typed_value: typed.map(str::to_owned),
             value_type: ty.map(str::to_owned),
+            unit: None,
             formula: None,
             cell_span: "{}".into(),
             confidence: 1.0,
@@ -376,9 +407,15 @@ mod tests {
         // The refusal names what it found, because "mixed units" sends the
         // reader hunting through forty rows.
         for k in [Kind::Number, Kind::Currency, Kind::Percent] {
-            assert!(!k.describe().is_empty());
+            assert!(!k.describe(None).is_empty());
         }
-        assert_ne!(Kind::Currency.describe(), Kind::Percent.describe());
+        assert_ne!(Kind::Currency.describe(None), Kind::Percent.describe(None));
+        // And the symbol shows when the cell gave one: `Currency` alone
+        // cannot separate dollars from euros.
+        assert_ne!(
+            Kind::Currency.describe(Some("$")),
+            Kind::Currency.describe(Some("€"))
+        );
     }
 
     #[test]

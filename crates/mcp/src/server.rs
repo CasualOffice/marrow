@@ -1392,6 +1392,7 @@ mod tests {
                     raw_text: format!("r{r}c{c}"),
                     typed_value: None,
                     value_type: Some("STRING".into()),
+                    unit: None,
                     formula: None,
                     cell_span: "{}".into(),
                     confidence: 1.0,
