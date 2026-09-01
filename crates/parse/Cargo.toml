@@ -59,6 +59,7 @@ zip = { version = "8", default-features = false, features = ["deflate"] }
 # model gives excellent nodes and no positions, and a DOCX cell's provenance
 # *is* its position in the XML tree. See `docx.rs`.
 quick-xml = "0.41"
+tree-sitter-java = "0.23"
 
 # No `csv` crate: `ByteRecord::range()` indexes the record's private buffer, not
 # the source, so cell provenance would have to be reconstructed anyway. See

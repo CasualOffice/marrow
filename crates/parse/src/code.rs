@@ -1,9 +1,15 @@
 //! Code (T1, Tree-sitter). ~1,300 files — M0 §6 priority 1, the largest real
 //! content class in the corpus.
 //!
-//! PAR-008: syntax-aware parsing and symbol extraction. Languages are the ones
-//! the corpus actually contains, in the counts it contains them:
+//! PAR-008: syntax-aware parsing and symbol extraction. Languages were chosen
+//! by what the corpus actually contains, in the counts it contains them:
 //! Rust 839, TypeScript + TSX 271, JavaScript 149, SQL 96, Python 63.
+//!
+//! **Java is the exception and was added on request**, before a Java file
+//! existed here to demand it. Recorded plainly because the rule elsewhere is
+//! that a parser waits for a real file: this one is a bet that the next
+//! codebase indexed will contain one, and a grammar that is never exercised is
+//! a grammar nobody notices has broken.
 //!
 //! # A symbol is one node
 //!
@@ -49,6 +55,7 @@ pub enum Lang {
     Tsx,
     JavaScript,
     Python,
+    Java,
     Sql,
 }
 
@@ -62,6 +69,7 @@ impl Lang {
             "tsx" => Lang::Tsx,
             "js" | "mjs" | "cjs" | "jsx" => Lang::JavaScript,
             "py" | "pyi" => Lang::Python,
+            "java" => Lang::Java,
             "sql" => Lang::Sql,
             _ => return None,
         })
@@ -74,6 +82,7 @@ impl Lang {
             Lang::Tsx => "tsx",
             Lang::JavaScript => "javascript",
             Lang::Python => "python",
+            Lang::Java => "java",
             Lang::Sql => "sql",
         }
     }
@@ -85,6 +94,7 @@ impl Lang {
             Lang::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
             Lang::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
             Lang::Python => tree_sitter_python::LANGUAGE.into(),
+            Lang::Java => tree_sitter_java::LANGUAGE.into(),
             Lang::Sql => tree_sitter_sequel::LANGUAGE.into(),
         }
     }
@@ -108,6 +118,13 @@ const TRANSPARENT: &[&str] = &[
     "class_body",
     // Python
     "block",
+    // Java: the members of a type are worth naming, the braces around them
+    // are not.
+    "class_body",
+    "interface_body",
+    "enum_body",
+    "enum_body_declarations",
+    "annotation_type_body",
     // SQL (tree-sitter-sequel wraps every statement)
     "statement",
 ];
@@ -166,6 +183,22 @@ fn symbol_table(lang: Lang) -> &'static [(&'static str, SymbolKind, bool)] {
             ("function_definition", SymbolKind::Function, false),
             ("class_definition", SymbolKind::Class, true),
             ("decorated_definition", SymbolKind::Function, true),
+        ],
+        // **Descend into the type declarations, not into the methods.** A
+        // Java file is mostly one class, so emitting only the class would make
+        // a 900-line file a single chunk and every citation "in `class
+        // OrderService`". Methods are where the answers are, and a method's
+        // own nested classes are part of it — the same rule the other
+        // languages follow.
+        Lang::Java => &[
+            ("class_declaration", SymbolKind::Class, true),
+            ("interface_declaration", SymbolKind::Interface, true),
+            ("enum_declaration", SymbolKind::Enum, true),
+            ("record_declaration", SymbolKind::Struct, true),
+            ("annotation_type_declaration", SymbolKind::Interface, true),
+            ("method_declaration", SymbolKind::Method, false),
+            ("constructor_declaration", SymbolKind::Method, false),
+            ("field_declaration", SymbolKind::Constant, false),
         ],
         Lang::Sql => &[
             ("create_table", SymbolKind::Table, false),
