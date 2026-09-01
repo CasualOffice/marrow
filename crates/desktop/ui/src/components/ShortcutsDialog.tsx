@@ -142,9 +142,30 @@ export function ShortcutsDialog() {
   const open = useUi((s) => s.shortcutsOpen);
   const setOpen = useUi((s) => s.setShortcutsOpen);
   const closeRef = useRef<HTMLButtonElement>(null);
+  /*
+   * Where focus was when this opened, so it can go back.
+   *
+   * Without it, closing left focus on `<body>`: the close button is unmounted
+   * with the dialog, and nothing claimed what it dropped. Press `?`, press
+   * `Esc`, and the next Tab starts from the top of the document rather than
+   * from wherever you were reading. `Answer` already does this for the
+   * artifact card and is the pattern being followed.
+   */
+  const returnTo = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
-    if (open) closeRef.current?.focus();
+    if (open) {
+      returnTo.current = document.activeElement as HTMLElement | null;
+      closeRef.current?.focus();
+      return;
+    }
+    // Only if focus was actually dropped here. Something else may have claimed
+    // it deliberately — a shortcut that opens a view, say — and stealing it
+    // back would be worse than leaving it.
+    if (document.activeElement === document.body) {
+      returnTo.current?.focus();
+    }
+    returnTo.current = null;
   }, [open]);
 
   if (!open) return null;

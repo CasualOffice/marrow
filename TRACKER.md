@@ -559,6 +559,34 @@ Build these as fixtures. The set only grows — every security bug found adds a 
 
 Ideas that came up but aren't scheduled. Move to a milestone or delete — don't let this grow.
 
+### The `rem` conversion — filed, deliberately not started
+
+`global.css` claimed "every size below is derived from it" of the root font
+size, and there is not one `rem` in the twenty-nine stylesheets: every size in
+`scale.css` is a px literal, so raising the system or browser text size moves
+nothing. A comment asserting an invariant nothing enforces, which is the shape
+of most of what this week found.
+
+The comment now says what is true, and the reachability half is done —
+`body` was `overflow: hidden`, so at 350% zoom the section switcher was clipped
+at both ends and a panel cut mid-sentence with no scrollbar in either
+direction: content *lost* rather than reflowed (1.4.10 and 1.4.4 failing
+together). It is `overflow: auto` with a `min-width` now, verified at a 500px
+viewport: the layout holds at 720px and the document scrolls to reach it.
+
+What is left is the conversion itself, and it is all-or-nothing. A partial pass
+gives a layout where half the sizes move with the text setting and half do not,
+which is worse than one that does not move at all — so it is one mechanical
+change across every component or it is nothing. Not urgent for a single-user
+app whose author does not use a large text size; worth doing before anyone else
+does.
+
+Also unfixed from the same audit, and smaller: the result list's
+`aria-activedescendant` sits on a container that never receives focus, so
+`j`/`k` announce nothing, and the options are wrapped in a `div` so the listbox
+owns none of them. The fix is the combobox pattern on the search input, which
+is a real change to how selection is modelled rather than an attribute.
+
 ### Marrow indexed its own database — 2026-09-02
 
 Found while testing whether the watcher works at all, by making the mistake a

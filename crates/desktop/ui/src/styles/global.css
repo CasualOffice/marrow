@@ -12,8 +12,21 @@
 }
 
 html {
-  /* Restated, not locked: a browser or system text-size setting must still be
-     able to scale this (GUI §8). Every size below is derived from it. */
+  /*
+   * **This said every size below derives from it, and none of them do.**
+   *
+   * There is not one `rem` in the twenty-nine stylesheets here — every size in
+   * `scale.css` is a px literal — so raising the system or browser text size
+   * moves nothing. The comment asserted an invariant nothing enforced, which
+   * is the same shape as most of what an audit of this UI turned up, and
+   * leaving it there is worse than not having claimed it.
+   *
+   * Kept at 16px because that is what the px literals were drawn against.
+   * Converting the scale to `rem` is the real fix, is mechanical across every
+   * component, and is filed rather than half-done — a partial conversion is a
+   * layout where half the sizes move and half do not, which is worse than one
+   * that does not move at all.
+   */
   font-size: 16px;
   height: 100%;
 }
@@ -37,7 +50,23 @@ body {
      default, and a stray drag-select across a result list reads as a bug. */
   -webkit-user-select: none;
   user-select: none;
-  overflow: hidden;
+  /*
+   * **`auto`, so zoomed content can still be reached.**
+   *
+   * `hidden` is right for the ordinary case — a native window does not scroll
+   * as a document, and the panes inside do their own scrolling. But it also
+   * meant that at 350% browser zoom the section switcher was clipped at both
+   * ends and the panel cut mid-sentence, with no scrollbar in either
+   * direction: content was *lost*, not reflowed, which is 1.4.10 and 1.4.4
+   * failing together.
+   *
+   * `min-width` is what makes the scrollbar appear instead of the layout
+   * crushing: below it the window scrolls horizontally rather than squeezing
+   * a sidebar and two panes into 400px. At normal zoom nothing overflows and
+   * this is invisible.
+   */
+  overflow: auto;
+  min-width: 720px;
 }
 
 /* `color-scheme` follows the resolved theme so form controls, scrollbars and

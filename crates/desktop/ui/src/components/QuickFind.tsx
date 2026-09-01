@@ -60,11 +60,24 @@ export function QuickFind() {
   const found = hits.findIndex((h) => hitKey(h) === cursorKey);
   const index = found >= 0 ? found : 0;
 
+  /* Where focus was, so closing does not drop it on `<body>` and start the
+     next Tab from the top of the document. */
+  const returnTo = useRef<HTMLElement | null>(null);
+
   useEffect(() => {
     if (open) {
+      returnTo.current = document.activeElement as HTMLElement | null;
       inputRef.current?.focus();
       setCursorKey(null);
+      return;
     }
+    // Only when nothing else claimed it. Picking a result navigates and
+    // focuses on purpose, and taking that back would undo the thing the user
+    // just asked for.
+    if (document.activeElement === document.body) {
+      returnTo.current?.focus();
+    }
+    returnTo.current = null;
   }, [open]);
 
   if (!open) return null;
