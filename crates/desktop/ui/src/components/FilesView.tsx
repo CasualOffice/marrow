@@ -19,6 +19,7 @@
  */
 
 import { useMemo, useRef, useState, type RefObject } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 import styles from "./FilesView.module.css";
 import { cx } from "../lib/cx";
@@ -38,6 +39,7 @@ export function FilesView({
   const [filter, setFilter] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const fieldRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const workspace = useUi((s) => s.workspaceFilter);
   const setWorkspace = useUi((s) => s.setWorkspaceFilter);
@@ -45,6 +47,18 @@ export function FilesView({
   const debounced = useDebounced(filter);
   const q = useFiles(workspace, debounced);
   const rows = useMemo(() => q.data ?? [], [q.data]);
+
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    // A starting guess only. `--row-h` is a `min-height` and a metadata-only
+    // row carries a second line, so the real heights are measured below.
+    estimateSize: () => 36,
+    overscan: 8,
+    // Keyed on the path, so filtering does not reuse one row's measured height
+    // for a different file.
+    getItemKey: (index) => rows[index]?.path ?? index,
+  });
 
   const row = rows.find((f) => f.path === selected) ?? null;
   const anchor: Anchor | null =
@@ -103,63 +117,90 @@ export function FilesView({
           </div>
         )}
 
-        <ul className={styles.list}>
-          {rows.map((f) => {
-            const dir = dirOf(f.relativePath);
-            return (
-              <li key={f.path}>
-                <button
-                  type="button"
-                  aria-current={f.path === selected ? "true" : undefined}
-                  className={cx(
-                    styles.row,
-                    f.path === selected && styles.selected,
-                  )}
-                  onClick={() => setSelected(f.path)}
-                >
-                  <Icon
-                    name={f.metadataOnly ? "fileDim" : "file"}
-                    size={14}
-                    className={cx(
-                      styles.rowIcon,
-                      f.metadataOnly && styles.rowIconDim,
-                    )}
-                  />
-                  <span className={styles.rowMain}>
-                    <span className={styles.rowName}>
-                      {dir !== "" && (
-                        <span className={styles.rowDir}>{squeezeDir(dir)}</span>
+        {/*
+          * **Virtualised, like the result list.** GUI §2 asks for TanStack
+          * Virtual on "result lists *and the file table*" and only the result
+          * list had it: this rendered up to `FILES_LIMIT` rows, each a button
+          * with an SVG inside, which is the chunkiest thing in the app and the
+          * one place scrolling could be felt.
+          *
+          * `--row-h` is a `min-height`, not a height — a metadata-only row
+          * carries a second line — so the size is measured rather than
+          * assumed. `measureElement` is what makes a mixed-height list scroll
+          * without the thumb jumping as it learns.
+          */}
+        <div ref={scrollRef} className={styles.list}>
+          {rows.length > 0 && (
+            <ul
+              className={styles.canvas}
+              style={{ height: `${virtualizer.getTotalSize()}px` }}
+            >
+              {virtualizer.getVirtualItems().map((v) => {
+                const f = rows[v.index];
+                if (!f) return null;
+                const dir = dirOf(f.relativePath);
+                return (
+                  <li
+                    key={f.path}
+                    data-index={v.index}
+                    ref={virtualizer.measureElement}
+                    className={styles.slot}
+                    style={{ transform: `translateY(${v.start}px)` }}
+                  >
+                    <button
+                      type="button"
+                      aria-current={f.path === selected ? "true" : undefined}
+                      className={cx(
+                        styles.row,
+                        f.path === selected && styles.selected,
                       )}
-                      <span className={styles.rowBase}>
-                        {baseOf(f.relativePath)}
+                      onClick={() => setSelected(f.path)}
+                    >
+                      <Icon
+                        name={f.metadataOnly ? "fileDim" : "file"}
+                        size={14}
+                        className={cx(
+                          styles.rowIcon,
+                          f.metadataOnly && styles.rowIconDim,
+                        )}
+                      />
+                      <span className={styles.rowMain}>
+                        <span className={styles.rowName}>
+                          {dir !== "" && (
+                            <span className={styles.rowDir}>{squeezeDir(dir)}</span>
+                          )}
+                          <span className={styles.rowBase}>
+                            {baseOf(f.relativePath)}
+                          </span>
+                        </span>
+                        {/*
+                          The whole reason this row is different. `metadataOnly`
+                          means the file is in the index by name and date only —
+                          searching its contents will never find it — so it says
+                          so in words, and the tint is only reinforcement.
+                        */}
+                        {f.metadataOnly ? (
+                          <span className={styles.rowNote}>
+                            name and date only · contents not searchable
+                          </span>
+                        ) : (
+                          <span className={cx("mono", styles.rowMeta)}>
+                            {count(f.chunks)} chunks · {bytes(f.sizeBytes)}
+                          </span>
+                        )}
                       </span>
-                    </span>
-                    {/*
-                      The whole reason this row is different. `metadataOnly`
-                      means the file is in the index by name and date only —
-                      searching its contents will never find it — so it says
-                      so in words, and the tint is only reinforcement.
-                    */}
-                    {f.metadataOnly ? (
-                      <span className={styles.rowNote}>
-                        name and date only · contents not searchable
+                      <span className={cx("mono", styles.rowAge)}>
+                        {f.modifiedMs === null ? "—" : age(f.modifiedMs)}
                       </span>
-                    ) : (
-                      <span className={cx("mono", styles.rowMeta)}>
-                        {count(f.chunks)} chunks · {bytes(f.sizeBytes)}
-                      </span>
-                    )}
-                  </span>
-                  <span className={cx("mono", styles.rowAge)}>
-                    {f.modifiedMs === null ? "—" : age(f.modifiedMs)}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
 
           {!q.isError && rows.length === 0 && (
-            <li className={styles.none}>
+            <p className={styles.none}>
               {q.data === undefined
                 ? "—"
                 : filter.trim() === ""
@@ -167,9 +208,9 @@ export function FilesView({
                     ? "The index is empty. Nothing has been indexed yet."
                     : `Nothing is indexed in ${workspace}.`
                   : "No indexed path contains that."}
-            </li>
+            </p>
           )}
-        </ul>
+        </div>
 
         {/* Honest about the window: the list is the newest N, not all of them,
             and it says which. */}

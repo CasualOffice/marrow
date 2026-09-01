@@ -200,3 +200,22 @@
 .grow {
   flex-grow: 1;
 }
+
+/*
+ * The virtualiser's canvas: as tall as the whole list would be, holding only
+ * the rows in view. `ResultList` has the same pair for the same reason.
+ */
+.canvas {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  position: relative;
+  width: 100%;
+}
+
+.slot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
