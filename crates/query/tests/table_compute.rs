@@ -70,7 +70,7 @@ fn a_column_of_amounts_adds_up() {
         (2, 0, "5.5", "decimal"),
     ]);
     let conn = store.reader().expect("reader");
-    let got = compute(&conn, v, Op::Sum, "Q2!A1:A3").expect("a sum");
+    let got = compute(&conn, v, Op::Sum, "Q2!A1:A3", None).expect("a sum");
     assert_eq!(got.value, Some(20.0));
     assert_eq!(got.contributing, 3);
     // An integer beside a decimal is not a unit mismatch. Refusing to add `4`
@@ -90,7 +90,7 @@ fn a_range_mixing_currency_and_percent_is_refused_rather_than_added() {
         (2, 0, "800", "currency"),
     ]);
     let conn = store.reader().expect("reader");
-    let err = compute(&conn, v, Op::Sum, "Q2!A1:A3").expect_err("must refuse");
+    let err = compute(&conn, v, Op::Sum, "Q2!A1:A3", None).expect_err("must refuse");
     let msg = err.message();
     // Names the units, not the internal type names — "$" is what the cell
     // shows and what the reader will look for.
@@ -106,7 +106,7 @@ fn a_range_mixing_currency_and_percent_is_refused_rather_than_added() {
 fn counting_a_mixed_range_still_works_because_it_combines_nothing() {
     let (_d, store, v) = workbook(&[(0, 0, "1200", "currency"), (1, 0, "0.45", "percent")]);
     let conn = store.reader().expect("reader");
-    let got = compute(&conn, v, Op::Count, "Q2!A1:A2").expect("count is safe");
+    let got = compute(&conn, v, Op::Count, "Q2!A1:A2", None).expect("count is safe");
     assert_eq!(got.value, Some(2.0));
 }
 
@@ -118,7 +118,7 @@ fn a_cell_that_is_not_a_number_is_named_rather_than_quietly_dropped() {
         (2, 0, "", "empty"),
     ]);
     let conn = store.reader().expect("reader");
-    let got = compute(&conn, v, Op::Sum, "Q2!A1:A3").expect("a sum");
+    let got = compute(&conn, v, Op::Sum, "Q2!A1:A3", None).expect("a sum");
     assert_eq!(got.value, Some(10.0));
     assert_eq!(got.contributing, 1);
     // A total over three cells where two held no number is not a total over
@@ -180,7 +180,7 @@ fn dollars_and_euros_are_not_the_same_unit_even_though_both_are_currency() {
     store.flush().expect("flush");
 
     let conn = store.reader().expect("reader");
-    let err = compute(&conn, version, Op::Sum, "Q2!A1:A2").expect_err("must refuse");
+    let err = compute(&conn, version, Op::Sum, "Q2!A1:A2", None).expect_err("must refuse");
     let msg = err.message();
     assert!(
         msg.contains('$') && msg.contains('€'),
@@ -195,6 +195,104 @@ fn a_bare_number_beside_a_dollar_amount_is_not_a_mismatch() {
     // total it would make the guard worse than the bug it prevents.
     let (_d, store, v) = workbook(&[(0, 0, "1200", "currency"), (1, 0, "900", "currency")]);
     let conn = store.reader().expect("reader");
-    let got = compute(&conn, v, Op::Sum, "Q2!A1:A2").expect("one unit, one kind");
+    let got = compute(&conn, v, Op::Sum, "Q2!A1:A2", None).expect("one unit, one kind");
     assert_eq!(got.value, Some(2100.0));
+}
+
+/// `--where` narrows the rows without making the user restate the range in A1,
+/// which is the whole point: expressing "only the Rent rows" as cell addresses
+/// requires already knowing which rows those are.
+mod filtering {
+    use super::*;
+    use marrow_query::table::Where;
+
+    /// Column A is the category, column B the amount.
+    fn ledger() -> (
+        tempfile::TempDir,
+        marrow_store::Store,
+        marrow_core::VersionId,
+    ) {
+        workbook(&[
+            (0, 0, "Rent", "string"),
+            (0, 1, "1200", "decimal"),
+            (1, 0, "Food", "string"),
+            (1, 1, "300", "decimal"),
+            (2, 0, "Rent", "string"),
+            (2, 1, "800", "decimal"),
+        ])
+    }
+
+    #[test]
+    fn the_filter_column_may_sit_outside_the_range_being_totalled() {
+        // **The case the design turns on.** "Total column B where column A is
+        // Rent" is the ordinary shape of the question, and A is not in B2:B3.
+        // Deciding which rows qualify inside the range loop would silently only
+        // ever match a column the user was already summing.
+        let (_d, store, v) = ledger();
+        let conn = store.reader().expect("reader");
+        let w = Where::parse("A=Rent").expect("a filter");
+        let got = compute(&conn, v, Op::Sum, "Q2!B1:B3", Some(&w)).expect("a sum");
+        assert_eq!(got.value, Some(2000.0), "1200 + 800, not 2300");
+        assert_eq!(got.contributing, 2);
+    }
+
+    #[test]
+    fn matching_no_row_is_refused_rather_than_reported_as_zero() {
+        // Zero is a number and a reader acts on it. "No row matched" answers a
+        // different question and has to be distinguishable from "the matching
+        // rows summed to nothing".
+        let (_d, store, v) = ledger();
+        let conn = store.reader().expect("reader");
+        let w = Where::parse("A=Holiday").expect("a filter");
+        let err = compute(&conn, v, Op::Sum, "Q2!B1:B3", Some(&w)).expect_err("must refuse");
+        assert!(err.message().contains("Holiday"), "{}", err.message());
+        assert!(err.message().contains('A'), "must name the column");
+    }
+
+    #[test]
+    fn an_excluded_row_is_not_reported_as_a_skipped_cell() {
+        // A row the filter never asked about is not a cell that failed to
+        // answer. Listing it under "did not count" would bury the ones that
+        // were asked and could not.
+        let (_d, store, v) = ledger();
+        let conn = store.reader().expect("reader");
+        let w = Where::parse("A=Rent").expect("a filter");
+        let got = compute(&conn, v, Op::Sum, "Q2!B1:B3", Some(&w)).expect("a sum");
+        assert!(!got.is_partial(), "skipped: {:?}", got.skipped);
+    }
+
+    #[test]
+    fn a_filter_matches_what_the_sheet_shows_not_its_typed_value() {
+        // Trimmed and case-insensitive: a filter is a question about what the
+        // column reads like, typed from what the person saw.
+        let (_d, store, v) = ledger();
+        let conn = store.reader().expect("reader");
+        let w = Where::parse("A=  rENT  ").expect("a filter");
+        let got = compute(&conn, v, Op::Sum, "Q2!B1:B3", Some(&w)).expect("a sum");
+        assert_eq!(got.value, Some(2000.0));
+    }
+
+    #[test]
+    fn a_filter_without_an_equals_is_not_a_filter() {
+        assert_eq!(Where::parse("A"), None);
+        assert_eq!(Where::parse("A="), None);
+        assert_eq!(Where::parse("=Rent"), None);
+        // A value may contain `=`; only the first one splits.
+        assert_eq!(Where::parse("A=x=y").map(|w| w.equals), Some("x=y".into()));
+    }
+
+    #[test]
+    fn the_result_says_what_narrowed_it() {
+        // A total of one cell out of a range of three is a different claim
+        // from a total of one cell, and only this carries the difference.
+        let (_d, store, v) = ledger();
+        let conn = store.reader().expect("reader");
+        let w = Where::parse("A=Food").expect("a filter");
+        let got = compute(&conn, v, Op::Sum, "Q2!B1:B3", Some(&w)).expect("a sum");
+        assert_eq!(
+            got.filtered_by.as_ref().map(|f| f.equals.as_str()),
+            Some("Food")
+        );
+        assert_eq!(got.value, Some(300.0));
+    }
 }

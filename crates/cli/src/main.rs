@@ -208,6 +208,13 @@ enum Cmd {
         /// The range, as the spreadsheet writes it: `B4:B18`, or `Q2!B4:B18`
         /// to name the sheet. Required when the workbook has more than one.
         range: String,
+        /// Only rows where a column matches: `--where 'A=Rent'`.
+        ///
+        /// The column is a letter and the match is on the cell's text,
+        /// trimmed and ignoring case — a filter is a question about what the
+        /// sheet says, so `$1,200` is matched by what you can read in it.
+        #[arg(long = "where", value_name = "COL=VALUE")]
+        filter: Option<String>,
     },
     /// Serve the index over MCP on stdio
     ///
@@ -424,7 +431,12 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
             embed::run(&store, &data_dir()?, cli.json, style, out)
         }
         Cmd::Status => status(cli.json, style, out),
-        Cmd::Table { op, path, range } => table(op, path, range, cli.json, style, out),
+        Cmd::Table {
+            op,
+            path,
+            range,
+            filter,
+        } => table(op, path, range, filter.as_deref(), cli.json, style, out),
         Cmd::Watch { name } => watch(name.as_deref(), cli.json, style, out),
         Cmd::Mcp => {
             let store = open_store()?;
@@ -818,6 +830,7 @@ fn table(
     op: &str,
     path: &str,
     range: &str,
+    filter: Option<&str>,
     json: bool,
     style: Style,
     out: &mut impl Write,
@@ -853,7 +866,23 @@ fn table(
         ));
     };
 
-    let computed = marrow_query::table::compute(&conn, version, op, range)?;
+    // Parsed before the store is touched: `--where B` with no `=` is a typo,
+    // and finding that out after a scan of the sheet wastes the user's time
+    // and tells them nothing they could not have been told at once.
+    let filter = match filter {
+        Some(raw) => Some(marrow_query::table::Where::parse(raw).ok_or_else(|| {
+            Error::new(
+                marrow_core::Code::CfgInvalid,
+                format!(
+                    "`{raw}` is not a filter. Write it as a column letter, `=`, and the \
+                     text to match — for example `A=Rent`."
+                ),
+            )
+        })?),
+        None => None,
+    };
+
+    let computed = marrow_query::table::compute(&conn, version, op, range, filter.as_ref())?;
 
     if json {
         writeln!(
@@ -865,6 +894,10 @@ fn table(
                 "sheet": computed.sheet,
                 "range": computed.range,
                 "contributing_cells": computed.contributing,
+                "filtered_by": computed.filtered_by.as_ref().map(|w| serde_json::json!({
+                    "column": marrow_core::a1::column_name(w.column),
+                    "equals": w.equals,
+                })),
                 "skipped": computed.skipped.iter().map(|s| serde_json::json!({
                     "cell": s.reference,
                     "text": s.raw_text,
@@ -897,6 +930,19 @@ fn table(
             computed.range,
         ))
     )?;
+    // A total of four cells out of a range of forty is a different claim from
+    // a total of four cells, and only this line separates them.
+    if let Some(w) = &computed.filtered_by {
+        writeln!(
+            out,
+            "{}",
+            style.dim(&format!(
+                "  where {} is {}",
+                marrow_core::a1::column_name(w.column),
+                w.equals
+            ))
+        )?;
+    }
 
     // Never a bare count. "3 skipped" sends a reader looking; naming them is
     // the difference between a caveat and an errand.

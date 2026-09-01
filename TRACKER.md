@@ -264,7 +264,13 @@ recorded only in the Log (`a8362be`, `c2141d1`, `cd9b50f`, `e883546`) and in
       contribute here at all — calamine resolves the format code to `Other`, so
       `0.00%` and `$#,##0` are indistinguishable from a decimal (noted in
       `xlsx.rs`); the units seen in practice come from Markdown and DOCX
-- [ ] `table compute`: sum / filter / group / lookup, citing cells
+- [~] `table compute`: sum / filter / group / lookup, citing cells — **sum and
+      filter done.** `marrow table sum|mean|min|max|count <file> <range>
+      [--where 'A=Rent']`. The filter column may sit outside the range being
+      totalled, which is the ordinary shape of the question and the case the
+      design turns on. A filter matching no row is refused rather than reported
+      as zero: zero is a number and a reader acts on it. Group and lookup are
+      what is left
 - [x] Unit-mismatch blocks the operation (never coerce silently) — a range
       spanning currency and percent is refused, naming a cell of each kind.
       Both parse as `f64`, so the shipped `table sum` was adding them: a

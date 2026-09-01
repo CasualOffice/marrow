@@ -54,6 +54,46 @@ impl Op {
     }
 }
 
+/// Restrict a computation to the rows a column matches.
+///
+/// **The point is to narrow a range without retyping it as A1.** "Total the
+/// amounts, but only the rows where the category is Rent" is the question
+/// people actually have about a table, and expressing it as a cell range
+/// requires already knowing which rows those are — which is the thing being
+/// asked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Where {
+    /// The column to test, as a letter: `A`, `B`, `AA`.
+    pub column: u32,
+    /// Compared against the cell's text, trimmed, ignoring case. Not the typed
+    /// value: a filter is a question about what the sheet *says*, and matching
+    /// `1200` against a cell displayed `$1,200` would surprise the person who
+    /// read the column before typing it.
+    pub equals: String,
+}
+
+impl Where {
+    /// `A=Rent`. The first `=` splits it, so a value may contain one.
+    pub fn parse(s: &str) -> Option<Self> {
+        let (col, value) = s.split_once('=')?;
+        let col = col.trim();
+        if col.is_empty() || value.trim().is_empty() {
+            return None;
+        }
+        // `parse_cell_ref` wants a row too, so borrow its column arithmetic by
+        // asking about row 1 and keeping the column.
+        let (_, column) = marrow_core::a1::parse_cell_ref(&format!("{col}1"))?;
+        Some(Self {
+            column,
+            equals: value.trim().to_owned(),
+        })
+    }
+
+    fn matches(&self, text: &str) -> bool {
+        text.trim().eq_ignore_ascii_case(&self.equals)
+    }
+}
+
 /// One cell that was in the range and did not contribute.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Skipped {
@@ -80,6 +120,10 @@ pub struct Computed {
     /// The range as asked for, echoed so a transcript is self-describing.
     pub range: String,
     pub sheet: String,
+    /// The filter that narrowed it, if one did. A total of four cells out of a
+    /// range of forty is a different claim from a total of four cells, and the
+    /// renderer cannot say which without this.
+    pub filtered_by: Option<Where>,
 }
 
 impl Computed {
@@ -100,6 +144,7 @@ pub fn compute(
     version_id: VersionId,
     op: Op,
     reference: &str,
+    filter: Option<&Where>,
 ) -> Result<Computed> {
     let (sheet, range) = match marrow_core::a1::split_sheet_ref(reference) {
         Some((s, r)) => (Some(s), r),
@@ -172,15 +217,39 @@ pub fn compute(
         .or_else(|| sheet_of(&chosen.source_span))
         .unwrap_or_default();
 
+    let cells = cells_for(conn, &chosen.table_id)?;
+
+    // **The filter column need not be inside the range.** "Total column B where
+    // column A is Rent" is the ordinary shape of the question, so which rows
+    // qualify is decided over the whole table first, bounded to the range's
+    // rows. Deciding it inside the range loop would silently only ever match a
+    // column the user was already summing.
+    let rows_wanted: Option<std::collections::HashSet<u32>> = filter.map(|f| {
+        cells
+            .iter()
+            .filter(|c| {
+                let r = c.row_idx as u32;
+                r >= r0 && r <= r1 && c.col_idx as u32 == f.column && f.matches(&c.raw_text)
+            })
+            .map(|c| c.row_idx as u32)
+            .collect()
+    });
+
     let mut values: Vec<f64> = Vec::new();
     let mut kinds: Vec<(Kind, Option<String>, String)> = Vec::new();
     let mut skipped: Vec<Skipped> = Vec::new();
-    for cell in cells_for(conn, &chosen.table_id)? {
+    for cell in &cells {
         let (r, c) = (cell.row_idx as u32, cell.col_idx as u32);
         if r < r0 || r > r1 || c < c0 || c > c1 {
             continue;
         }
-        match numeric(&cell) {
+        // A row the filter excluded is not a skipped cell. It was never asked
+        // about, and listing it under "did not count" would bury the cells that
+        // were asked about and could not answer.
+        if rows_wanted.as_ref().is_some_and(|w| !w.contains(&r)) {
+            continue;
+        }
+        match numeric(cell) {
             Some((v, kind)) => {
                 kinds.push((kind, cell.unit.clone(), at(&sheet_name, r, c)));
                 values.push(v)
@@ -197,16 +266,28 @@ pub fn compute(
         }
     }
 
-    // **A unit mismatch blocks the operation rather than coercing.** A percent
-    // is a ratio and a currency is an amount; adding them gives a number with
-    // no meaning that looks exactly as confident as a correct one. Counting is
-    // exempt — it does not combine the values, so there is nothing to coerce.
+    // A filter that matched nothing is not a total of zero. Zero is a number
+    // and a reader acts on it; "no row matched" is the answer to a different
+    // question and has to be distinguishable from "the matching rows summed
+    // to nothing".
+    if let (Some(w), Some(f)) = (&rows_wanted, filter) {
+        if w.is_empty() {
+            return Err(Error::new(
+                Code::CfgInvalid,
+                format!(
+                    "No row in that range has `{}` in column {}. Nothing was added, which \
+                     is not the same as a total of zero.",
+                    f.equals,
+                    marrow_core::a1::column_name(f.column),
+                ),
+            ));
+        }
+    }
+
+    // **A unit mismatch blocks the operation rather than coercing.** Counting
+    // is exempt — it does not combine the values, so there is nothing to
+    // coerce.
     if op != Op::Count {
-        // Keyed on the unit too, not only the kind: `$` and `€` are both
-        // `Currency` and adding them is meaningless. A cell with no stated
-        // unit joins whichever kind it is, because a bare `1200` in a column
-        // of dollars is a dollar amount — inferring otherwise would refuse
-        // sums that are perfectly well posed.
         // Two independent questions, because they fail differently. Different
         // *kinds* — a percentage beside an amount — can never be added. Same
         // kind, different *units* — dollars beside euros — cannot either.
@@ -268,6 +349,7 @@ pub fn compute(
         skipped,
         range,
         sheet: sheet_name,
+        filtered_by: filter.cloned(),
     })
 }
 
