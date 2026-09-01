@@ -255,7 +255,12 @@ recorded only in the Log (`a8362be`, `c2141d1`, `cd9b50f`, `e883546`) and in
 - [x] Column type inference; raw text always retained
 - [ ] Unit extraction from headers/formats/captions
 - [ ] `table compute`: sum / filter / group / lookup, citing cells
-- [ ] Unit-mismatch blocks the operation (never coerce silently)
+- [x] Unit-mismatch blocks the operation (never coerce silently) — a range
+      spanning currency and percent is refused, naming a cell of each kind.
+      Both parse as `f64`, so the shipped `table sum` was adding them: a
+      fixture of $1,200 + 45% + $800 returned `2000.45`, as confidently as a
+      correct answer. `count` is exempt — it combines nothing. Integers and
+      decimals are one kind; refusing to add `4` to `10.5` would be pedantry
 - [x] Table chunks: repeated headers + schema chunk
 - [x] Expose over MCP — `read_table`, cells with spans, header confidence, and the reconstruction grade
 

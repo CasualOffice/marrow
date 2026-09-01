@@ -173,6 +173,7 @@ pub fn compute(
         .unwrap_or_default();
 
     let mut values: Vec<f64> = Vec::new();
+    let mut kinds: Vec<(Kind, String)> = Vec::new();
     let mut skipped: Vec<Skipped> = Vec::new();
     for cell in cells_for(conn, &chosen.table_id)? {
         let (r, c) = (cell.row_idx as u32, cell.col_idx as u32);
@@ -180,7 +181,13 @@ pub fn compute(
             continue;
         }
         match numeric(&cell) {
-            Some(v) => values.push(v),
+            Some((v, kind)) => {
+                kinds.push((
+                    kind,
+                    format!("{sheet_name}!{}", marrow_core::a1::cell_ref(r, c)),
+                ));
+                values.push(v)
+            }
             None => skipped.push(Skipped {
                 reference: format!("{sheet_name}!{}", marrow_core::a1::cell_ref(r, c)),
                 raw_text: cell.raw_text.clone(),
@@ -190,6 +197,43 @@ pub fn compute(
                     "not a number"
                 },
             }),
+        }
+    }
+
+    // **A unit mismatch blocks the operation rather than coercing.** A percent
+    // is a ratio and a currency is an amount; adding them gives a number with
+    // no meaning that looks exactly as confident as a correct one. Counting is
+    // exempt — it does not combine the values, so there is nothing to coerce.
+    if op != Op::Count {
+        let mut seen: Vec<Kind> = Vec::new();
+        for (k, _) in &kinds {
+            if !seen.contains(k) {
+                seen.push(*k);
+            }
+        }
+        if seen.len() > 1 {
+            // Names one cell of each kind. "Mixed units" sends the reader
+            // hunting through forty rows; two addresses end the search.
+            let examples: Vec<String> = seen
+                .iter()
+                .map(|k| {
+                    let at = kinds
+                        .iter()
+                        .find(|(kk, _)| kk == k)
+                        .map(|(_, r)| r.as_str())
+                        .unwrap_or("?");
+                    format!("{} ({at})", k.describe())
+                })
+                .collect();
+            return Err(Error::new(
+                Code::CfgInvalid,
+                format!(
+                    "That range mixes {}, which cannot be added together — the answer \
+                     would be a number with no meaning. Narrow the range to one of them, \
+                     or use `count`.",
+                    examples.join(" and ")
+                ),
+            ));
         }
     }
 
@@ -214,29 +258,49 @@ pub fn compute(
     })
 }
 
-/// The number in a cell, from the value the parser typed — never re-parsed
-/// from the display text.
+/// What kind of quantity a cell holds, for the purpose of adding it up.
+///
+/// **Not a display detail.** A percent is a ratio and a currency is an amount;
+/// adding one to the other produces a number with no meaning, and the number
+/// looks exactly as confident as a correct one. M3 asks for a unit mismatch to
+/// block the operation rather than coerce silently, and this is the smallest
+/// thing that can tell one from the other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// A bare count or measure. Integers and decimals together: `3` and `3.5`
+    /// are the same kind of thing, and refusing to add them would be pedantry.
+    Number,
+    Currency,
+    Percent,
+}
+
+impl Kind {
+    const fn describe(self) -> &'static str {
+        match self {
+            Self::Number => "plain numbers",
+            Self::Currency => "currency amounts",
+            Self::Percent => "percentages",
+        }
+    }
+}
+
+/// The number in a cell and what kind of number it is, from the value the
+/// parser typed — never re-parsed from the display text.
 ///
 /// TBL-005 keeps the raw text beside the typed reading precisely so that a
 /// cell displayed as `1,234.50` or `(89)` or `45%` is not re-interpreted by
 /// whoever reads it next. The parser already decided; this trusts that
 /// decision or skips the cell.
-fn numeric(cell: &CellRow) -> Option<f64> {
-    let ty = cell.value_type.as_deref()?;
-    if !matches!(
-        ty,
-        "INTEGER"
-            | "DECIMAL"
-            | "CURRENCY"
-            | "PERCENT"
-            | "integer"
-            | "decimal"
-            | "currency"
-            | "percent"
-    ) {
-        return None;
-    }
-    cell.typed_value.as_deref()?.parse::<f64>().ok()
+fn numeric(cell: &CellRow) -> Option<(f64, Kind)> {
+    let kind = match cell.value_type.as_deref()?.to_ascii_lowercase().as_str() {
+        "integer" | "decimal" => Kind::Number,
+        "currency" => Kind::Currency,
+        "percent" => Kind::Percent,
+        // Dates parse as numbers and mean nothing when added. The type is the
+        // gate, not whether `parse::<f64>` happens to succeed.
+        _ => return None,
+    };
+    Some((cell.typed_value.as_deref()?.parse::<f64>().ok()?, kind))
 }
 
 /// The sheet name out of a table's stored `Cells` span.
@@ -277,13 +341,44 @@ mod tests {
         // naive `raw_text.parse()` would fail on this and silently drop it
         // from the total.
         assert_eq!(
-            numeric(&cell(0, 0, "1,234.50", Some("1234.5"), Some("DECIMAL"))),
+            numeric(&cell(0, 0, "1,234.50", Some("1234.5"), Some("DECIMAL"))).map(|(v, _)| v),
             Some(1234.5)
         );
         assert_eq!(
-            numeric(&cell(0, 0, "45%", Some("0.45"), Some("PERCENT"))),
+            numeric(&cell(0, 0, "45%", Some("0.45"), Some("PERCENT"))).map(|(v, _)| v),
             Some(0.45)
         );
+    }
+
+    #[test]
+    fn a_percent_and_a_currency_are_different_kinds_of_number() {
+        // The whole point of tracking the kind: `45%` and `$1,234.50` both
+        // parse as `f64` and adding them produces a number with no meaning
+        // that looks exactly as confident as a correct one.
+        assert_eq!(
+            numeric(&cell(0, 0, "$1,234.50", Some("1234.5"), Some("currency"))).map(|(_, k)| k),
+            Some(Kind::Currency)
+        );
+        assert_eq!(
+            numeric(&cell(0, 0, "45%", Some("0.45"), Some("percent"))).map(|(_, k)| k),
+            Some(Kind::Percent)
+        );
+        // Integers and decimals are the same kind. Refusing to add `3` to
+        // `3.5` would be pedantry, not safety.
+        assert_eq!(
+            numeric(&cell(0, 0, "3", Some("3"), Some("integer"))).map(|(_, k)| k),
+            numeric(&cell(0, 0, "3.5", Some("3.5"), Some("decimal"))).map(|(_, k)| k)
+        );
+    }
+
+    #[test]
+    fn a_kind_describes_itself_in_words_a_message_can_use() {
+        // The refusal names what it found, because "mixed units" sends the
+        // reader hunting through forty rows.
+        for k in [Kind::Number, Kind::Currency, Kind::Percent] {
+            assert!(!k.describe().is_empty());
+        }
+        assert_ne!(Kind::Currency.describe(), Kind::Percent.describe());
     }
 
     #[test]
