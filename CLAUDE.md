@@ -65,7 +65,7 @@ The spec is ~8,700 lines across nine parts and the author is one person. **The d
 - Don't build ahead of the current milestone
 - Don't add a parser until a real file demanded it
 - Don't abstract for platforms, hardware tiers or users that don't exist
-- Don't build the knowledge graph ([D43](DECISIONS.md)) — it is gated on three real questions that search and timeline could not answer, and none have been logged
+- Don't build the knowledge graph ([D43](DECISIONS.md)) — it is gated on three real questions that search and timeline could not answer, and none have been logged. **A *code* graph is a separate question** and D43 now says so: its edges are parsed rather than inferred, so it cannot be wrong the way a document graph can. Still unbuilt, still behind the same gate, but judged on its own terms when the questions arrive
 - Don't build an OS sandbox — settled, permanently
 
 **Two of these were reversed, and pretending otherwise is why they got reversed silently:**

@@ -68,6 +68,41 @@ Questions logged so far:
 2. _—_
 3. _—_
 
+**The gate is one gate over two different things, and that is a mistake in how
+it was written** (noted 2026-09-02, prompted by the author asking whether
+documents and code want the same graph — they do not).
+
+|  | document graph | code graph |
+|---|---|---|
+| an edge is | **inferred** — "this supersedes that", "these describe one incident" | **parsed** — `place` calls `repo.save` |
+| where it comes from | a model guessing over prose | the syntax tree that is already built |
+| can it be wrong | yes, and confidently | no; it is in the file or it is not |
+| needs | confidence, provenance, a way to un-believe an edge | an extra table |
+| §55 R2's risk | this is what it is about | barely applies |
+
+A code graph is a parser output. A document graph is a research problem. Rating
+them under one gate meant the cheap, exact one inherited the expensive one's
+refusal.
+
+**Both stay unbuilt, and the gate stays** — three real questions, logged, that
+search and timeline could not answer. What changes is that the answer is now
+*two* answers. If the logged questions turn out to be code questions — "what
+calls this", "what breaks if I change this" — the code graph is a small piece of
+work on data Tree-sitter already produces, and the document graph stays refused
+on its own merits.
+
+**And "relationship" is three different things**, which is worth separating
+before either is built, because two of them need no graph at all:
+
+- **similarity** — "these are about the same thing". Embeddings and cosine
+  distance. Fuzzy, unexplainable, and *already shipped*.
+- **reference** — "this calls that". Exact and checkable. The code graph.
+- **correlation** — "these change together". Comes from git history, and needs
+  no graph of any kind.
+
+Reaching for a graph when the question wanted correlation is the most likely way
+to build the wrong thing here.
+
 ---
 
 ### D2 / D31 — Embedding and LLM runtime
