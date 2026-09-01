@@ -1132,10 +1132,16 @@ mod indexed {
         assert!(v["file_id"].is_string(), "{v}");
         assert!(v.get("previous_paths").is_some(), "{v}");
         let note = v["note"].as_str().unwrap_or_else(|| panic!("a note: {v}"));
+        // Cause and action, both. The wording says "previous paths" rather
+        // than the field name because the note is shared with the desktop,
+        // where the same field is `previousPaths` — one string cannot spell
+        // both, and the concept is what the reader needs either way.
         assert!(
-            note.contains("previous_paths") && note.contains("marrow index"),
+            note.contains("previous paths") && note.contains("marrow index"),
             "the note must name a cause and an action: {note}"
         );
+        // And the thing it points at is in the same payload.
+        assert!(v.get("previous_paths").is_some(), "{v}");
     }
 
     /// The two tools have to agree. `read_file` reporting "gone" while

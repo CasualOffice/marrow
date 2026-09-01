@@ -781,129 +781,52 @@ impl Server {
             .get("path")
             .and_then(Value::as_str)
             .ok_or_else(|| bad("`path` is required."))?;
+
+        // **The index remembers when it last looked; it does not see the
+        // disk.** `files.status = 'ACTIVE'` means the most recent
+        // reconciliation saw this file, not that it exists now, and nothing
+        // marks one deleted between sweeps — so this once answered
+        // `citable: true, indexed_for_search: true, tier_state: "resident"`
+        // for files gone for hours, while `read_file` on the same path
+        // correctly reported them missing. An agent calls `file_info`
+        // precisely to decide whether a source can be trusted, so that was the
+        // one question it exists to answer, answered wrong.
+        //
+        // The read and the rule now live in `marrow-query`, because the
+        // desktop asked the same question with the same query and reached the
+        // other verdict.
         let conn = self.store.reader()?;
-
-        let row = conn
-            .query_row(
-                "SELECT f.file_id, f.tier_state, f.origin, w.name,
-                        v.size_bytes, v.content_hash, v.mime, v.mtime_ms,
-                        (SELECT count(*) FROM file_versions x WHERE x.file_id = f.file_id),
-                        (SELECT count(*) FROM chunks c WHERE c.version_id = v.version_id)
-                   FROM files f
-                   JOIN workspaces w ON w.workspace_id = f.workspace_id
-              LEFT JOIN file_versions v
-                     ON v.file_id = f.file_id AND v.status = 'CURRENT'
-                  WHERE f.current_path = ?1 AND f.status = 'ACTIVE'
-                  LIMIT 1",
-                [path],
-                |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, String>(3)?,
-                        r.get::<_, Option<i64>>(4)?,
-                        r.get::<_, Option<String>>(5)?,
-                        r.get::<_, Option<String>>(6)?,
-                        r.get::<_, Option<i64>>(7)?,
-                        r.get::<_, i64>(8)?,
-                        r.get::<_, i64>(9)?,
-                    ))
-                },
-            )
-            .map_err(|_| {
-                bad(
-                    "That path is not in the index. Call list_workspaces to see which folders \
-                     Marrow has been granted — a path outside all of them is never indexed.",
-                )
-            })?;
-
-        let (file_id, tier, origin, workspace, size, hash, mime, mtime, versions, chunks) = row;
-
-        // **The disk decides whether the file is still there; the index only
-        // remembers when it last looked.**
-        //
-        // `files.status = 'ACTIVE'` means the most recent reconciliation saw
-        // this file, not that it exists now, and nothing marks a file deleted
-        // between sweeps. So this tool answered `citable: true,
-        // indexed_for_search: true, tier_state: "resident"` for files that had
-        // been gone for hours, while `read_file` on the same path correctly
-        // reported them missing — because `read_file` opens the file and this
-        // never touched the disk at all. An agent calls `file_info` precisely
-        // to decide whether a source can be trusted, so that was the one
-        // question it exists to answer, answered wrong.
-        //
-        // Reported as missing rather than refused, deliberately. A refusal
-        // would be indistinguishable from "no such path in the index", which
-        // is a different fact and the wrong next move; and it would throw away
-        // the file id, the content hash and `previous_paths` — which are what
-        // tell a caller the content was *renamed* rather than destroyed. The
-        // metadata stays, labelled as describing the copy last seen.
-        //
-        // `symlink_metadata`, not `metadata`: it stats the path itself and
-        // opens nothing, so it cannot follow a link out of the workspace and
-        // must never hydrate a cloud placeholder. A placeholder is
-        // a real directory entry, so it still reports present — which is
-        // right, and `tier_state` is what says it cannot be read.
-        // The rule itself lives in `marrow_query::presence`, because the
-        // desktop asks the same question through `file_detail` and answered it
-        // from the index alone — reporting a deleted file as citable while
-        // this correctly called it missing. One implementation, one answer.
-        let origin_kind = if origin == "SELF" {
-            marrow_core::Origin::SelfWritten
-        } else {
-            marrow_core::Origin::User
-        };
-        let presence = marrow_query::presence::check(path, &tier, origin_kind, chunks);
-        let present = presence.on_disk;
-
-        // Path history is the point of a stable file id: it is how a rename
-        // stays the same file — path is never identity.
-        let mut stmt = conn
-            .prepare("SELECT path FROM file_paths WHERE file_id = ?1 ORDER BY observed_from")
-            .map_err(|e| marrow_store::map_sqlite(e, "reading path history"))?;
-        let history: Vec<String> = stmt
-            .query_map([&file_id], |r| r.get(0))
-            .and_then(|it| it.collect())
-            .map_err(|e| marrow_store::map_sqlite(e, "reading path history"))?;
+        let d = marrow_query::files::detail(&conn, path)?;
 
         Ok(json!({
-            "path": path,
-            "file_id": file_id,
-            "workspace": workspace,
-            "size_bytes": size,
-            "content_hash": hash,
-            "mime": mime,
-            "modified_ms": mtime,
-            "versions": versions,
-            "chunks": chunks,
-            "present_on_disk": present,
+            "path": d.path,
+            "file_id": d.file_id,
+            "workspace": d.workspace,
+            "size_bytes": d.size_bytes,
+            "content_hash": d.content_hash,
+            "mime": d.mime,
+            "modified_ms": d.modified_ms,
+            "versions": d.versions,
+            "chunks": d.chunks,
+            "present_on_disk": d.presence.on_disk,
             // Both gated on the file still existing. Chunks of a file that is
-            // gone are still in the index and `search` may still return them
-            // until the next sweep, but they cannot be verified against the
-            // source, and "citable" means exactly that they can.
-            "indexed_for_search": presence.indexed_for_search,
-            "citable": presence.citable,
-            "tier_state": presence.tier_state,
+            // gone are still in the index and `search` may return them until
+            // the next sweep, but they cannot be verified against the source,
+            // and "citable" means exactly that they can.
+            "indexed_for_search": d.presence.indexed_for_search,
+            "citable": d.presence.citable,
+            "tier_state": d.presence.tier_state,
             // What the last scan recorded, kept alongside so the two are
             // distinguishable: `missing` is a fact about now, `resident` was a
             // fact about then, and collapsing them loses which is which.
-            "recorded_tier_state": presence.recorded_tier_state,
-            "origin": origin.to_lowercase(),
-            "note": if present {
-                Value::Null
-            } else {
-                json!(
-                    "This path is in the index but is not on the disk now, so nothing here \
-                     can be read or cited. The size, hash, version and chunk counts describe \
-                     the copy last seen, not a file that exists. Check `previous_paths` \
-                     first — a rename the last scan has not caught up with looks exactly \
-                     like this — then run `marrow index` to reconcile."
-                )
-            },
-            "previous_paths": history.iter().filter(|p| p.as_str() != path).collect::<Vec<_>>(),
-            // Explicitly null rather than omitted: M1 does not extract these,
-            // and absence must be distinguishable from ignorance (FI-003).
+            "recorded_tier_state": d.presence.recorded_tier_state,
+            "origin": if d.origin == marrow_core::Origin::SelfWritten { "self" } else { "user" },
+            "note": d.presence.note,
+            // Path is never identity: this is how a rename stays the same
+            // file, and how a caller tells a move from a deletion.
+            "previous_paths": d.previous_paths,
+            // M1 extracts none of these. Explicitly null, because absence must
+            // stay distinguishable from ignorance (FI-003).
             "embedded_metadata": Value::Null,
             "structure": Value::Null,
             "entities": Value::Null,

@@ -160,7 +160,12 @@ against `crates/parse/src/` and `ParserRouter::with_default_parsers`.
 - [x] Wire the index into the ingest pipeline
 - [x] CLI `search` — jumpable `path:line`, breadcrumb, workspace-relative paths
 - [x] Search filters (path, type, date) — the port supported them all along, including date bounds; they were unreachable from the CLI
-- [ ] CLI `file` — the file-intelligence panel
+- [x] CLI `file` — the file-intelligence panel. `marrow file <path>` shows
+      identity, hash, tier, previous paths and whether it can be cited. The
+      read itself moved to `marrow_query::files`: MCP and the desktop carried
+      the same twelve-line SELECT character for character, and the CLI had no
+      answer at all. The queries never disagreed — what diverged was what they
+      concluded from it, and only one checked the disk
 - [x] CLI `status` — workspaces, file counts, bytes, cloud-only
 - [x] CLI `workspace add` / `list`, `index`
 - [x] `--json` on every command; colour auto-off when piped — true again as of

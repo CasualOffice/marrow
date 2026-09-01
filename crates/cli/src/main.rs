@@ -225,6 +225,18 @@ enum Cmd {
         #[arg(long = "get", value_name = "COL")]
         get: Option<String>,
     },
+    /// Everything Marrow knows about one file
+    ///
+    /// Identity, content hash, previous paths if it has moved, version and
+    /// chunk counts, and whether it can be cited.
+    ///
+    /// **The disk is checked, not just the index.** A file recorded by the
+    /// last scan and deleted since is reported as missing rather than as
+    /// present — the index is only as current as the last sweep.
+    File {
+        /// Path to an indexed file.
+        path: String,
+    },
     /// Serve the index over MCP on stdio
     ///
     /// Point an agent front-end at this. Protocol traffic uses stdout, so
@@ -440,6 +452,7 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
             embed::run(&store, &data_dir()?, cli.json, style, out)
         }
         Cmd::Status => status(cli.json, style, out),
+        Cmd::File { path } => file(path, cli.json, style, out),
         Cmd::Table {
             op,
             path,
@@ -1040,6 +1053,117 @@ fn table(
                 "  {}",
                 style.dim(&format!("… and {} more", computed.skipped.len() - 10))
             )?;
+        }
+    }
+    Ok(())
+}
+
+/// `marrow file <path>` — the file-intelligence panel, in a terminal.
+///
+/// The same read MCP's `file_info` and the desktop's detail pane use. It was
+/// the one surface without an answer, while the other two carried the same
+/// query and disagreed about what it meant.
+fn file(path: &str, json: bool, style: Style, out: &mut impl Write) -> Result<()> {
+    let store = open_store()?;
+    let conn = store.reader()?;
+    // Canonicalised, because the index keys on the canonical path and a
+    // relative one a person typed will not match. A path that cannot be
+    // canonicalised is passed through: it may be a file the index still
+    // remembers and the disk no longer has, which is exactly the case worth
+    // reporting rather than refusing.
+    let canonical = std::fs::canonicalize(path)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string());
+    let d = marrow_query::files::detail(&conn, &canonical)?;
+
+    if json {
+        writeln!(
+            out,
+            "{}",
+            serde_json::json!({
+                "path": d.path,
+                "file_id": d.file_id,
+                "workspace": d.workspace,
+                "size_bytes": d.size_bytes,
+                "content_hash": d.content_hash,
+                "mime": d.mime,
+                "modified_ms": d.modified_ms,
+                "versions": d.versions,
+                "chunks": d.chunks,
+                "present_on_disk": d.presence.on_disk,
+                "indexed_for_search": d.presence.indexed_for_search,
+                "citable": d.presence.citable,
+                "tier_state": d.presence.tier_state,
+                "recorded_tier_state": d.presence.recorded_tier_state,
+                "origin": if d.origin == marrow_core::Origin::SelfWritten { "self" } else { "user" },
+                "note": d.presence.note,
+                "previous_paths": d.previous_paths,
+            })
+        )?;
+        return Ok(());
+    }
+
+    writeln!(out, "{}", style.bold(&d.path))?;
+    // The warning first, because every figure below it describes the copy last
+    // seen and a reader will otherwise take them for a file that exists.
+    if let Some(note) = d.presence.note {
+        writeln!(out)?;
+        writeln!(out, "{}", style.warn(note))?;
+    }
+    writeln!(out)?;
+    let row = |out: &mut dyn Write, k: &str, v: &str| -> std::io::Result<()> {
+        writeln!(out, "  {:<18}{}", style.dim(k), v)
+    };
+    row(out, "workspace", &d.workspace)?;
+    row(out, "file id", &d.file_id)?;
+    row(out, "tier", &d.presence.tier_state)?;
+    if d.presence.tier_state != d.presence.recorded_tier_state {
+        // `missing` is a fact about now and `resident` was a fact about then;
+        // showing only one loses which is which.
+        row(out, "last scan saw", &d.presence.recorded_tier_state)?;
+    }
+    row(
+        out,
+        "citable",
+        if d.presence.citable {
+            "yes"
+        } else if !d.presence.on_disk {
+            "no — not on disk"
+        } else if d.origin == marrow_core::Origin::SelfWritten {
+            // The `origin = SELF` rule: findable, and never evidence.
+            "no — written by Marrow"
+        } else {
+            "no"
+        },
+    )?;
+    row(
+        out,
+        "searchable",
+        if d.presence.indexed_for_search {
+            "yes"
+        } else if d.chunks == 0 {
+            "no — nothing extracted"
+        } else {
+            "no — not on disk"
+        },
+    )?;
+    if let Some(h) = &d.content_hash {
+        row(out, "content hash", h)?;
+    }
+    if let Some(m) = &d.mime {
+        row(out, "type", m)?;
+    }
+    if let Some(b) = d.size_bytes {
+        row(out, "size", &render::bytes(b as u64))?;
+    }
+    row(out, "versions", &d.versions.to_string())?;
+    row(out, "chunks", &d.chunks.to_string())?;
+    if !d.previous_paths.is_empty() {
+        writeln!(out)?;
+        // Path is never identity. This is how a rename is told from a deletion.
+        writeln!(out, "  {}", style.dim("previously"))?;
+        for p in &d.previous_paths {
+            writeln!(out, "    {p}")?;
         }
     }
     Ok(())

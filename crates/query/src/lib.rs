@@ -93,6 +93,9 @@
 
 pub mod catalog;
 pub mod explain;
+/// Everything the index knows about one file, read once and rendered three
+/// ways. Two surfaces carried the same query and reached different verdicts.
+pub mod files;
 pub mod intelligence;
 /// Whether a recorded file is still on the disk, and what that means for
 /// citing it. Shared so two surfaces cannot answer it differently.

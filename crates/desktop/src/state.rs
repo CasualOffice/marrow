@@ -757,86 +757,29 @@ impl Core {
     }
 
     pub fn file_detail(&self, path: &str) -> Result<FileDetail> {
+        // **One read, shared with MCP.** Both surfaces carried the same
+        // twelve-line SELECT and then reached different verdicts from it —
+        // this one answered from the index alone and offered to cite files
+        // that were gone. The query and the rule now live in `marrow-query`.
         let conn = self.store.reader()?;
-        let row = conn
-            .query_row(
-                "SELECT f.file_id, f.tier_state, f.origin, w.name,
-                        v.size_bytes, v.content_hash, v.mime, v.mtime_ms,
-                        (SELECT count(*) FROM file_versions x WHERE x.file_id=f.file_id),
-                        (SELECT count(*) FROM chunks c WHERE c.version_id=v.version_id)
-                   FROM files f
-                   JOIN workspaces w ON w.workspace_id=f.workspace_id
-              LEFT JOIN file_versions v ON v.file_id=f.file_id AND v.status='CURRENT'
-                  WHERE f.current_path=?1 AND f.status='ACTIVE' LIMIT 1",
-                [path],
-                |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, String>(3)?,
-                        r.get::<_, Option<i64>>(4)?,
-                        r.get::<_, Option<String>>(5)?,
-                        r.get::<_, Option<String>>(6)?,
-                        r.get::<_, Option<i64>>(7)?,
-                        r.get::<_, i64>(8)?,
-                        r.get::<_, i64>(9)?,
-                    ))
-                },
-            )
-            .map_err(|_| {
-                marrow_core::Error::new(
-                    marrow_core::Code::FsNotFound,
-                    "That file is not indexed. Add its folder as a workspace, then run an index.",
-                )
-            })?;
-
-        let (file_id, tier, origin, workspace, size, hash, mime, mtime, versions, chunks) = row;
-        let mut stmt = conn
-            .prepare("SELECT path FROM file_paths WHERE file_id=?1 ORDER BY observed_from")
-            .map_err(|e| marrow_store::map_sqlite(e, "reading path history"))?;
-        let history: Vec<String> = stmt
-            .query_map([&file_id], |r| r.get(0))
-            .and_then(|it| it.collect())
-            .map_err(|e| marrow_store::map_sqlite(e, "reading path history"))?;
-
-        // **The index remembers the last sweep; it does not see the disk.**
-        // `files.status = 'ACTIVE'` means the most recent reconciliation saw
-        // this file, and nothing marks one deleted between sweeps — so this
-        // answered `citable: true, tier_state: "resident"` for files that had
-        // been gone for hours. MCP's `file_info` learned that and grew a disk
-        // check; this, the same question through the product's own surface,
-        // did not, so the app would offer to cite a file that is not there
-        // while MCP correctly called it missing.
-        //
-        // The rule now lives in `marrow_query::presence` and both apply it,
-        // because two answers to one question is how they diverged.
-        let origin_kind = if origin == "SELF" {
-            marrow_core::Origin::SelfWritten
-        } else {
-            marrow_core::Origin::User
-        };
-        let presence = marrow_query::presence::check(path, &tier, origin_kind, chunks);
-
+        let d = marrow_query::files::detail(&conn, path)?;
         Ok(FileDetail {
-            path: path.to_string(),
-            file_id,
-            workspace,
-            size_bytes: size,
-            content_hash: hash,
-            mime,
-            modified_ms: mtime,
-            versions,
-            chunks,
-            tier_state: presence.tier_state,
-            recorded_tier_state: presence.recorded_tier_state,
-            present_on_disk: presence.on_disk,
-            citable: presence.citable,
-            indexed_for_search: presence.indexed_for_search,
-            // Only set when the file is gone: what the figures above actually
-            // describe, and what to do about it.
-            note: presence.note.map(str::to_owned),
-            previous_paths: history.into_iter().filter(|p| p != path).collect(),
+            path: d.path,
+            file_id: d.file_id,
+            workspace: d.workspace,
+            size_bytes: d.size_bytes,
+            content_hash: d.content_hash,
+            mime: d.mime,
+            modified_ms: d.modified_ms,
+            versions: d.versions,
+            chunks: d.chunks,
+            tier_state: d.presence.tier_state,
+            recorded_tier_state: d.presence.recorded_tier_state,
+            present_on_disk: d.presence.on_disk,
+            citable: d.presence.citable,
+            indexed_for_search: d.presence.indexed_for_search,
+            note: d.presence.note.map(str::to_owned),
+            previous_paths: d.previous_paths,
             // M1 extracts neither. `None` renders as `—`; omitting the field
             // would make absence look like emptiness (FI-003).
             embedded_metadata: None,
