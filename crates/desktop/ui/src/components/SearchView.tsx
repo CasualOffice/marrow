@@ -149,7 +149,17 @@ export function SearchView(props: SearchViewProps) {
   const wide = !split;
 
   const footer = (
-    <div className={styles.footer} role="status">
+    /*
+     * **Not a live region.** `role="status"` implies `aria-atomic`, so the
+     * whole strip — count, elapsed ms, the searching flag, the branch list —
+     * was re-read on every response, and `App` already announces the ranking
+     * in one sentence through the store's own region. A four-letter query
+     * produced up to eight announcements of the same event, in two voices.
+     *
+     * It stays a visible summary; the announcement is `App`'s, which is the
+     * shorter and better of the two.
+     */
+    <div className={styles.footer}>
       <span className={styles.count}>
         {response === undefined
           ? "—"

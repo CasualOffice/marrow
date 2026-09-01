@@ -247,6 +247,8 @@ export function AskView() {
   const pendingSave = useRef<Promise<unknown> | null>(null);
   const setView = useUi((s) => s.setView);
   const notify = useUi((s) => s.notify);
+  // The app's one always-mounted live region, in `Notice`.
+  const announce = useUi((s) => s.announce);
   const epoch = useUi((s) => s.conversationEpoch);
   const client = useQueryClient();
 
@@ -596,12 +598,48 @@ export function AskView() {
             break;
           case "done":
             applyToTurn((t) => ({ ...t, usage: e, stage: null }));
+            /*
+             * **Said out loud, because the whole turn was silent.**
+             *
+             * Nothing here carried a live region: 430 characters of answer
+             * arrived and a screen reader was told none of it, and a *failed*
+             * answer said nothing at all — in the one place in this app where
+             * waiting is measured in tens of seconds.
+             *
+             * A short state sentence, not the prose. Streaming every token
+             * into a live region is worse than silence: it interrupts itself
+             * on every frame and the listener hears a stutter rather than an
+             * answer. This is the moment worth interrupting for, and the
+             * number of sources is the part nobody can see coming.
+             *
+             * Through the store's own always-mounted region rather than a new
+             * one, because a live region added at the moment it has something
+             * to say is usually not announced at all — the browser has to have
+             * been watching it beforehand.
+             *
+             * Outside the updater, reading `record`. `applyToTurn` runs its
+             * function twice — once on the local copy, once inside React's
+             * state updater — so a side effect in there fires twice and does
+             * it during an update, which is the one place a setter must not
+             * be called. `record` is maintained here for exactly this: reading
+             * the settled turn without waiting for a render.
+             */
+            announce(
+              record.sources.length === 0
+                ? "Answer complete, with no sources."
+                : `Answer complete, ${record.sources.length} ${
+                    record.sources.length === 1 ? "source" : "sources"
+                  }.`,
+            );
             break;
           case "failed":
             applyToTurn((t) => ({
               ...t,
               failure: { code: e.code, message: e.message },
             }));
+            // The silent case: a failure a sighted reader sees in red was not
+            // announced at all.
+            announce(`The answer failed. ${e.message}`);
             break;
         }
       };
@@ -612,12 +650,11 @@ export function AskView() {
           onEvent,
         );
       } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        announce(`The answer failed. ${message}`);
         applyToTurn((t) => ({
           ...t,
-          failure: {
-            code: "UI_UNEXPECTED",
-            message: e instanceof Error ? e.message : String(e),
-          },
+          failure: { code: "UI_UNEXPECTED", message },
         }));
       } finally {
         applyToTurn((t) => ({ ...t, running: false, stage: null }));
@@ -1036,8 +1073,17 @@ function Waiting({ stage }: { stage: { stage: string; detail: string } }) {
         <span className={styles.waitingDot} aria-hidden="true" />
         <span className={styles.waitingText}>{stage.detail}</span>
         {/* Only once it has been long enough to wonder. A counter that starts
-            at 1 s makes every fast answer look slow. */}
-        {seconds >= 3 && <span className={styles.waitingClock}>{seconds}s</span>}
+            at 1 s makes every fast answer look slow.
+
+            `aria-hidden`, because it ticks: inside a live region a 45-second
+            model load would announce forty-two times, and "12s… 13s… 14s" is
+            the least useful thing a screen reader could be given while
+            waiting. The stage text beside it is what carries the meaning. */}
+        {seconds >= 3 && (
+          <span className={styles.waitingClock} aria-hidden="true">
+            {seconds}s
+          </span>
+        )}
       </div>
       {/* SKEL-001: a skeleton in the shape of the result, not a spinner. */}
       <div className={styles.skeleton}>
