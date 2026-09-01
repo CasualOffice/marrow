@@ -845,7 +845,17 @@ impl Server {
         // must never hydrate a cloud placeholder. A placeholder is
         // a real directory entry, so it still reports present — which is
         // right, and `tier_state` is what says it cannot be read.
-        let present = std::fs::symlink_metadata(path).is_ok();
+        // The rule itself lives in `marrow_query::presence`, because the
+        // desktop asks the same question through `file_detail` and answered it
+        // from the index alone — reporting a deleted file as citable while
+        // this correctly called it missing. One implementation, one answer.
+        let origin_kind = if origin == "SELF" {
+            marrow_core::Origin::SelfWritten
+        } else {
+            marrow_core::Origin::User
+        };
+        let presence = marrow_query::presence::check(path, &tier, origin_kind, chunks);
+        let present = presence.on_disk;
 
         // Path history is the point of a stable file id: it is how a rename
         // stays the same file — path is never identity.
@@ -872,17 +882,13 @@ impl Server {
             // gone are still in the index and `search` may still return them
             // until the next sweep, but they cannot be verified against the
             // source, and "citable" means exactly that they can.
-            "indexed_for_search": present && chunks > 0,
-            "citable": present && origin == "USER",
-            "tier_state": if present {
-                tier.to_lowercase()
-            } else {
-                "missing".to_string()
-            },
+            "indexed_for_search": presence.indexed_for_search,
+            "citable": presence.citable,
+            "tier_state": presence.tier_state,
             // What the last scan recorded, kept alongside so the two are
             // distinguishable: `missing` is a fact about now, `resident` was a
             // fact about then, and collapsing them loses which is which.
-            "recorded_tier_state": tier.to_lowercase(),
+            "recorded_tier_state": presence.recorded_tier_state,
             "origin": origin.to_lowercase(),
             "note": if present {
                 Value::Null

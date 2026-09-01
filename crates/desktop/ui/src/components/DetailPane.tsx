@@ -114,6 +114,18 @@ export const DetailPane = forwardRef<HTMLDivElement, DetailPaneProps>(
               <div className={cx("mono", styles.path, "selectable")}>
                 {anchor.location}
               </div>
+              {/*
+                The file is in the index and not on the disk. Said here rather
+                than left to the reader to infer from a tier field, because
+                every other number on this panel describes the copy last seen
+                and a person reading them will otherwise take them for a
+                description of a file that exists.
+              */}
+              {detail.data?.note && (
+                <p className={styles.gone} role="status">
+                  {detail.data.note}
+                </p>
+              )}
             </header>
 
             <div className={styles.preview}>

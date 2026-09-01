@@ -411,8 +411,21 @@ pub struct FileDetail {
     pub modified_ms: Option<i64>,
     pub versions: i64,
     pub chunks: i64,
+    /// What is true *now*: `missing` when the path is gone, whatever the last
+    /// scan recorded otherwise.
     pub tier_state: String,
+    /// What the last scan recorded, kept alongside so the two stay
+    /// distinguishable — `missing` is a fact about now, `resident` was a fact
+    /// about then.
+    pub recorded_tier_state: String,
+    pub present_on_disk: bool,
+    /// **Gated on the file still existing.** Chunks of a file that is gone are
+    /// still in the index until the next sweep, but they cannot be verified
+    /// against the source — and citable means exactly that they can.
     pub citable: bool,
+    pub indexed_for_search: bool,
+    /// Set only when the path is no longer on the disk.
+    pub note: Option<String>,
     pub previous_paths: Vec<String>,
     /// Explicitly `None`, not omitted: M1 does not extract these, and absence
     /// must be distinguishable from ignorance (FI-003). The UI renders `—`.

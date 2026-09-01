@@ -799,7 +799,14 @@ export async function mockInvoke<T>(
         versions: 3,
         chunks: row?.chunks ?? 18,
         tierState: row?.metadataOnly === true ? "cloud-only" : "resident",
+        // The fixture's files all exist as far as it is concerned; the
+        // deleted-since-the-last-scan case is covered by a Rust test, where a
+        // file can actually be removed from under the index.
+        recordedTierState: row?.metadataOnly === true ? "cloud-only" : "resident",
+        presentOnDisk: true,
         citable: !path.includes("/agent/"),
+        indexedForSearch: (row?.chunks ?? 18) > 0,
+        note: null,
         previousPaths: [`${ROOT}/services/vault/src/token.rs`],
         embeddedMetadata: null,
         structure: null,

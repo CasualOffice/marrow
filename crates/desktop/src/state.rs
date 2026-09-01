@@ -800,6 +800,24 @@ impl Core {
             .and_then(|it| it.collect())
             .map_err(|e| marrow_store::map_sqlite(e, "reading path history"))?;
 
+        // **The index remembers the last sweep; it does not see the disk.**
+        // `files.status = 'ACTIVE'` means the most recent reconciliation saw
+        // this file, and nothing marks one deleted between sweeps — so this
+        // answered `citable: true, tier_state: "resident"` for files that had
+        // been gone for hours. MCP's `file_info` learned that and grew a disk
+        // check; this, the same question through the product's own surface,
+        // did not, so the app would offer to cite a file that is not there
+        // while MCP correctly called it missing.
+        //
+        // The rule now lives in `marrow_query::presence` and both apply it,
+        // because two answers to one question is how they diverged.
+        let origin_kind = if origin == "SELF" {
+            marrow_core::Origin::SelfWritten
+        } else {
+            marrow_core::Origin::User
+        };
+        let presence = marrow_query::presence::check(path, &tier, origin_kind, chunks);
+
         Ok(FileDetail {
             path: path.to_string(),
             file_id,
@@ -810,8 +828,14 @@ impl Core {
             modified_ms: mtime,
             versions,
             chunks,
-            tier_state: tier.to_lowercase(),
-            citable: origin == "USER",
+            tier_state: presence.tier_state,
+            recorded_tier_state: presence.recorded_tier_state,
+            present_on_disk: presence.on_disk,
+            citable: presence.citable,
+            indexed_for_search: presence.indexed_for_search,
+            // Only set when the file is gone: what the figures above actually
+            // describe, and what to do about it.
+            note: presence.note.map(str::to_owned),
             previous_paths: history.into_iter().filter(|p| p != path).collect(),
             // M1 extracts neither. `None` renders as `—`; omitting the field
             // would make absence look like emptiness (FI-003).

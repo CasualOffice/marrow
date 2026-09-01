@@ -285,3 +285,19 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/*
+ * A file the index remembers and the disk no longer has. Warning-coloured
+ * rather than error-coloured: nothing has failed, and the record is still
+ * useful — `previousPaths` and the hash are how a rename is told from a
+ * deletion.
+ */
+.gone {
+  margin: var(--sp-3) 0 0;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--tint-warn-line);
+  background: var(--tint-warn-soft);
+  color: var(--warn-text);
+  font-size: var(--fs-body);
+  line-height: var(--tight);
+}

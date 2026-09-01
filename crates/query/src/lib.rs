@@ -94,6 +94,9 @@
 pub mod catalog;
 pub mod explain;
 pub mod intelligence;
+/// Whether a recorded file is still on the disk, and what that means for
+/// citing it. Shared so two surfaces cannot answer it differently.
+pub mod presence;
 pub mod search;
 /// Arithmetic over a spreadsheet range, computed here rather than by a model.
 pub mod table;

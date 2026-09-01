@@ -398,8 +398,24 @@ export interface FileDetail {
   readonly modifiedMs: number | null;
   readonly versions: number;
   readonly chunks: number;
+  /** What is true *now*: `"missing"` when the path is gone. */
   readonly tierState: string;
+  /**
+   * What the last scan recorded. Kept beside `tierState` so the two stay
+   * distinguishable — `missing` is a fact about now, `resident` was a fact
+   * about then, and collapsing them loses which is which.
+   */
+  readonly recordedTierState: string;
+  readonly presentOnDisk: boolean;
+  /**
+   * Gated on the file still existing. Chunks of a deleted file are still in
+   * the index until the next sweep, but they cannot be verified against the
+   * source — and citable means exactly that they can.
+   */
   readonly citable: boolean;
+  readonly indexedForSearch: boolean;
+  /** Set only when the path is no longer on disk: what the figures describe. */
+  readonly note: string | null;
   readonly previousPaths: readonly string[];
   /**
    * Explicitly `null`, not absent: M1 extracts neither, and absence must stay

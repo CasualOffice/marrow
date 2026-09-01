@@ -1286,3 +1286,52 @@ mod conversations {
         }
     }
 }
+
+/// **A file the index remembers and the disk no longer has.**
+///
+/// `files.status = 'ACTIVE'` means the last reconciliation saw it, not that it
+/// is there now, and nothing marks one deleted between sweeps. This view
+/// answered from the index alone, so it reported `citable: true` and
+/// `tier_state: "resident"` for files that had been gone for hours — while
+/// MCP's `file_info`, the same question asked through the other surface,
+/// correctly called them missing. The app would offer to cite a file that is
+/// not there.
+#[test]
+fn a_file_deleted_since_the_last_scan_is_not_offered_as_citable() {
+    let (corpus, core) = watchable_workspace();
+    let path = corpus.path().join("gone.md");
+    std::fs::write(&path, "# Gone\n\nsomething worth citing.\n").expect("write");
+
+    reindex(&core, corpus.path());
+
+    // Canonicalized now, while it still exists: the root was authorized
+    // through a canonical path, and on macOS a tempdir is `/var/...` symlinked
+    // to `/private/var/...`. Resolved after the delete it could not be.
+    let p = std::fs::canonicalize(&path)
+        .expect("canonical")
+        .to_string_lossy()
+        .to_string();
+    let before = core.file_detail(&p).expect("detail");
+    assert!(before.present_on_disk);
+    assert!(before.citable, "it exists and is the user's");
+    assert_eq!(before.tier_state, "resident");
+    assert_eq!(before.note, None);
+
+    // Deleted behind the index's back, which is the ordinary case: watchers
+    // miss events by OS design and a sweep is hours away.
+    std::fs::remove_file(&path).expect("delete");
+
+    let after = core.file_detail(&p).expect("still recorded");
+    assert!(!after.present_on_disk);
+    assert!(!after.citable, "a file that is gone cannot be cited");
+    assert!(!after.indexed_for_search, "nor verified against its source");
+    assert_eq!(after.tier_state, "missing");
+    // Reported, not refused: a refusal is indistinguishable from "no such path
+    // in the index", which is a different fact and the wrong next move.
+    assert_eq!(
+        after.recorded_tier_state, "resident",
+        "what the scan saw is kept, because it is how a rename is told from a deletion"
+    );
+    assert!(after.note.is_some(), "must say what the figures describe");
+    assert_eq!(after.file_id, before.file_id, "still the same file");
+}
