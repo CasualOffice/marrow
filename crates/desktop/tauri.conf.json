@@ -39,7 +39,8 @@
       "icons/icon.png"
     ],
     "macOS": {
-      "minimumSystemVersion": "11.0"
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "-"
     },
     "resources": {
       "../model/worker/mlx_worker.py": "mlx_worker.py"

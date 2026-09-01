@@ -72,6 +72,28 @@ jobs:
           cargo install tauri-cli --version "^2" --locked || true
           cargo tauri build
 
+      # **The bundle must carry a valid signature, and v0.0.1 and v0.0.2 did
+      # not.** Tauri skips bundle signing when no identity is configured, so
+      # the app shipped with only the linker's adhoc signature on the Mach-O
+      # and no `_CodeSignature/CodeResources` at all. That runs fine on the
+      # machine that built it — a locally built app is not quarantined — and
+      # dies instantly on any Mac that downloaded it, because Gatekeeper
+      # evaluates the bundle, finds the signature invalid, and Apple Silicon
+      # makes that fatal. The symptom is the worst kind: one bounce in the
+      # Dock and no dialog, so nothing tells the user what happened.
+      #
+      # `signingIdentity: "-"` in `tauri.conf.json` fixes it. This step is
+      # here so that a regression in that config cannot ship silently again —
+      # the build fails rather than producing an app nobody can open.
+      - name: the bundled app must actually be signed
+        run: |
+          set -euo pipefail
+          app=target/release/bundle/macos/Marrow.app
+          test -f "$app/Contents/_CodeSignature/CodeResources" \
+            || { echo "::error::no _CodeSignature — the bundle was never signed"; exit 1; }
+          codesign --verify --deep --strict --verbose=2 "$app"
+          echo "signature is valid on disk"
+
       - name: collect
         id: collect
         run: |
