@@ -644,3 +644,79 @@ pub fn compute_by(
         })
         .collect()
 }
+
+/// One cell a lookup found, and where it is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Found {
+    /// The cell as written. **Not the typed value**: a lookup answers "what
+    /// does the sheet say here", and `$1,200` is the answer, not `1200`.
+    pub value: String,
+    /// `Q2!C7`. The whole reason this is a tool rather than a guess — an answer
+    /// that cannot be checked against the file is worth less than no answer.
+    pub reference: String,
+    /// 0-based, as the sheet is stored.
+    pub row: u32,
+}
+
+/// The cells of one column in every row another column matches.
+///
+/// **Every match, never the first.** A lookup that quietly returns one row when
+/// three qualify is the same defect this whole command exists to avoid: an
+/// answer that is accurate about what the code did and wrong about the user's
+/// data. Two rents in a ledger is normal, and being shown one of them without
+/// being told there is another is how a person acts on half a figure.
+pub fn lookup(
+    conn: &Connection,
+    version_id: VersionId,
+    reference: &str,
+    filter: &Where,
+    get: u32,
+) -> Result<Vec<Found>> {
+    let r = resolve(conn, version_id, reference)?;
+    let (r0, _, r1, _) = r.bounds;
+    let cells = cells_for(conn, &r.table_id)?;
+
+    let mut rows: Vec<u32> = cells
+        .iter()
+        .filter(|c| {
+            let row = c.row_idx as u32;
+            row >= r0
+                && row <= r1
+                && c.col_idx as u32 == filter.column
+                && filter.matches(&c.raw_text)
+        })
+        .map(|c| c.row_idx as u32)
+        .collect();
+    rows.sort_unstable();
+    rows.dedup();
+
+    if rows.is_empty() {
+        return Err(Error::new(
+            Code::CfgInvalid,
+            format!(
+                "No row in that range has `{}` in column {}.",
+                filter.equals,
+                marrow_core::a1::column_name(filter.column),
+            ),
+        ));
+    }
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            // A matching row whose wanted cell is empty is still a match. The
+            // blank is the answer — reporting nothing at all would say the row
+            // does not exist, which is a different and wrong claim.
+            let value = cells
+                .iter()
+                .find(|c| c.row_idx as u32 == row && c.col_idx as u32 == get)
+                .map(|c| c.raw_text.trim().to_owned())
+                .unwrap_or_default();
+            Found {
+                value,
+                reference: at(&r.sheet, row, get),
+                row,
+            }
+        })
+        .collect())
+}

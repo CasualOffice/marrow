@@ -264,8 +264,16 @@ recorded only in the Log (`a8362be`, `c2141d1`, `cd9b50f`, `e883546`) and in
       contribute here at all — calamine resolves the format code to `Other`, so
       `0.00%` and `$#,##0` are indistinguishable from a decimal (noted in
       `xlsx.rs`); the units seen in practice come from Markdown and DOCX
-- [~] `table compute`: sum / filter / group / lookup, citing cells — **sum,
-      filter and group done; lookup is what is left.** `--by A` gives one
+- [x] `table compute`: sum / filter / group / lookup, citing cells — **all
+      four done.** `lookup` reads a cell rather than combining several, so the
+      citation is the whole product: `--where 'A=Rent' --get B` returns every
+      matching row with the cell each came from. Every match, never the first —
+      two rents in a ledger is normal, and being handed one without being told
+      there is another is how a person acts on half a figure. A matching row
+      with an empty cell is still a match, because the blank is the answer and
+      reporting nothing would say the row does not exist.
+
+      Previously: sum, filter and group. `--by A` gives one
       result per distinct value, in the sheet's own order — a ledger is usually
       chronological and re-sorting it alphabetically discards that. It is
       `--where` run per key rather than a second implementation, so every guard

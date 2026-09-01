@@ -201,7 +201,7 @@ enum Cmd {
     ///
     ///   marrow table sum ~/q2.xlsx 'Q2!B4:B18'
     Table {
-        /// sum · mean · min · max · count
+        /// sum · mean · min · max · count · lookup
         op: String,
         /// The spreadsheet. Must already be indexed.
         path: String,
@@ -221,6 +221,9 @@ enum Cmd {
         /// cannot answer. Blank cells are not a group.
         #[arg(long = "by", value_name = "COL", conflicts_with = "filter")]
         by: Option<String>,
+        /// For `lookup`: the column to read from. `--get C`.
+        #[arg(long = "get", value_name = "COL")]
+        get: Option<String>,
     },
     /// Serve the index over MCP on stdio
     ///
@@ -443,12 +446,14 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
             range,
             filter,
             by,
+            get,
         } => table(
             op,
             path,
             range,
             filter.as_deref(),
             by.as_deref(),
+            get.as_deref(),
             cli.json,
             style,
             out,
@@ -849,16 +854,27 @@ fn table(
     range: &str,
     filter: Option<&str>,
     by: Option<&str>,
+    get: Option<&str>,
     json: bool,
     style: Style,
     out: &mut impl Write,
 ) -> Result<()> {
-    let op = marrow_query::table::Op::parse(op).ok_or_else(|| {
-        Error::new(
-            marrow_core::Code::CfgInvalid,
-            format!("`{op}` is not something this can compute. Use sum, mean, min, max or count."),
-        )
-    })?;
+    // `lookup` reads a cell rather than combining several, so it is not an
+    // `Op` and does not go through the numeric path at all.
+    let looking_up = op.eq_ignore_ascii_case("lookup");
+    let op = if looking_up {
+        marrow_query::table::Op::Count
+    } else {
+        marrow_query::table::Op::parse(op).ok_or_else(|| {
+            Error::new(
+                marrow_core::Code::CfgInvalid,
+                format!(
+                    "`{op}` is not something this can do. Use sum, mean, min, max, count \
+                     or lookup."
+                ),
+            )
+        })?
+    };
 
     let store = open_store()?;
     let conn = store.reader()?;
@@ -900,17 +916,28 @@ fn table(
         None => None,
     };
 
+    if looking_up {
+        let Some(w) = filter.as_ref() else {
+            return Err(Error::new(
+                marrow_core::Code::CfgInvalid,
+                "`lookup` needs to know which row. Add `--where 'A=Rent'`.".to_string(),
+            ));
+        };
+        let get = get.ok_or_else(|| {
+            Error::new(
+                marrow_core::Code::CfgInvalid,
+                "`lookup` needs to know which column to read. Add `--get C`.".to_string(),
+            )
+        })?;
+        let column = column_letter(get)?;
+        let found = marrow_query::table::lookup(&conn, version, range, w, column)?;
+        return render_found(&found, w, json, style, out);
+    }
+
     if let Some(by) = by {
         // Same column arithmetic as a filter's, so `--by A` and `--where A=…`
         // cannot disagree about which column `A` is.
-        let column = marrow_core::a1::parse_cell_ref(&format!("{}1", by.trim()))
-            .map(|(_, c)| c)
-            .ok_or_else(|| {
-                Error::new(
-                    marrow_core::Code::CfgInvalid,
-                    format!("`{by}` is not a column. Use a letter, like `--by A`."),
-                )
-            })?;
+        let column = column_letter(by)?;
         let groups = marrow_query::table::compute_by(&conn, version, op, range, column)?;
         return render_groups(&groups, op, range, column, json, style, out);
     }
@@ -1015,6 +1042,81 @@ fn table(
             )?;
         }
     }
+    Ok(())
+}
+
+/// `A`, `B`, `AA` → a column index.
+///
+/// One implementation, so `--by A`, `--get A` and `--where A=…` cannot
+/// disagree about which column `A` is.
+fn column_letter(s: &str) -> Result<u32> {
+    marrow_core::a1::parse_cell_ref(&format!("{}1", s.trim()))
+        .map(|(_, c)| c)
+        .ok_or_else(|| {
+            Error::new(
+                marrow_core::Code::CfgInvalid,
+                format!("`{s}` is not a column. Use a letter, like `A`."),
+            )
+        })
+}
+
+/// What a lookup found, one row each, with the cell it came from.
+///
+/// **Every match is shown.** Two rents in a ledger is normal, and being handed
+/// one of them without being told there is another is how a person acts on
+/// half a figure.
+fn render_found(
+    found: &[marrow_query::table::Found],
+    w: &marrow_query::table::Where,
+    json: bool,
+    style: Style,
+    out: &mut impl Write,
+) -> Result<()> {
+    if json {
+        writeln!(
+            out,
+            "{}",
+            serde_json::json!({
+                "matches": found.len(),
+                "where": {
+                    "column": marrow_core::a1::column_name(w.column),
+                    "equals": w.equals,
+                },
+                "results": found.iter().map(|f| serde_json::json!({
+                    "value": f.value,
+                    "cell": f.reference,
+                })).collect::<Vec<_>>(),
+            })
+        )?;
+        return Ok(());
+    }
+
+    let width = found
+        .iter()
+        .map(|f| f.value.chars().count())
+        .max()
+        .unwrap_or(0);
+    for f in found {
+        // An empty cell in a matching row is still an answer — the row exists
+        // and says nothing here, which is not the same as no row.
+        let shown = if f.value.is_empty() {
+            style.dim("(blank)")
+        } else {
+            style.bold(&f.value)
+        };
+        writeln!(out, "  {:<width$}  {}", shown, style.dim(&f.reference))?;
+    }
+    writeln!(
+        out,
+        "{}",
+        style.dim(&format!(
+            "{} row{} where {} is {}",
+            found.len(),
+            if found.len() == 1 { "" } else { "s" },
+            marrow_core::a1::column_name(w.column),
+            w.equals
+        ))
+    )?;
     Ok(())
 }
 

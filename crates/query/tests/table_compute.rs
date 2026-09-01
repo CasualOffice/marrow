@@ -390,3 +390,85 @@ mod grouping {
         assert!(err.message().contains('A'), "{}", err.message());
     }
 }
+
+/// `lookup` reads a cell rather than combining several, so citing it is the
+/// whole product: an answer that cannot be checked against the file is worth
+/// less than no answer.
+mod looking_up {
+    use super::*;
+    use marrow_query::table::{lookup, Where};
+
+    fn ledger() -> (
+        tempfile::TempDir,
+        marrow_store::Store,
+        marrow_core::VersionId,
+    ) {
+        workbook(&[
+            (0, 0, "Rent", "string"),
+            (0, 1, "1200", "decimal"),
+            (1, 0, "Food", "string"),
+            (1, 1, "300", "decimal"),
+            (2, 0, "Rent", "string"),
+            (2, 1, "800", "decimal"),
+        ])
+    }
+
+    #[test]
+    fn every_matching_row_comes_back_not_just_the_first() {
+        // **The defect this exists to avoid.** Two rents in a ledger is
+        // normal, and being handed one of them without being told there is
+        // another is how a person acts on half a figure.
+        let (_d, store, v) = ledger();
+        let conn = store.reader().expect("reader");
+        let w = Where::parse("A=Rent").expect("a filter");
+        let found = lookup(&conn, v, "Q2!A1:B3", &w, 1).expect("matches");
+        assert_eq!(found.len(), 2, "both rents: {found:?}");
+        assert_eq!(found[0].value, "1200");
+        assert_eq!(found[1].value, "800");
+    }
+
+    #[test]
+    fn each_answer_names_the_cell_it_came_from() {
+        let (_d, store, v) = ledger();
+        let conn = store.reader().expect("reader");
+        let w = Where::parse("A=Rent").expect("a filter");
+        let found = lookup(&conn, v, "Q2!A1:B3", &w, 1).expect("matches");
+        let refs: Vec<&str> = found.iter().map(|f| f.reference.as_str()).collect();
+        assert_eq!(refs, vec!["Q2!B1", "Q2!B3"]);
+    }
+
+    #[test]
+    fn the_value_is_what_the_sheet_shows_not_the_typed_reading() {
+        // A lookup answers "what does the sheet say here", so `$1,200` is the
+        // answer and `1200` is not.
+        let (_d, store, v) = workbook(&[(0, 0, "Rent", "string"), (0, 1, "$1,200", "currency")]);
+        let conn = store.reader().expect("reader");
+        let w = Where::parse("A=Rent").expect("a filter");
+        let found = lookup(&conn, v, "Q2!A1:B1", &w, 1).expect("matches");
+        assert_eq!(found[0].value, "$1,200");
+    }
+
+    #[test]
+    fn a_matching_row_with_an_empty_cell_is_still_a_match() {
+        // The blank is the answer. Reporting nothing would say the row does
+        // not exist, which is a different and wrong claim.
+        let (_d, store, v) = workbook(&[(0, 0, "Rent", "string"), (0, 1, "", "empty")]);
+        let conn = store.reader().expect("reader");
+        let w = Where::parse("A=Rent").expect("a filter");
+        let found = lookup(&conn, v, "Q2!A1:B1", &w, 1).expect("a match");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].value, "");
+        assert_eq!(found[0].reference, "Q2!B1");
+    }
+
+    #[test]
+    fn no_match_is_an_error_rather_than_an_empty_list() {
+        // An empty list reads as "the answer is nothing"; this reads as "the
+        // question does not apply to this range".
+        let (_d, store, v) = ledger();
+        let conn = store.reader().expect("reader");
+        let w = Where::parse("A=Holiday").expect("a filter");
+        let err = lookup(&conn, v, "Q2!A1:B3", &w, 1).expect_err("must refuse");
+        assert!(err.message().contains("Holiday"), "{}", err.message());
+    }
+}
