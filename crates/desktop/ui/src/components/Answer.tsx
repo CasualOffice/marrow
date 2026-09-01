@@ -9,11 +9,13 @@
  * side panel, and every line of the machinery that renders one without trusting
  * it lives in `ArtifactPanel.tsx`.
  *
- * The card is the whole of what the answer shows. A generated page inline was a
+ * **A diagram is drawn here; a generated page is not.** That argument — "a
  * 340px viewport of a document that wants a screen, sitting in the middle of a
- * 62-character column and taking the attention the prose around it needed;
- * three lines that say what was made, and open it properly, cost the answer
- * nothing and lose the reader nothing.
+ * 62-character column" — is about a *page*, and was never about a flow chart.
+ * Five boxes and four arrows are part of the sentence the answer is making,
+ * and a card reading "Diagram · 9 lines" is a receipt for something the reader
+ * could have been shown. So `html` keeps the card and the panel, and `mermaid`
+ * renders in the flow.
  */
 
 import { useEffect, useId, useMemo, useRef } from "react";
@@ -24,6 +26,7 @@ import { Icon } from "./Icon";
 import { linkCitations, parseAnswer, type Block } from "../lib/markdown";
 import {
   ARTIFACT_PANEL_ID,
+  Diagram,
   artifactSummary,
   artifactTitle,
 } from "./ArtifactPanel";
@@ -149,7 +152,24 @@ export function Answer({
           case "markdown":
             return <Prose key={i} html={b.html} citations={citations} />;
           case "mermaid":
-            return <ArtifactCard key={i} kind="mermaid" source={b.source} streaming={streaming} />;
+            /*
+             * **Inline, in the flow.** A diagram is part of the sentence the
+             * answer is making, and a card that says "Diagram · 9 lines" is a
+             * receipt for something the reader could simply have been shown.
+             *
+             * While it streams there is nothing to draw: a mermaid fence is a
+             * syntax error for most of its life, and rendering every keystroke
+             * would flicker an error box through the prose. The card stands in
+             * until the fence closes, which is the same thing `Diagram` would
+             * have shown anyway and costs no layout change when it arrives.
+             */
+            return streaming ? (
+              <ArtifactCard key={i} kind="mermaid" source={b.source} streaming />
+            ) : (
+              <div key={i} className={styles.diagram}>
+                <Diagram source={b.source} name={artifactTitle("mermaid", b.source)} />
+              </div>
+            );
           case "html":
             return <ArtifactCard key={i} kind="html" source={b.source} streaming={streaming} />;
         }

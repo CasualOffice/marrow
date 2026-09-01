@@ -240,3 +240,36 @@
 @keyframes blink {
   50% { opacity: 0; }
 }
+
+/*
+ * A diagram in the flow of an answer.
+ *
+ * Bounded, because "inline" is not "unbounded": a large graph would otherwise
+ * push the rest of the answer off the screen, and the reader loses the thread
+ * they were following. The drawing's own scroller pans within this; the zoom
+ * control is `Diagram`'s and sits over it.
+ */
+.diagram {
+  margin: var(--sp-5) 0;
+  max-height: 60vh;
+  min-height: 0;
+  border-radius: var(--r-surf);
+  box-shadow: var(--hairline);
+  background: var(--sunken);
+  /*
+   * **`block`, not `flex`, and the reason is the zoom.**
+   *
+   * `Diagram`'s own container is `display: flex` and its `<svg>` is
+   * `width: calc(100% * var(--zoom))` — a percentage, so it needs a parent
+   * with a definite width to be a percentage *of*. Making this a flex
+   * container turned that container into a flex item sized from its content,
+   * the percentage became circular, and the drawing collapsed to ~300px and
+   * would not grow however far the zoom went. `--zoom` was reaching the
+   * element the whole time; there was simply nothing for it to multiply.
+   *
+   * A plain block with `overflow: auto` is what the panel's own scroller is,
+   * for the same reason.
+   */
+  display: block;
+  overflow: auto;
+}

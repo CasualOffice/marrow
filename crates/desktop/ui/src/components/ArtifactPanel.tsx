@@ -315,6 +315,28 @@ function paperColour(): string {
  * only acceptable way to touch this markup — it was drawn from model output,
  * and an export is not a reason to start executing it.
  */
+/**
+ * Remove mermaid's inline `max-width` pin.
+ *
+ * **This is why zoom did nothing.** Mermaid writes `style="max-width: 812px"`
+ * onto the `<svg>` so a drawing fits whatever box it is in, and an inline
+ * style beats a stylesheet — so `.diagram svg { max-width: none }` lost, the
+ * element never grew past its pin, and `width: calc(100% * var(--zoom))` had
+ * nothing to widen into. The buttons changed the number and the picture stayed
+ * the same size.
+ *
+ * The export path had already found this and stripped it there. Stripping it
+ * in one place, used by both, is the difference between a fix and a second
+ * copy of a rule.
+ */
+function unpin(svg: Element): void {
+  const style = svg.getAttribute("style");
+  if (style === null) return;
+  const without = style.replace(/max-width\s*:[^;]*;?/gi, "").trim();
+  if (without === "") svg.removeAttribute("style");
+  else svg.setAttribute("style", without);
+}
+
 function standalone(markup: string): { xml: string; box: Box } {
   const doc = new DOMParser().parseFromString(markup, "image/svg+xml");
   const svg = doc.documentElement;
@@ -330,13 +352,9 @@ function standalone(markup: string): { xml: string; box: Box } {
   svg.setAttribute("height", String(Math.round(box.h)));
   svg.setAttribute("viewBox", `${box.x} ${box.y} ${box.w} ${box.h}`);
 
-  // Mermaid pins `max-width` inline so a drawing fits the panel it is in. Left
-  // in a file, that is the one rule that makes it open at the wrong size in
-  // every viewer that is not this panel.
-  const style = svg.getAttribute("style");
-  if (style !== null) {
-    svg.setAttribute("style", style.replace(/max-width\s*:[^;]*;?/gi, "").trim());
-  }
+  // Mermaid pins `max-width` inline. Left in a file, that is the one rule that
+  // makes it open at the wrong size in every viewer that is not this panel.
+  unpin(svg);
 
   /*
    * The paper, painted in.
@@ -426,7 +444,21 @@ const ZOOM_STEP = 1.25;
 
 const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
 
-function Diagram({ source, name }: { source: string; name: string }) {
+/**
+ * A rendered mermaid diagram, with its zoom and its export.
+ *
+ * **Exported so the answer can draw one inline.** A diagram is part of the
+ * sentence the answer is making — five boxes and four arrows — and putting it
+ * behind a click, in a panel sized for a document, is more ceremony than the
+ * thing is worth. The generated-page card keeps the panel, because a page
+ * really does want a screen.
+ *
+ * Safe to render in the main document because of how it is rendered, not
+ * because of where: mermaid runs in `securityLevel: "strict"` with
+ * `htmlLabels: false`, so a diagram cannot carry a click handler and its
+ * labels are SVG `<text>` rather than HTML.
+ */
+export function Diagram({ source, name }: { source: string; name: string }) {
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
@@ -467,7 +499,15 @@ function Diagram({ source, name }: { source: string; name: string }) {
         })
         .then((r) => {
           if (live) {
-            setSvg(r.svg);
+            // Unpinned before it is shown, not only before it is exported.
+            const doc = new DOMParser().parseFromString(r.svg, "image/svg+xml");
+            const el = doc.documentElement;
+            if (el.localName === "svg") {
+              unpin(el);
+              setSvg(new XMLSerializer().serializeToString(el));
+            } else {
+              setSvg(r.svg);
+            }
             setError(null);
           }
         })

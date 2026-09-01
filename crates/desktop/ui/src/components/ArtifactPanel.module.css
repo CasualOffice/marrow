@@ -249,6 +249,20 @@
   width: calc(100% * var(--zoom, 1));
   max-width: none;
   height: auto;
+  /*
+   * **And `flex: none`, or the zoom does nothing at all.**
+   *
+   * `.diagram` is a flex container, so the drawing is a flex *item*, and a
+   * flex item defaults to `flex-shrink: 1`. Asking for 195% of a 508px column
+   * asks for 993px, which does not fit — so it was shrunk straight back to
+   * 508px. Measured: `--zoom` reached the element, the computed width was
+   * exactly 100%, and the buttons changed a number that could not move the
+   * picture.
+   *
+   * Overflowing is the point. The scroller around it is what the reader pans
+   * with, and a drawing that always fits has nothing to pan.
+   */
+  flex: none;
 }
 
 /* Sits over the diagram rather than in the flow, so it does not move when the
