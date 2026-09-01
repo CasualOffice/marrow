@@ -422,7 +422,25 @@ wrong.
 
 - [x] Format-aware chunker with structural context prefix — landed in M1
   (structural boundaries, context prefix instead of overlap)
-- [ ] Chunk-stable IDs; IR diffing so unchanged chunks keep their vectors
+- [-] Chunk-stable IDs; IR diffing so unchanged chunks keep their vectors —
+      **dropped: the stated purpose is met another way.** The content-addressed
+      embedding cache (schema v8) means an unchanged chunk keeps its vector
+      through a re-chunk without its id being stable, because the vector is
+      keyed on the text rather than on the chunk. Measured: a forced re-chunk
+      wiped 200 vectors and re-embedding recomputed none of them.
+
+      Checked before dropping it. Only two things reference `chunk_id` —
+      `chunk_embeddings` and `text_index_docs` — both derived, both cascading,
+      both rebuilt anyway. Conversations deliberately store citations as the
+      JSON that was shown rather than joining on `chunk_id` (see the note above
+      `SCHEMA_V5`), so reopening an old thread is already immune. Nothing
+      outside the database holds a chunk id at all.
+
+      What stable ids would still buy is narrower than the item claims and is a
+      write cost, not a correctness one: a re-chunk rewrites every chunk row
+      and its FTS5 document even where the text did not move. On 894,493 chunks
+      that is real write amplification. Worth reopening if a chunker change
+      becomes routine; not worth IR diffing for the reason originally given
 - [x] Embedding provider trait — `EmbeddingProvider` in `model/src/provider.rs`
 - [x] Local embeddings — **neither Candle nor Ollama.** An MLX embedder in its
   own worker process ([D55](DECISIONS.md)); Ollama/LM Studio are detected if
