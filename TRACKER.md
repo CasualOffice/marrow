@@ -273,7 +273,12 @@ recorded only in the Log (`a8362be`, `c2141d1`, `cd9b50f`, `e883546`) and in
       with an empty cell is still a match, because the blank is the answer and
       reporting nothing would say the row does not exist.
 
-      Previously: sum, filter and group. `--by A` gives one
+      Previously: sum, filter and group.
+
+      Exposed over MCP as `compute_table`, which is the surface it exists for:
+      there the caller *is* a model, and `read_table` handing it the numbers to
+      add was the exact thing "computed here, not read out by a model" refuses.
+      Eleven tools became twelve. `--by A` gives one
       result per distinct value, in the sheet's own order — a ledger is usually
       chronological and re-sorting it alphabetically discards that. It is
       `--where` run per key rather than a second implementation, so every guard

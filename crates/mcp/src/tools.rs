@@ -220,6 +220,71 @@ whole.",
         },
     },
     Tool {
+        name: "compute_table",
+        description: "\
+Add up a range of spreadsheet cells — sum, mean, min, max, count — or look one \
+up by another column. **Computed here, not by you.**
+
+Prefer this over reading the numbers with `read_table` and adding them \
+yourself. You will usually add forty numbers correctly and you have no way to \
+tell the user when you did not; this uses the typed values the parser recorded \
+and reports exactly which cells contributed.
+
+**It says what it skipped.** A total over eighteen cells where three held text \
+is not a total over eighteen cells. `skipped` names each one and why, and any \
+answer quoted to a user should carry that.
+
+**It refuses to combine units.** A range spanning currency and percentages, or \
+dollars and euros, is an error rather than a number — both parse as numbers and \
+adding them produces a figure that looks exactly as confident as a correct one.
+
+`value` is null, never 0, when no cell in the range held a number: a column of \
+`n/a` totalling zero reads as \"this cost nothing\" and means \"there is nothing \
+here to add\". `count` is the exception and is genuinely 0.
+
+`where` narrows to the rows a column matches — `A=Rent` — and the column tested \
+need not be inside the range being totalled. `by` gives one result per distinct \
+value of a column instead of a single total. `lookup` with `where` and `get` \
+returns the cell in `get` for every matching row, each with the cell address it \
+came from; it returns every match, never just the first.
+
+Refuses files that are not indexed, and cloud-only placeholder files whose \
+contents were never read.",
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path to an indexed file."
+                    },
+                    "range": {
+                        "type": "string",
+                        "description": "The range as the spreadsheet writes it: `B4:B18`, or `Q2!B4:B18` to name the sheet. Required when the file has more than one table."
+                    },
+                    "op": {
+                        "type": "string",
+                        "enum": ["sum", "mean", "min", "max", "count", "lookup"],
+                        "description": "What to do with the numbers. Defaults to sum."
+                    },
+                    "where": {
+                        "type": "string",
+                        "description": "Only rows where a column matches, as `A=Rent`. Matched against the cell's text, trimmed, ignoring case."
+                    },
+                    "by": {
+                        "type": "string",
+                        "description": "A column letter. One result per distinct value in it, instead of one total."
+                    },
+                    "get": {
+                        "type": "string",
+                        "description": "For `lookup`: the column letter to read the answer from."
+                    }
+                },
+                "required": ["path", "range"]
+            })
+        },
+    },
+    Tool {
         name: "file_info",
         description: "\
 Everything Marrow knows about one file: its stable identity, content hash, \
@@ -626,6 +691,10 @@ mod tests {
         ),
         ("read_file", &["path", "start_line", "end_line"]),
         ("read_table", &["path", "table"]),
+        (
+            "compute_table",
+            &["path", "range", "op", "where", "by", "get"],
+        ),
         ("file_info", &["path"]),
         ("list_workspaces", &[]),
         ("index_status", &[]),

@@ -116,6 +116,7 @@ impl Server {
             "read_file" => self.read_file(&args),
             "file_info" => self.file_info(&args),
             "read_table" => self.read_table(&args),
+            "compute_table" => self.compute_table(&args),
             "list_workspaces" => self.list_workspaces(),
             "index_status" => self.index_status(),
             "create_file" | "create_diagram" | "create_page" => self.create(name, &args),
@@ -248,6 +249,14 @@ impl Server {
             "branches": found.branches,
             "results": results,
         }))
+    }
+
+    /// `A`, `B`, `AA` → a column index. One implementation, so `by`, `get` and
+    /// `where` cannot disagree about which column `A` is.
+    fn column_letter(s: &str) -> Result<u32> {
+        marrow_core::a1::parse_cell_ref(&format!("{}1", s.trim()))
+            .map(|(_, c)| c)
+            .ok_or_else(|| bad("That is not a column. Use a letter, like `A`."))
     }
 
     /// The escape hatch (CAP-005), over MCP.
@@ -525,6 +534,138 @@ impl Server {
     ///
     /// Every cell carries its own span (TBL-002), so a claim about a number can
     /// cite the cell it came from rather than the file it was somewhere inside.
+    /// Arithmetic over a range, done here rather than by the caller.
+    ///
+    /// **This is the surface the feature exists for.** A model handed forty
+    /// numbers as text will usually add them correctly and has no way to tell
+    /// you when it did not — and over MCP the caller *is* a model. `read_table`
+    /// hands it the numbers; this hands it the answer, with the cells that did
+    /// not count and a refusal when the units do not combine.
+    /// The version of an indexed, resident file — or the refusal that says why
+    /// not.
+    ///
+    /// Shared by every tool that reads a file's contents, because the two
+    /// refusals are the same two every time: this is not a general filesystem
+    /// tool, and never hydrate a placeholder.
+    fn indexed_version(
+        &self,
+        conn: &marrow_store::rusqlite::Connection,
+        path: &str,
+    ) -> Result<marrow_core::VersionId> {
+        let row: Option<(String, String)> = conn
+            .query_row(
+                "SELECT f.current_version_id, f.tier_state FROM files f
+                  WHERE f.current_path = ?1 AND f.status = 'ACTIVE' LIMIT 1",
+                [path],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok();
+        let Some((version_id, tier)) = row else {
+            return Err(bad(
+                "That file is not indexed. Call list_workspaces to see which folders \
+                 Marrow has been granted.",
+            ));
+        };
+        if tier != "RESIDENT" {
+            return Err(bad(
+                "That file is cloud-only, so its contents were never read.",
+            ));
+        }
+        version_id
+            .parse()
+            .map_err(|_| marrow_core::Error::invariant("a malformed version id"))
+    }
+
+    fn compute_table(&self, args: &Value) -> Result<Value> {
+        let path = args
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| bad("`path` is required."))?;
+        let range = args
+            .get("range")
+            .and_then(Value::as_str)
+            .ok_or_else(|| bad("`range` is required — for example `Q2!B4:B18`."))?;
+        let op_name = args.get("op").and_then(Value::as_str).unwrap_or("sum");
+
+        let filter = match args.get("where").and_then(Value::as_str) {
+            Some(raw) => Some(marrow_query::table::Where::parse(raw).ok_or_else(|| {
+                bad("`where` must be a column letter, `=`, and the text to match — `A=Rent`.")
+            })?),
+            None => None,
+        };
+
+        let conn = self.store.reader()?;
+        let version_id = self.indexed_version(&conn, path)?;
+
+        // `lookup` reads a cell rather than combining several, so it answers
+        // with text and an address rather than a number.
+        if op_name.eq_ignore_ascii_case("lookup") {
+            let w = filter
+                .as_ref()
+                .ok_or_else(|| bad("`lookup` needs `where` to say which row."))?;
+            let get = args
+                .get("get")
+                .and_then(Value::as_str)
+                .ok_or_else(|| bad("`lookup` needs `get` to say which column to read."))?;
+            let column = Self::column_letter(get)?;
+            let found = marrow_query::table::lookup(&conn, version_id, range, w, column)?;
+            return Ok(json!({
+                "path": path,
+                "matches": found.len(),
+                "results": found.iter().map(|f| json!({
+                    "value": f.value,
+                    // The citation. An answer that cannot be checked against
+                    // the file is worth less than no answer.
+                    "cell": f.reference,
+                })).collect::<Vec<_>>(),
+            }));
+        }
+
+        let op = marrow_query::table::Op::parse(op_name)
+            .ok_or_else(|| bad("`op` must be sum, mean, min, max, count or lookup."))?;
+
+        if let Some(by) = args.get("by").and_then(Value::as_str) {
+            let column = Self::column_letter(by)?;
+            let groups = marrow_query::table::compute_by(&conn, version_id, op, range, column)?;
+            return Ok(json!({
+                "path": path,
+                "op": op.as_str(),
+                "range": range,
+                "grouped_by": marrow_core::a1::column_name(column),
+                "groups": groups.iter().map(|g| json!({
+                    "key": g.key,
+                    "value": g.computed.value,
+                    "contributing_cells": g.computed.contributing,
+                    "skipped_cells": g.computed.skipped.len(),
+                })).collect::<Vec<_>>(),
+            }));
+        }
+
+        let c = marrow_query::table::compute(&conn, version_id, op, range, filter.as_ref())?;
+        Ok(json!({
+            "path": path,
+            "op": c.op.as_str(),
+            "sheet": c.sheet,
+            "range": c.range,
+            // `null` rather than 0 when nothing held a number: a column of
+            // `n/a` totalling zero reads as "this cost nothing".
+            "value": c.value,
+            "contributing_cells": c.contributing,
+            // Never a bare count. A total over eighteen cells where three held
+            // text is not a total over eighteen cells, and the caller has to be
+            // able to say which three.
+            "skipped": c.skipped.iter().map(|s| json!({
+                "cell": s.reference,
+                "text": s.raw_text,
+                "reason": s.reason,
+            })).collect::<Vec<_>>(),
+            "filtered_by": c.filtered_by.as_ref().map(|w| json!({
+                "column": marrow_core::a1::column_name(w.column),
+                "equals": w.equals,
+            })),
+        }))
+    }
+
     fn read_table(&self, args: &Value) -> Result<Value> {
         let path = args
             .get("path")

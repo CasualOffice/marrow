@@ -966,6 +966,29 @@ mod indexed {
         assert_eq!(payload["branches"], json!(["lexical"]));
     }
 
+    /// **The surface `table compute` exists for.** Over MCP the caller is a
+    /// model, and a model handed forty numbers as text will usually add them
+    /// correctly and cannot tell anyone when it did not. Shipping the feature
+    /// to the CLI alone left the one surface where it matters reading the
+    /// numbers out instead.
+    #[test]
+    fn compute_table_is_reachable_and_refuses_a_file_that_is_not_indexed() {
+        let (_d, s) = lease();
+        let out = call(
+            &s,
+            "compute_table",
+            json!({ "path": "/nowhere/ledger.xlsx", "range": "B1:B9" }),
+        );
+        assert_eq!(out["result"]["isError"], json!(true));
+        let msg = out["result"]["content"][0]["text"]
+            .as_str()
+            .expect("a message");
+        assert!(
+            msg.contains("not indexed"),
+            "must say why, not just fail: {msg}"
+        );
+    }
+
     #[test]
     fn an_unknown_match_mode_is_refused_and_names_the_ones_that_exist() {
         let (_d, s) = lease();
