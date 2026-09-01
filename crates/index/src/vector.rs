@@ -39,6 +39,46 @@ pub const MODEL_META_KEY: &str = "vector_index_model";
 /// `search` says so once rather than getting quietly slower.
 const BRUTE_FORCE_CEILING: usize = 1_000_000;
 
+/// **Migration 8 — the embedding cache.**
+///
+/// Its own migration rather than an addition to [`MIGRATION`], which every
+/// existing database has already applied and will never run again. The number
+/// is the next free one in the chain across both crates: `marrow-store` took
+/// 7 for `chunks.source_span`.
+pub const CACHE_MIGRATION: Migration = Migration {
+    version: 8,
+    name: "m8_embedding_cache",
+    up: r#"
+-- **The embedding cache. Content-addressed, and deliberately not tied to a
+-- chunk.**
+--
+-- `chunk_embeddings` cascades from `chunks`, so re-chunking destroys every
+-- vector: a chunker change, or a scan resumed after a kill, throws away work
+-- measured in hours. `chunks.text_hash` has carried the comment "embedding
+-- cache key (EMB-008)" since the first migration and nothing ever used it as
+-- one.
+--
+-- Keyed on the text rather than the chunk, so the same paragraph embeds once
+-- however many chunks hold it. On the author's index that is not a marginal
+-- saving: 894,493 active chunks share 175,066 distinct texts, and 104,027 of
+-- those texts appear more than once.
+--
+-- The model is part of the key because a vector means nothing without the
+-- model that produced it. Swapping models clears this table along with
+-- `chunk_embeddings` — keeping the old model's vectors would let a swap back
+-- be instant, and would also let the cache grow without bound on a machine
+-- whose disk has already filled twice.
+CREATE TABLE embedding_cache (
+    text_hash    TEXT NOT NULL,
+    model_id     TEXT NOT NULL,
+    dims         INTEGER NOT NULL,
+    vector       BLOB NOT NULL,
+    created_at   INTEGER NOT NULL,
+    PRIMARY KEY (text_hash, model_id)
+) WITHOUT ROWID;
+"#,
+};
+
 pub const MIGRATION: Migration = Migration {
     version: VECTOR_INDEX_VERSION,
     name: "m4_vector_index",
@@ -102,6 +142,13 @@ impl SqliteVectorIndex {
         self.writer.submit(move |conn| {
             conn.execute("DELETE FROM chunk_embeddings", [])
                 .map_err(|e| marrow_store::map_sqlite(e, "clearing embeddings"))?;
+            // **The cache goes with them.** A vector means nothing without the
+            // model that made it, and keeping the old model's entries would
+            // let the cache grow without bound for the sake of making a swap
+            // back instant — a trade the wrong way round on a machine that has
+            // filled its disk.
+            conn.execute("DELETE FROM embedding_cache", [])
+                .map_err(|e| marrow_store::map_sqlite(e, "clearing the embedding cache"))?;
             conn.execute(
                 "INSERT INTO schema_meta (key, value) VALUES (?1, ?2)
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -640,5 +687,166 @@ mod tests {
         assert!(idx.search(&q).unwrap().is_empty());
         assert_eq!(idx.doc_count().unwrap(), 0);
         assert_eq!(idx.model_id().unwrap(), None);
+    }
+}
+
+/// Vectors already computed for these texts, under the current model.
+///
+/// The key is the text, not the chunk: the same paragraph in four files embeds
+/// once. Returns only what it has — a miss is ordinary and the caller embeds it.
+pub fn cached(
+    conn: &marrow_store::rusqlite::Connection,
+    model_id: &str,
+    hashes: &[String],
+) -> Result<std::collections::HashMap<String, Embedding>> {
+    let mut out = std::collections::HashMap::new();
+    if hashes.is_empty() {
+        return Ok(out);
+    }
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT dims, vector FROM embedding_cache WHERE text_hash = ?1 AND model_id = ?2",
+        )
+        .map_err(|e| marrow_store::map_sqlite(e, "reading the embedding cache"))?;
+    for h in hashes {
+        let row: Option<(i64, Vec<u8>)> = match stmt
+            .query_row(marrow_store::rusqlite::params![h, model_id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
+            }) {
+            Ok(v) => Some(v),
+            Err(marrow_store::rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(marrow_store::map_sqlite(e, "reading a cached embedding")),
+        };
+        if let Some((dims, blob)) = row {
+            // `from_bytes` refuses a truncated blob rather than decoding a
+            // narrower vector, which would silently stop matching anything and
+            // read as "semantic search found nothing". A row that fails here is
+            // corrupt rather than stale, and skipping it re-embeds the text —
+            // the safe direction.
+            match Embedding::from_bytes(&blob) {
+                Some(v) if v.dims() as i64 == dims => {
+                    out.insert(h.clone(), v);
+                }
+                _ => tracing::warn!(
+                    text_hash = %h,
+                    "a cached embedding would not decode; it will be recomputed"
+                ),
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Remember these vectors by their text, so re-chunking does not throw them away.
+pub fn cache(
+    conn: &marrow_store::rusqlite::Connection,
+    model_id: &str,
+    now: marrow_core::Timestamp,
+    entries: &[(String, Embedding)],
+) -> Result<()> {
+    let mut stmt = conn
+        .prepare_cached(
+            "INSERT INTO embedding_cache (text_hash, model_id, dims, vector, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(text_hash, model_id) DO NOTHING",
+        )
+        .map_err(|e| marrow_store::map_sqlite(e, "writing the embedding cache"))?;
+    for (hash, v) in entries {
+        stmt.execute(marrow_store::rusqlite::params![
+            hash,
+            model_id,
+            v.dims() as i64,
+            v.to_bytes(),
+            now.as_millis(),
+        ])
+        .map_err(|e| marrow_store::map_sqlite(e, "writing a cached embedding"))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use marrow_store::Store;
+
+    fn store() -> (tempfile::TempDir, Store) {
+        let d = tempfile::tempdir().expect("tempdir");
+        let s = Store::open_with_migrations(d.path().join("m.sqlite"), crate::MIGRATIONS)
+            .expect("store");
+        (d, s)
+    }
+
+    fn put(s: &Store, model: &str, entries: Vec<(String, Embedding)>) {
+        let m = model.to_string();
+        let at = marrow_core::Timestamp::now();
+        s.writer()
+            .submit(move |c| cache(c, &m, at, &entries))
+            .expect("submit");
+        s.flush().expect("flush");
+    }
+
+    /// **The whole point: a vector outlives the chunk it was made for.**
+    ///
+    /// `chunk_embeddings` cascades from `chunks`, so a re-chunk — a chunker
+    /// change, or a scan resumed after a kill — destroys every vector and the
+    /// next backfill recomputes work measured in hours. The cache is keyed on
+    /// the text and has no foreign key to a chunk, so it survives.
+    #[test]
+    fn a_cached_vector_survives_the_chunk_it_was_made_for() {
+        let (_d, s) = store();
+        let v = Embedding::new(vec![0.1, 0.2, 0.3]).expect("a vector");
+        put(&s, "bge-small", vec![("hash-a".into(), v.clone())]);
+
+        // Nothing here references a chunk row, so there is nothing for a
+        // delete to cascade through.
+        let conn = s.reader().expect("reader");
+        let got = cached(&conn, "bge-small", &["hash-a".to_string()]).expect("read");
+        let back = got.get("hash-a").expect("still there");
+        assert!((v.similarity(back).expect("same width") - 1.0).abs() < 1e-6);
+    }
+
+    /// A vector means nothing without the model that produced it.
+    #[test]
+    fn a_vector_is_not_reused_across_models() {
+        let (_d, s) = store();
+        let v = Embedding::new(vec![1.0, 0.0]).expect("a vector");
+        put(&s, "bge-small", vec![("hash-a".into(), v)]);
+
+        let conn = s.reader().expect("reader");
+        let other = cached(&conn, "a-different-model", &["hash-a".to_string()]).expect("read");
+        assert!(
+            other.is_empty(),
+            "reusing another model's vector would silently poison every comparison"
+        );
+    }
+
+    #[test]
+    fn a_miss_is_ordinary_and_returns_nothing_rather_than_failing() {
+        let (_d, s) = store();
+        let conn = s.reader().expect("reader");
+        let got = cached(&conn, "bge-small", &["never-seen".to_string()]).expect("not an error");
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn re_caching_the_same_text_keeps_the_first_vector_rather_than_erroring() {
+        // The backfill can meet the same text twice across runs. Writing must
+        // converge rather than conflict.
+        let (_d, s) = store();
+        let a = Embedding::new(vec![1.0, 0.0]).expect("a");
+        put(&s, "m", vec![("h".into(), a.clone())]);
+        put(
+            &s,
+            "m",
+            vec![("h".into(), Embedding::new(vec![0.0, 1.0]).expect("b"))],
+        );
+
+        let conn = s.reader().expect("reader");
+        let got = cached(&conn, "m", &["h".to_string()]).expect("read");
+        let back = got.get("h").expect("present");
+        assert!(
+            (a.similarity(back).expect("same width") - 1.0).abs() < 1e-6,
+            "the same text under the same model has one answer; the first stands"
+        );
     }
 }

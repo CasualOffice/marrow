@@ -153,6 +153,20 @@ pub fn run(
             render::duration(elapsed.as_millis())
         ))
     )?;
+    // **Said separately, because they are different claims.** "40,000
+    // embedded" and "40,000 embedded, 32,000 of them recalled from a previous
+    // run" describe different amounts of work, and a rate computed over the
+    // total would report a machine four times faster than it is.
+    if outcome.reused > 0 {
+        writeln!(
+            out,
+            "{}",
+            style.dim(&format!(
+                "{} of those were already known and were not recomputed.",
+                render::count(outcome.reused)
+            ))
+        )?;
+    }
 
     // Both early exits say how much is left. "32 could not be embedded" on its
     // own reads as "the rest finished", and a failed batch **stops the run** —
@@ -201,6 +215,8 @@ fn summary(
         "model_id": model.as_ref().map(|e| e.id.clone()),
         "chunks_before": before,
         "embedded": outcome.embedded,
+        // How many of those came from the cache rather than the model.
+        "reused": outcome.reused,
         "failed": outcome.failed,
         "cancelled": outcome.cancelled,
         "remaining": remaining,
@@ -305,6 +321,7 @@ mod tests {
     fn a_stopped_run_reports_what_is_left_rather_than_implying_completion() {
         let outcome = backfill::Outcome {
             embedded: 64,
+            reused: 0,
             failed: 0,
             cancelled: true,
         };

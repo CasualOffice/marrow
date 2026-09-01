@@ -51,16 +51,17 @@ pub mod vector;
 /// `marrow mcp` against a real index failed with
 /// `CFG_UNSUPPORTED_VERSION`. One list is the fix: adding a migration here
 /// reaches every binary at once.
-pub const MIGRATIONS: &[marrow_store::migrate::Migration] = &[fts5::MIGRATION, vector::MIGRATION];
+pub const MIGRATIONS: &[marrow_store::migrate::Migration] =
+    &[fts5::MIGRATION, vector::MIGRATION, vector::CACHE_MIGRATION];
 
 /// The version a database is at once [`MIGRATIONS`] has been applied over
 /// `marrow-store`'s chain.
 ///
 /// Distinct from [`marrow_core::SCHEMA_VERSION`], which is only what
 /// `marrow-store` alone would apply. The two agree whenever the store holds the
-/// highest number in the chain, which it does at 7; they part again the next
+/// highest number in the chain. They parted again at 8, which this crate took
 /// time this crate takes one.
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 pub use fts5::{Fts5Index, StoreChunkSource};
 pub use literal::{

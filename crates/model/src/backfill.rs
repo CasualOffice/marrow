@@ -42,6 +42,11 @@ impl Progress {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Outcome {
     pub embedded: u64,
+    /// Vectors taken from the cache rather than computed. Reported separately
+    /// because "40,000 embedded" and "40,000 embedded, 32,000 of them recalled
+    /// from a previous run" are different claims about what the machine just
+    /// spent an hour doing.
+    pub reused: u64,
     /// Chunks that could not be embedded. Counted rather than fatal: one bad
     /// chunk must not stop the other 59,999.
     pub failed: u64,
@@ -56,6 +61,15 @@ struct Pending {
     version_id: VersionId,
     workspace_id: WorkspaceId,
     text: String,
+    /// **The cache key: a hash of the text that is actually embedded**, which
+    /// is the heading chain *plus* the body (CHK-002), not the body alone.
+    ///
+    /// `chunks.text_hash` was the obvious candidate and is wrong: it hashes
+    /// the body only, so "renews on 31 December" under *Termination* and the
+    /// same sentence under *Rent review* would share a cache entry and
+    /// therefore a vector — collapsing the distinction the prefix exists to
+    /// make, silently, in the direction of worse retrieval.
+    text_hash: String,
 }
 
 /// How many chunks still have no vector.
@@ -137,6 +151,7 @@ fn next_batch(store: &Store, limit: usize) -> Result<Vec<Pending>> {
             file_id,
             version_id,
             workspace_id,
+            text_hash: marrow_core::ContentHash::of(text.as_bytes()).to_hex(),
             text,
         });
     }
@@ -179,32 +194,91 @@ pub fn run(
             break;
         }
 
-        let texts: Vec<String> = batch.iter().map(|p| p.text.clone()).collect();
-        let embeddings = match embedder.embed(&texts) {
-            Ok(v) => v,
-            Err(e) => {
-                // One bad batch must not stop the other 59,000 chunks. The
-                // batch is counted as failed and skipped — and because the
-                // loop re-asks the store, a batch that keeps failing would
-                // spin, so it stops instead.
-                tracing::warn!(error = %e, count = batch.len(), "a batch could not be embedded");
-                outcome.failed += batch.len() as u64;
-                progress
-                    .failed
-                    .fetch_add(batch.len() as u64, Ordering::Relaxed);
-                break;
+        // **What has been embedded before is not embedded again.** The cache
+        // is keyed on the text, so this covers two different savings at once:
+        // a chunk whose vector was thrown away by a re-chunk, and a paragraph
+        // that simply appears in several files. On the author's index the
+        // second is not marginal — 894,493 active chunks share 175,066
+        // distinct texts.
+        let hashes: Vec<String> = batch.iter().map(|p| p.text_hash.clone()).collect();
+        let known = {
+            let conn = store.reader()?;
+            marrow_index::vector::cached(&conn, embedder.model_id(), &hashes)?
+        };
+
+        // Embed each distinct unknown text once, not once per chunk that holds
+        // it. Two chunks with the same text in one batch is the ordinary case
+        // for boilerplate, and asking the model twice for one answer is the
+        // thing this whole change is about.
+        let mut wanted: Vec<String> = Vec::new();
+        for p in &batch {
+            if !known.contains_key(&p.text_hash) && !wanted.contains(&p.text_hash) {
+                wanted.push(p.text_hash.clone());
+            }
+        }
+        let to_embed: Vec<String> = wanted
+            .iter()
+            .filter_map(|h| {
+                batch
+                    .iter()
+                    .find(|p| &p.text_hash == h)
+                    .map(|p| p.text.clone())
+            })
+            .collect();
+
+        let fresh = if to_embed.is_empty() {
+            Vec::new()
+        } else {
+            match embedder.embed(&to_embed) {
+                Ok(v) => v,
+                Err(e) => {
+                    // One bad batch must not stop the other 59,000 chunks. The
+                    // batch is counted as failed and skipped — and because the
+                    // loop re-asks the store, a batch that keeps failing would
+                    // spin, so it stops instead.
+                    tracing::warn!(error = %e, count = batch.len(), "a batch could not be embedded");
+                    outcome.failed += batch.len() as u64;
+                    progress
+                        .failed
+                        .fetch_add(batch.len() as u64, Ordering::Relaxed);
+                    break;
+                }
             }
         };
 
+        let new_entries: Vec<(String, marrow_index::Embedding)> =
+            wanted.iter().cloned().zip(fresh.iter().cloned()).collect();
+        if !new_entries.is_empty() {
+            // Written before the chunk rows, so a kill between the two loses
+            // the cheap half. The reverse would lose the expensive half and
+            // re-embed on the next run, which is the failure this exists to
+            // prevent.
+            let entries = new_entries.clone();
+            let model = embedder.model_id().to_string();
+            let at = marrow_core::Timestamp::now();
+            store
+                .writer()
+                .submit(move |conn| marrow_index::vector::cache(conn, &model, at, &entries))?;
+        }
+
+        let by_hash: std::collections::HashMap<&str, &marrow_index::Embedding> = known
+            .iter()
+            .map(|(h, v)| (h.as_str(), v))
+            .chain(new_entries.iter().map(|(h, v)| (h.as_str(), v)))
+            .collect();
+
+        outcome.reused += known.len() as u64;
+
         let docs: Vec<VectorDoc> = batch
             .iter()
-            .zip(embeddings)
-            .map(|(p, embedding)| VectorDoc {
-                chunk_id: p.chunk_id,
-                file_id: p.file_id,
-                version_id: p.version_id,
-                workspace_id: p.workspace_id,
-                embedding,
+            .filter_map(|p| {
+                by_hash.get(p.text_hash.as_str()).map(|e| VectorDoc {
+                    chunk_id: p.chunk_id,
+                    file_id: p.file_id,
+                    version_id: p.version_id,
+                    workspace_id: p.workspace_id,
+                    embedding: (*e).clone(),
+                })
             })
             .collect();
         let n = docs.len() as u64;
@@ -337,6 +411,43 @@ mod tests {
             }])
             .unwrap();
         assert_eq!(remaining(&f.store).unwrap(), 1);
+    }
+
+    /// **The cache key covers the heading, not just the body.**
+    ///
+    /// `chunks.text_hash` was the obvious key — it has carried the comment
+    /// "embedding cache key (EMB-008)" since the first migration — and it is
+    /// wrong: it hashes the body alone, while what gets embedded is the
+    /// heading chain plus the body. Keying on it would give the same sentence
+    /// under *Termination* and under *Rent review* one shared vector,
+    /// collapsing the distinction CHK-002 exists to make, silently, in the
+    /// direction of worse retrieval.
+    #[test]
+    fn the_same_sentence_under_two_headings_does_not_share_a_cache_entry() {
+        let f = fixture();
+        f.chunk("renews on 31 December", Some("Lease › Termination"));
+        f.chunk("renews on 31 December", Some("Lease › Rent review"));
+        let batch = next_batch(&f.store, 10).unwrap();
+        assert_eq!(batch.len(), 2);
+        assert_ne!(
+            batch[0].text_hash, batch[1].text_hash,
+            "same body, different section — these are not the same text to embed"
+        );
+    }
+
+    #[test]
+    fn the_same_text_in_two_places_shares_one_cache_entry() {
+        // The saving that makes this worth building: on the author's index
+        // 894,493 active chunks share 175,066 distinct texts.
+        let f = fixture();
+        f.chunk("the standard boilerplate paragraph", None);
+        f.chunk("the standard boilerplate paragraph", None);
+        let batch = next_batch(&f.store, 10).unwrap();
+        assert_eq!(batch.len(), 2);
+        assert_eq!(
+            batch[0].text_hash, batch[1].text_hash,
+            "identical text under no heading is one thing to embed, not two"
+        );
     }
 
     #[test]

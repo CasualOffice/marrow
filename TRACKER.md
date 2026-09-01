@@ -430,7 +430,16 @@ wrong.
   answered by that, and should be moved to Settled
 - [x] Vector storage: brute-force cosine first — `index/src/vector.rs`,
   in-memory row cache, exact, ceiling at 1M chunks ([D1](DECISIONS.md))
-- [ ] Content-addressed embedding cache
+- [x] Content-addressed embedding cache — schema v8, `embedding_cache`, keyed
+      on the **hash of the text that is actually embedded** (heading chain plus
+      body, CHK-002) and the model, with no foreign key to a chunk. So a vector
+      survives the chunk it was made for: re-chunking after a chunker change or
+      a resumed scan no longer throws away hours of work. It also embeds a
+      repeated paragraph once — 894,493 active chunks share 175,066 distinct
+      texts here, and 104,027 of those texts appear more than once.
+      `chunks.text_hash`, labelled "embedding cache key (EMB-008)" since the
+      first migration, is **the wrong key**: it hashes the body alone, so the
+      same sentence under two headings would share a vector
 - [~] RRF fusion; weights in config, not code — the constants live in
   `query/src/search.rs` and the desktop's Ask fuses with them, but in code, not
   config, and `search_hybrid` itself has no caller
