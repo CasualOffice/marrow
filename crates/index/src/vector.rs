@@ -60,8 +60,12 @@ pub const CACHE_MIGRATION: Migration = Migration {
 --
 -- Keyed on the text rather than the chunk, so the same paragraph embeds once
 -- however many chunks hold it. On the author's index that is not a marginal
--- saving: 894,493 active chunks share 175,066 distinct texts, and 104,027 of
--- those texts appear more than once.
+-- saving: 894,493 active chunks reduce to 192,797 distinct texts to embed.
+--
+-- "Text" here means the heading chain *plus* the body, which is what actually
+-- goes to the model. Counting bodies alone gives 175,066 — a tempting number
+-- and the wrong one, because two chunks with the same body under different
+-- headings are two things to embed, not one.
 --
 -- The model is part of the key because a vector means nothing without the
 -- model that produced it. Swapping models clears this table along with

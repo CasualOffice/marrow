@@ -198,8 +198,9 @@ pub fn run(
         // is keyed on the text, so this covers two different savings at once:
         // a chunk whose vector was thrown away by a re-chunk, and a paragraph
         // that simply appears in several files. On the author's index the
-        // second is not marginal — 894,493 active chunks share 175,066
-        // distinct texts.
+        // second is not marginal — 894,493 active chunks reduce to 192,797
+        // distinct texts, counting the heading chain with the body as the
+        // model sees it.
         let hashes: Vec<String> = batch.iter().map(|p| p.text_hash.clone()).collect();
         let known = {
             let conn = store.reader()?;
@@ -438,7 +439,7 @@ mod tests {
     #[test]
     fn the_same_text_in_two_places_shares_one_cache_entry() {
         // The saving that makes this worth building: on the author's index
-        // 894,493 active chunks share 175,066 distinct texts.
+        // 894,493 active chunks reduce to 192,797 distinct texts to embed.
         let f = fixture();
         f.chunk("the standard boilerplate paragraph", None);
         f.chunk("the standard boilerplate paragraph", None);

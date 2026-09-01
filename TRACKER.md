@@ -435,8 +435,13 @@ wrong.
       body, CHK-002) and the model, with no foreign key to a chunk. So a vector
       survives the chunk it was made for: re-chunking after a chunker change or
       a resumed scan no longer throws away hours of work. It also embeds a
-      repeated paragraph once — 894,493 active chunks share 175,066 distinct
-      texts here, and 104,027 of those texts appear more than once.
+      repeated paragraph once — 894,493 active chunks here reduce to 192,797
+      distinct texts to embed. (175,066 is the count of distinct *bodies* and
+      is the wrong figure: two chunks with the same body under different
+      headings are two things to embed.) Measured end to end: a forced
+      re-chunk wiped all 200 vectors of a test corpus, and re-embedding took
+      836 ms against 5.9 s, computing nothing — "200 of those were already
+      known and were not recomputed".
       `chunks.text_hash`, labelled "embedding cache key (EMB-008)" since the
       first migration, is **the wrong key**: it hashes the body alone, so the
       same sentence under two headings would share a vector
