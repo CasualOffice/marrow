@@ -432,12 +432,40 @@ fn render_human(
             style.warn(&format!("Incomplete: {what}. {fix}"))
         )
         .map_err(io)?,
-        // *Reached*, not "read": the skip counts below say how many of them
-        // were then left unopened, and claiming more than reaching them is the
-        // completeness this scan has not earned.
+        // **Nothing was opened, so "no matches" is not a finding.**
+        //
+        // Verified against a real iCloud folder: 39 placeholders, none of them
+        // hydrated — which is the rule working — and the answer was
+        // `0 matches in 0 of 39 files` above `Every file in scope was
+        // reached`. Both true, and together they read as "the pattern is not
+        // in your cloud folder", which the scan has no basis for. The skip
+        // line does follow, but it asks the reader to draw the inference; the
+        // JSON rendering states it outright and this did not.
+        None if outcome.files_scanned == 0 && outcome.has_gaps() => writeln!(
+            out,
+            "  {}",
+            style.warn(
+                "No file was opened, so this says nothing about whether the pattern is \
+                 there. See the skip counts below."
+            )
+        )
+        .map_err(io)?,
+        // Some were read and some were not. *Reached*, not "read": the skip
+        // counts below say how many were left unopened, and claiming more than
+        // reaching them is completeness this scan has not earned. The added
+        // sentence is the one the JSON rendering has always carried.
+        None if outcome.has_gaps() => writeln!(
+            out,
+            "  {}",
+            style.dim(
+                "Every file in scope was reached, but some were not read — no match \
+                 here is not proof the pattern is absent from those."
+            )
+        )
+        .map_err(io)?,
         // The count is on the line above; repeating it here reads as
         // "1 matches in 1 of 1 files / every one of the 1 files".
-        None => writeln!(out, "  {}", style.dim("Every file in scope was reached.")).map_err(io)?,
+        None => writeln!(out, "  {}", style.dim("Every file in scope was read.")).map_err(io)?,
     }
 
     // A root that has gone away is a hole in the scope itself, not in the scan

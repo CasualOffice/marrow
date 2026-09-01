@@ -188,7 +188,14 @@ against `crates/parse/src/` and `ParserRouter::with_default_parsers`.
       moved. Now: 34,815 files, 0 duplicates, and the resume is faster than the
       run it replaced
 - [ ] 72 h soak → reconciliation drift = 0
-- [ ] Zero placeholder hydration confirmed on a real cloud folder
+- [x] Zero placeholder hydration confirmed on a real cloud folder — iCloud
+      Drive, 39 dataless files occupying 0 KB of real disk, 26.8 MB logical.
+      Indexed, searched by name, and swept with `search --literal`, which opens
+      files: **39 of 39 still dataless afterwards, 0 blocks gained.** They are
+      recorded as `PLACEHOLDER`, stay findable by name (T5), and `status` says
+      "39 files are cloud-only and were not read" rather than implying they are
+      searchable. The rule holds; what the check found instead was a reporting
+      defect, now fixed
 - [ ] Used daily for one week
 
 ---
