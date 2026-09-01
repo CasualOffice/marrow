@@ -325,23 +325,29 @@ export function App() {
         searchRef.current?.focus();
         return;
       }
-      if (e.key === "Tab") {
-        /*
-         * Tab is the browser's unless this view genuinely has panes to cycle.
-         *
-         * The reasoning that released it for Ask holds everywhere the pane
-         * model does not apply, and it applies in two views. Ask has no panes;
-         * Models, Status and Settings have none either, and swallowing Tab
-         * there focused `null` — which is why the API key could not be typed
-         * into by keyboard. Files had the cycle stepping onto a `resultsRef`
-         * nothing attaches. Native tab order is what a browser hands you for
-         * free, and every one of those pages is a column of ordinary controls
-         * that it orders correctly.
-         *
-         * `panesFor` is the same question `cyclePane` asks itself, so the key
-         * and the action cannot disagree. In the two views that keep the cycle
-         * the switcher is off the tab path, which is what `⌘⌥1-6` above is for.
-         */
+      /*
+       * **Tab is the browser's, in every view.**
+       *
+       * It used to be released only where `panesFor` found fewer than two
+       * panes — which is four views, and the other two are Search and Files.
+       * There, Tab was swallowed and replaced by a cycle over three
+       * `tabIndex={-1}` containers, so five presses in the Search view reached
+       * the field and then three boxes, and not one button. Unreachable
+       * without a mouse: everything in the sidebar, every control in the title
+       * bar, and — worst — the "Add a folder" and "Run an index" buttons on
+       * the zero-results screen, which have no shortcut equivalent at all and
+       * are the entire remedy that screen is offering.
+       *
+       * The old comment argued the case correctly and stopped one step short:
+       * taking Tab away and putting a *container* cycle in its place is the
+       * same failure as putting nothing there, because a container is not a
+       * control.
+       *
+       * The pane cycle keeps its value and moves to `⌃Tab`, which is what
+       * moves between regions rather than between controls, and is not a key
+       * a browser gives a page for free.
+       */
+      if (e.key === "Tab" && e.ctrlKey) {
         if (panesFor(ui.view, ui.sidebarCollapsed).length < 2) return;
         e.preventDefault();
         cyclePane(e.shiftKey);

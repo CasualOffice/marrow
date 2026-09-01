@@ -94,7 +94,19 @@
    findable at a glance without the row turning into a highlighter test. */
 .mark {
   background: var(--accent-soft);
-  color: inherit;
+  /*
+   * **`--fg`, not `inherit`.** The highlight lands in `--fg3` twice — the
+   * directory prefix and the path-match aside — and `--accent-soft` stacked on
+   * a selected row lifts the plate out from under it: measured 4.11:1 light
+   * and 3.79:1 dark on a selected row, under the 4.5:1 floor. `tokens.css`
+   * reasons about `--fg3` on `--sunken`, `--selected` and `--accent-soft`
+   * separately, and never about the last two together, which is exactly where
+   * the cursor is.
+   *
+   * It is also the right answer without the arithmetic: the term you searched
+   * for should be the most legible thing in the row, not the least.
+   */
+  color: var(--fg);
   border-radius: 2px;
   padding: 0 1px;
 }

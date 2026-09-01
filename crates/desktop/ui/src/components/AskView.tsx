@@ -1330,7 +1330,14 @@ function TurnBlock({
             // The list is collapsed by default, so open it before scrolling —
             // otherwise the click appears to do nothing.
             el?.closest("details")?.setAttribute("open", "");
-            el?.scrollIntoView({ block: "center", behavior: "smooth" });
+            // The one motion in the app `prefers-reduced-motion` did not reach.
+            el?.scrollIntoView({
+              block: "center",
+              behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
+                .matches
+                ? "auto"
+                : "smooth",
+            });
           }}
         />
       )}

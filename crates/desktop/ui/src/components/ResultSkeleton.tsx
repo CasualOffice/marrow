@@ -6,10 +6,16 @@
  * ranking lands nothing moves (SKEL-004). That the layout does not jump is the
  * whole reason to draw the shape rather than a symbol.
  *
- * **It is not silence to a screen reader** (SKEL-008). The list is `aria-busy`
- * and the status line says what is happening in words; the bars themselves are
- * `aria-hidden`, because "decorative rectangle" eleven times is worse than
- * nothing at all.
+ * **It is not silence to a screen reader** (SKEL-008) — which took two goes.
+ * The bars are `aria-hidden`, because "decorative rectangle" thirty-two times
+ * is worse than nothing; but a live region announces its *content*, and
+ * `aria-label` supplies a name rather than content, so hiding every child left
+ * exactly the silence the rule forbids. There is now real text in the region.
+ *
+ * And `aria-busy` is gone from it. `aria-busy="true"` on a live region means
+ * "do not announce updates yet", released by flipping it to `false` — which
+ * never happens here, because the region is unmounted rather than settled. A
+ * region that is busy for its whole life is a region that never speaks.
  */
 import styles from "./ResultSkeleton.module.css";
 import { ROW_HEIGHT } from "./ResultRow";
@@ -43,10 +49,9 @@ export function ResultSkeleton({ label }: { label: string }) {
          which is the one thing it exists to prevent. */
       style={{ ["--result-row-h" as string]: `${ROW_HEIGHT}px` }}
       role="status"
-      aria-busy="true"
       aria-live="polite"
-      aria-label={label}
     >
+      <span className="srOnly">{label}</span>
       {ROWS.map((r, i) => (
         <div key={i} className={styles.row} aria-hidden="true">
           <div className={styles.head}>

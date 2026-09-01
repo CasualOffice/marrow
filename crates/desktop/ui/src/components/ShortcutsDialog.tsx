@@ -96,7 +96,7 @@ const GROUPS: ReadonlyArray<{ title: string; items: Binding[] }> = [
       { keys: "⌘1–9", label: "Command one to nine", action: "Jump to result n" },
       // Named, because "Cycle panes" was true of one view and swallowed in
       // five. Everywhere else Tab is the browser's ordinary tab order.
-      { keys: "Tab", action: "Cycle panes (Search and Files)" },
+      { keys: "⌃Tab", action: "Cycle panes (Search and Files)" },
       { keys: "⌘\\", label: "Command backslash", action: "Toggle the sidebar" },
     ],
   },
@@ -166,9 +166,12 @@ export function ShortcutsDialog() {
             e.preventDefault();
             setOpen(false);
           }
-          // The only focusable thing inside is the close button, so keeping
-          // focus here is a matter of not letting Tab leave.
-          if (e.key === "Tab") e.preventDefault();
+          // **Not swallowed.** The reasoning — "the only focusable thing
+          // inside is the close button" — was true and the conclusion did not
+          // follow: the close button is in the header, *outside* the
+          // scroller, so preventing Tab left the list of every binding in the
+          // app unscrollable by keyboard. The scroller is focusable now and
+          // Tab cycles the two, which is what a two-control dialog should do.
         }}
       >
         <header className={styles.head}>
@@ -186,7 +189,10 @@ export function ShortcutsDialog() {
           </button>
         </header>
 
-        <div className={styles.body}>
+        {/* Focusable so the list can be scrolled with the keys that scroll
+            things. A pane of text nobody can put focus into is a pane only a
+            mouse can read. */}
+        <div className={styles.body} tabIndex={0}>
           {GROUPS.map((g) => (
             <section key={g.title} className={styles.group}>
               <h2 className={styles.groupTitle}>{g.title}</h2>

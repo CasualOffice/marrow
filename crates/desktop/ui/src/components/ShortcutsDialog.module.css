@@ -56,7 +56,19 @@
 }
 
 .body {
-  flex: 1 1 0;
+  /*
+   * **`1 1 auto`, not `1 1 0`** — the one place in this app where the basis
+   * matters. `.panel` has no height of its own, so its content height is
+   * `head + this basis`; a basis of `0` made the whole keyboard map render as
+   * a 30px slot under the header, and `max-height: 100%` never engaged because
+   * there was nothing to clamp. Measured: panel 76px tall against a 724px
+   * scrollHeight.
+   *
+   * `flex: 1 1 0` is right everywhere else here — `ResultList` and
+   * `SearchView` both document why — because there the parent's height comes
+   * down the sheet chain rather than up from its children.
+   */
+  flex: 1 1 auto;
   min-height: 0;
   padding: var(--sp-7) var(--sp-8) var(--sp-8);
   overflow-y: auto;
