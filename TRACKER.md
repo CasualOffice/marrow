@@ -507,6 +507,33 @@ Build these as fixtures. The set only grows — every security bug found adds a 
 
 Ideas that came up but aren't scheduled. Move to a milestone or delete — don't let this grow.
 
+### Marrow indexed its own database — 2026-09-02
+
+Found while testing whether the watcher works at all, by making the mistake a
+user can make: `MARROW_DATA_DIR` inside a granted folder. The walk then read
+`marrow.sqlite` and its WAL, which writes to the database, which grows what
+there is to index. The contention broke the reader the ingest depends on, and
+indexing stopped with `✗ Could not read the record of what this system wrote`
+repeating forever. Nothing in the output said why, and it did not recover.
+
+`skip_hidden` already covers the default location, because
+`~/.local/share/marrow` sits under a dot-directory — so **granting your home
+folder was never affected**, contrary to what this looked like at first. The
+exposure is a data directory pointed somewhere that is not hidden.
+
+Fixed with `WalkPolicy::excluded_paths`: absolute paths pruned subtree and all,
+distinct from `excluded_dirs`, which matches a *name* anywhere and would have
+excluded any folder the user called `marrow`.
+
+**Applied in `ingest_root_with_index`, not at the four places an
+`IngestPolicy` is built.** A rule four callers have to remember is one three of
+them eventually forget, which is the shape of every divergence found this
+week. And only when the data directory lies strictly *inside* the root being
+walked: the first version excluded `store.path().parent()` unconditionally, so
+a database sitting beside the corpus — which is exactly how the ingest tests
+are laid out — excluded the corpus with it. Five tests caught that
+immediately; without them it would have silently indexed nothing.
+
 ### Two releases nobody else could open — 2026-09-02
 
 v0.0.1 and v0.0.2 shipped with an invalid bundle signature. Tauri skips

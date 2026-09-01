@@ -79,6 +79,25 @@ pub struct WalkPolicy {
     pub max_depth: Option<usize>,
     /// Directory names pruned wherever they appear below the root.
     pub excluded_dirs: BTreeSet<String>,
+    /// **Absolute paths pruned, subtree and all.** Distinct from
+    /// [`Self::excluded_dirs`], which matches a *name* anywhere: this is for
+    /// one specific directory that must never be walked, wherever it happens
+    /// to sit.
+    ///
+    /// Marrow's own data directory is the reason it exists. Indexing it means
+    /// reading the SQLite file and its WAL, which grows the database, which
+    /// makes more to index — and the contention that produces breaks the
+    /// reader the ingest depends on, so indexing stops with a repeating
+    /// "could not read the record of what this system wrote" and never
+    /// recovers. `skip_hidden` covers the default location because `.local` is
+    /// hidden; it does not cover a `MARROW_DATA_DIR` pointed somewhere else,
+    /// and nothing else would have caught it.
+    ///
+    /// Paths are compared after canonicalisation by the caller. A prefix test
+    /// is enough here because the walk has already proved the entry lies under
+    /// an authorized root — this is not the symlink-escape check, which
+    /// happens at operation time.
+    pub excluded_paths: BTreeSet<std::path::PathBuf>,
 }
 
 impl Default for WalkPolicy {
@@ -93,6 +112,7 @@ impl Default for WalkPolicy {
                 .iter()
                 .map(|s| (*s).to_string())
                 .collect(),
+            excluded_paths: BTreeSet::new(),
         }
     }
 }
@@ -117,6 +137,29 @@ impl WalkPolicy {
         self
     }
 
+    /// **Never walk Marrow's own data directory.**
+    ///
+    /// Indexing it means reading the SQLite file and its WAL, which writes to
+    /// the database, which grows what there is to index. The contention that
+    /// produces breaks the reader the ingest depends on, so indexing stops
+    /// with a repeating "could not read the record of what this system wrote"
+    /// and does not recover — the whole workspace stops updating, and nothing
+    /// in the output says why.
+    ///
+    /// `skip_hidden` already covers the default location, because
+    /// `~/.local/share/marrow` sits under a dot-directory. It does not cover a
+    /// `MARROW_DATA_DIR` pointed anywhere else, which is the case this is for.
+    ///
+    /// Canonicalised here so the comparison is against the same shape the walk
+    /// produces; a path that cannot be canonicalised does not exist yet and
+    /// cannot be walked into either.
+    pub fn without(mut self, dir: &Path) -> Self {
+        if let Ok(canonical) = std::fs::canonicalize(dir) {
+            self.excluded_paths.insert(canonical);
+        }
+        self
+    }
+
     /// Stop pruning a directory name that is excluded by default.
     pub fn include_dir(mut self, name: &str) -> Self {
         self.excluded_dirs.remove(name);
@@ -130,6 +173,16 @@ impl WalkPolicy {
     /// per entry as it descends; [`Self::excludes`] asks it for every component
     /// of a path that arrived whole. One function so the two cannot drift —
     /// they did drift, and the drift is the bug [`Self::excludes`] describes.
+    /// Whether `path` is, or is inside, a directory excluded by absolute path.
+    ///
+    /// Separate from [`Self::prunes_component`] because it is a fact about
+    /// *where* a directory is rather than what it is called: pruning every
+    /// folder named `marrow` would exclude the user's own work, and pruning
+    /// only the exact data directory is what is actually meant.
+    fn prunes_path(&self, path: &Path) -> bool {
+        self.excluded_paths.iter().any(|p| path.starts_with(p))
+    }
+
     fn prunes_component(&self, name: &OsStr, is_dir: bool) -> bool {
         // Only *directory* names are pruned by name. A file called `target` is
         // a file, and pruning it would be a different rule than the one the
@@ -178,6 +231,9 @@ impl WalkPolicy {
     /// hole — `respect_gitignore` is off by default (D47) — and it wants a
     /// cached matcher, not a copy of the rules.
     pub fn excludes(&self, root: &AuthorizedRoot, path: &Path, is_dir: bool) -> bool {
+        if self.prunes_path(path) {
+            return true;
+        }
         // Only the part *below* the root is policy. `ignore` never offers depth
         // 0 to its predicate, so a root that is itself named `target` still
         // walks — and a hint inside that root must too.
@@ -292,7 +348,10 @@ pub fn walk(root: &AuthorizedRoot, policy: &WalkPolicy) -> Scan {
         // Depth 0 (the root itself) is never offered to the predicate by
         // `ignore`, so a root named `target` still walks.
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        !rules.prunes_component(entry.file_name(), is_dir)
+        // Both rules, in the one predicate `filter_entry` allows. The path
+        // check cannot be expressed as a component name — it is about *where*
+        // a directory is, not what it is called.
+        !rules.prunes_path(entry.path()) && !rules.prunes_component(entry.file_name(), is_dir)
     });
 
     Scan {
@@ -762,5 +821,82 @@ mod tests {
         assert_eq!(e.facts.size, 5);
         assert_eq!(e.facts.tier, marrow_core::TierState::Resident);
         assert_eq!(e.facts.mime_hint.map(|m| m.as_str()), Some("text/markdown"));
+    }
+}
+
+#[cfg(test)]
+mod data_dir_tests {
+    use super::*;
+
+    /// **Marrow must not index its own database.**
+    ///
+    /// A `MARROW_DATA_DIR` inside a granted folder made the walk read
+    /// `marrow.sqlite` and its WAL. That writes to the database, which grows
+    /// what there is to index; the contention broke the reader the ingest
+    /// depends on, and indexing stopped with a repeating "could not read the
+    /// record of what this system wrote" that never recovered. Nothing in the
+    /// output said why.
+    #[test]
+    fn the_data_directory_is_not_walked_wherever_it_sits() {
+        let td = tempfile::tempdir().unwrap();
+        let base = td.path();
+        // Deliberately not hidden: `skip_hidden` already covers the default
+        // `~/.local/share/marrow`, and a name like this is exactly what it
+        // does not cover.
+        for rel in ["notes/real.md", "marrow-data/marrow.sqlite"] {
+            let p = base.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, "x").unwrap();
+        }
+        let root = AuthorizedRoot::open(base).unwrap();
+        let policy = WalkPolicy::default().without(&base.join("marrow-data"));
+
+        let seen: Vec<PathBuf> = walk(&root, &policy)
+            .filter_map(|e| match e {
+                ScanEvent::Entry(entry) => Some(entry.path),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            seen.iter().any(|p| p.ends_with("real.md")),
+            "the user's own files must still be walked: {seen:?}"
+        );
+        assert!(
+            !seen.iter().any(|p| p.ends_with("marrow.sqlite")),
+            "the database must not be indexed: {seen:?}"
+        );
+    }
+
+    /// The hint path has to agree, or a watcher event walks straight past the
+    /// rule the sweep obeys — which is how `node_modules` got indexed before.
+    #[test]
+    fn a_watcher_hint_inside_the_data_directory_is_excluded_too() {
+        let td = tempfile::tempdir().unwrap();
+        let base = td.path();
+        std::fs::create_dir_all(base.join("marrow-data")).unwrap();
+        let root = AuthorizedRoot::open(base).unwrap();
+        let data = std::fs::canonicalize(base.join("marrow-data")).unwrap();
+        let policy = WalkPolicy::default().without(&data);
+
+        assert!(policy.excludes(&root, &data.join("marrow.sqlite-wal"), false));
+        assert!(!policy.excludes(&root, &root.path().join("notes.md"), false));
+    }
+
+    /// Pruning by name would exclude the user's own work.
+    #[test]
+    fn only_that_directory_is_excluded_not_every_folder_sharing_its_name() {
+        let td = tempfile::tempdir().unwrap();
+        let base = td.path();
+        std::fs::create_dir_all(base.join("data")).unwrap();
+        std::fs::create_dir_all(base.join("projects/data")).unwrap();
+        let root = AuthorizedRoot::open(base).unwrap();
+        let policy = WalkPolicy::default().without(&base.join("data"));
+
+        let mine = std::fs::canonicalize(base.join("projects/data")).unwrap();
+        assert!(
+            !policy.excludes(&root, &mine.join("notes.md"), false),
+            "a folder that merely shares the name is the user's own"
+        );
     }
 }

@@ -185,6 +185,36 @@ pub fn ingest_root_with_index(
     cancel: &Cancel,
     index: Option<&dyn marrow_index::TextIndex>,
 ) -> Result<IngestOutcome> {
+    // **Marrow never walks its own data directory**, and this is applied here
+    // rather than at the four places an `IngestPolicy` is built, because a
+    // rule four callers have to remember is a rule three of them will
+    // eventually forget — which is how the same class of bug reached MCP's
+    // ranking, the stopword list and `file_detail` this week.
+    //
+    // Reading `marrow.sqlite` and its WAL writes to the database, which grows
+    // what there is to index; the contention that produces breaks the reader
+    // the ingest depends on, and indexing stops with a repeating "could not
+    // read the record of what this system wrote" that never recovers.
+    // `skip_hidden` covers the default `~/.local/share/marrow`; it does not
+    // cover a `MARROW_DATA_DIR` pointed somewhere that is not hidden.
+    // **Only when it lies inside this root.** A data directory beside or above
+    // the corpus is never walked anyway, and excluding an ancestor would
+    // exclude the corpus with it — the whole walk, silently, for every caller
+    // whose database happens to sit next to the folder it indexes.
+    let data_dir = store
+        .path()
+        .and_then(|p| p.parent())
+        .and_then(|p| std::fs::canonicalize(p).ok())
+        .filter(|d| d.starts_with(root.path()) && d != root.path());
+    let policy = &match data_dir {
+        Some(dir) => {
+            let mut p = policy.clone();
+            p.walk = p.walk.clone().without(&dir);
+            p
+        }
+        None => policy.clone(),
+    };
+
     // Bounded so the walk cannot outrun hashing and buffer the corpus.
     let (tx_scan, rx_scan) = sync_channel::<ScanEntry>(1024);
     let (tx_hash, rx_hash) = sync_channel::<Hashed>(256);
