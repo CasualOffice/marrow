@@ -421,9 +421,6 @@ fn a_run_interrupted_between_the_version_row_and_its_chunks_recovers_on_the_next
          unsearchable — this is the bug"
     );
 
-    // Asserted against the *file*, not the version: recovering re-records the
-    // version, so the chunks come back under a new version id. What matters is
-    // that the file is searchable again, which is the thing that was lost.
     let conn = f.store.reader().unwrap();
     let recovered: i64 = conn
         .query_row(
@@ -437,6 +434,43 @@ fn a_run_interrupted_between_the_version_row_and_its_chunks_recovers_on_the_next
     assert!(
         recovered > 0,
         "{path} never got its chunks back, so it stays unsearchable forever"
+    );
+
+    // **And recovery reuses the version rather than minting one.**
+    //
+    // This assertion used to read "asserted against the *file*, not the
+    // version: recovering re-records the version, so the chunks come back
+    // under a new version id" — the test documenting the bug as intended
+    // behaviour. It is not: the bytes did not move, and our not having
+    // finished reading them is not a fact about the file.
+    //
+    // Measured on a real `kill -9` nine seconds into a twenty-eight second
+    // scan of 34,807 files: resuming produced 20,452 files carrying two
+    // versions each with identical content hashes, and re-chunked every one.
+    // Hard rule 7 asks for idempotent *and* resumable; only the second half
+    // was working, which is why it stayed invisible — the index was correct,
+    // just larger and slower after every interruption.
+    let versions: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM file_versions WHERE file_id = ?1",
+            [&file_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        versions, 1,
+        "the bytes never changed, so recovering must not invent a second version"
+    );
+    let still_current: String = conn
+        .query_row(
+            "SELECT version_id FROM file_versions WHERE file_id = ?1 AND status = 'CURRENT'",
+            [&file_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        still_current, version_id,
+        "the content stage must re-run against the version that already exists"
     );
 }
 

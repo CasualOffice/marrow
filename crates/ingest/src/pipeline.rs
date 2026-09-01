@@ -1056,7 +1056,22 @@ fn record(
         _ => false,
     };
 
-    let changed = changed || unfinished || stale;
+    // **Two different questions, and collapsing them was a bug.** `changed`
+    // means the bytes moved and the file needs a *new version*. `unfinished`
+    // and `stale` mean the same bytes need their content stage run *again* —
+    // a kill left it half done, or the parser has improved since.
+    //
+    // Both used to set `changed`, so either minted a new version row. Measured
+    // on a real `kill -9` at nine seconds into a twenty-eight second scan:
+    // resuming produced 20,452 files with two versions each, identical content
+    // hashes, identical sizes, differing only in timestamp — and re-chunked
+    // every one. That is the "no duplicate work" half of hard rule 7 failing
+    // while the "resumable" half worked, which is why it stayed invisible: the
+    // index was correct, only larger and slower each time it was interrupted.
+    //
+    // A version is a version of the *file*. Our not having finished reading it
+    // is not a fact about the file.
+    let needs_content = changed || unfinished || stale;
 
     let mut ids = None;
     if changed {
@@ -1085,6 +1100,17 @@ fn record(
                 .send(move |c| marrow_store::read::record_version(c, &v).map(|_| ()))?,
         );
         wrote = true;
+    } else if needs_content {
+        // Same bytes, work to redo. `replace_chunks` deletes before it inserts
+        // and `record_parse` is keyed on the version, so pointing the content
+        // stage at the row that already exists is idempotent — which is what
+        // makes re-running it safe rather than additive.
+        if let Some(c) = &current {
+            ids = Some(RecordedIds {
+                file_id: file.file_id,
+                version_id: c.version_id,
+            });
+        }
     }
 
     // A path change on its own is a write, but not a reason to re-parse: the

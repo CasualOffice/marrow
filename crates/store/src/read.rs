@@ -1451,11 +1451,34 @@ pub struct NewParse {
 }
 
 /// Record a parse attempt, replacing any earlier one for the same
-/// (version, parser, parser_version).
+/// (version, parser, parser_version) — **and superseding that parser's own
+/// older results for the version.**
 ///
 /// That triple is the idempotency key from §20.2: re-running the same parser
-/// over the same bytes converges rather than accumulating rows.
+/// over the same bytes converges rather than accumulating rows. What it does
+/// not cover is the same parser at a *different* version, which the upgrade
+/// path produces by design.
+///
+/// It did not matter while a re-parse always minted a new version row, because
+/// the old result stayed attached to the old version. Re-parsing a version in
+/// place — which is what a resumed scan and a parser upgrade both now do,
+/// rather than inventing a version of a file that has not changed — left both
+/// rows on one version. `stale_parser` reads every row for a version, so it
+/// found the superseded one and reported stale for ever: each run re-parsed
+/// the whole corpus and the next run did it again.
+///
+/// Only this parser's rows. A different `parser_id` that also produced a
+/// result for these bytes recorded something true, and is not superseded by
+/// this one.
 pub fn record_parse(conn: &Connection, p: &NewParse) -> Result<()> {
+    q(
+        conn.execute(
+            "DELETE FROM parse_results
+              WHERE version_id = ?1 AND parser_id = ?2 AND parser_version <> ?3",
+            params![p.version_id.to_string(), p.parser_id, p.parser_version],
+        ),
+        "Could not clear the superseded record of an earlier parser version.",
+    )?;
     conn.execute(
         "INSERT INTO parse_results
             (parse_id, version_id, parser_id, parser_version, parser_tier,

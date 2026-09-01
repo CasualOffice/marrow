@@ -178,7 +178,15 @@ against `crates/parse/src/` and `ParserRouter::with_default_parsers`.
   exits 128 + SIGINT
 
 ### Gates
-- [ ] `kill -9` mid-scan → resumes cleanly, no duplicate work
+- [x] `kill -9` mid-scan → resumes cleanly, no duplicate work — **the second
+      half was failing.** Killed 9 s into a 28 s scan of 34,807 files: resuming
+      produced 20,452 files with two versions each, identical content hashes,
+      and re-chunked every one (67,919 chunks against a clean 52,057). The
+      index was *correct*, only larger and slower after each interruption,
+      which is why nothing noticed. `unfinished` and `stale` set `changed`, so
+      needing to redo our own work minted a version of a file that had not
+      moved. Now: 34,815 files, 0 duplicates, and the resume is faster than the
+      run it replaced
 - [ ] 72 h soak → reconciliation drift = 0
 - [ ] Zero placeholder hydration confirmed on a real cloud folder
 - [ ] Used daily for one week
