@@ -459,6 +459,34 @@ Build these as fixtures. The set only grows — every security bug found adds a 
 
 Ideas that came up but aren't scheduled. Move to a milestone or delete — don't let this grow.
 
+### Two releases nobody else could open — 2026-09-02
+
+v0.0.1 and v0.0.2 shipped with an invalid bundle signature. Tauri skips
+bundle signing when no identity is configured, so the app went out with only
+the linker's adhoc signature on the Mach-O and no `_CodeSignature/CodeResources`
+at all — `codesign --verify` on the shipped DMG says "code has no resources but
+signature indicates they must be present".
+
+A locally built app is never quarantined, so Gatekeeper never evaluates it and
+it runs. A downloaded one is, Gatekeeper finds the bundle signature invalid, and
+on Apple Silicon that is fatal rather than a prompt: the app is killed before it
+draws anything. One bounce in the Dock, no dialog, nothing to search for. Fixed
+by `signingIdentity: "-"`, and the release workflow now fails if the bundle does
+not verify.
+
+**The part worth keeping.** Both releases were verified before tagging, and the
+checks passed — worker bundled, usage strings present, versions agreeing, app
+opens. Every one of them was a check of *last release's* failure, run on the one
+machine where this release's failure is invisible. Verifying an artifact on the
+machine that produced it tests the build, not the release. The generalisation:
+when a check can only be run somewhere the defect cannot appear, it is not
+evidence, and three green releases in a row said nothing about whether anyone
+else could open the app.
+
+The same day, the install page still pinned `v0.0.1` in thirteen places and
+described a Gatekeeper dialog that never appeared for this failure. Download
+links now resolve through `/releases/latest/`, which cannot go stale.
+
 ### Found by the retrieval eval, the first time it ran — 2026-09-01
 
 `crates/query/tests/eval.rs` over `eval/`: 24 hand-written documents, 16
