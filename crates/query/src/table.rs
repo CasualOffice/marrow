@@ -109,8 +109,14 @@ pub struct Skipped {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Computed {
     pub op: Op,
-    /// `None` only for an empty range under `min`/`max`/`mean`, where there is
-    /// no honest answer. `Sum` and `Count` of nothing are legitimately 0.
+    /// `None` when no cell in the range held a number.
+    ///
+    /// **Including `sum`.** The convention that an empty sum is zero is a fact
+    /// about arithmetic, not about the user's spreadsheet: a column of `n/a`
+    /// totalling `0` reads as "this cost nothing" when it means "there is
+    /// nothing here to add", and a reader acts on the first. `count` is the
+    /// exception and genuinely is 0 — counting nothing is a real answer to the
+    /// question that was asked.
     pub value: Option<f64>,
     /// How many cells held a number and were added.
     pub contributing: usize,
@@ -139,13 +145,20 @@ impl Computed {
 /// The sheet is matched against the table's own `Cells` span, so a workbook
 /// with twelve sheets computes over the one that was named rather than over
 /// whichever table happened to be first.
-pub fn compute(
-    conn: &Connection,
-    version_id: VersionId,
-    op: Op,
-    reference: &str,
-    filter: Option<&Where>,
-) -> Result<Computed> {
+/// A range, resolved against one table of one file.
+///
+/// Shared because `compute` and `compute_by` must agree on which sheet a bare
+/// `B2:B18` means and on how an ambiguous one is refused. Two copies of that
+/// would eventually disagree, and the one that was wrong would be wrong about
+/// which numbers a citation refers to.
+struct Resolved {
+    table_id: String,
+    sheet: String,
+    range: String,
+    bounds: (u32, u32, u32, u32),
+}
+
+fn resolve(conn: &Connection, version_id: VersionId, reference: &str) -> Result<Resolved> {
     let (sheet, range) = match marrow_core::a1::split_sheet_ref(reference) {
         Some((s, r)) => (Some(s), r),
         // No sheet named. Legitimate for a single-sheet workbook and ambiguous
@@ -217,7 +230,29 @@ pub fn compute(
         .or_else(|| sheet_of(&chosen.source_span))
         .unwrap_or_default();
 
-    let cells = cells_for(conn, &chosen.table_id)?;
+    Ok(Resolved {
+        table_id: chosen.table_id.clone(),
+        sheet: sheet_name,
+        range,
+        bounds: (r0, c0, r1, c1),
+    })
+}
+
+/// Compute `op` over `reference` — `Q2!B4:B18` or `B4:B18` — in `version_id`,
+/// optionally only over the rows `filter` matches.
+pub fn compute(
+    conn: &Connection,
+    version_id: VersionId,
+    op: Op,
+    reference: &str,
+    filter: Option<&Where>,
+) -> Result<Computed> {
+    let r = resolve(conn, version_id, reference)?;
+    let (r0, c0, r1, c1) = r.bounds;
+    let sheet_name = r.sheet;
+    let range = r.range;
+    let chosen_id = r.table_id;
+    let cells = cells_for(conn, &chosen_id)?;
 
     // **The filter column need not be inside the range.** "Total column B where
     // column A is Rent" is the ordinary shape of the question, so which rows
@@ -333,10 +368,10 @@ pub fn compute(
 
     let value = match op {
         Op::Count => Some(values.len() as f64),
+        // No honest answer over nothing — zero is a number, and a number is
+        // what a reader acts on. See `Computed::value`.
+        _ if values.is_empty() => None,
         Op::Sum => Some(values.iter().sum()),
-        // No honest answer over nothing. Zero would be a number, and a number
-        // is what a reader acts on.
-        Op::Mean if values.is_empty() => None,
         Op::Mean => Some(values.iter().sum::<f64>() / values.len() as f64),
         Op::Min => values.iter().copied().reduce(f64::min),
         Op::Max => values.iter().copied().reduce(f64::max),
@@ -516,12 +551,14 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_range_has_no_mean_but_does_have_a_sum() {
-        // Zero is a number and a reader acts on it. "No cells held a number"
-        // is the honest answer to a mean over nothing; a sum of nothing is
-        // legitimately zero.
+    fn nothing_to_add_is_not_the_same_answer_as_zero() {
+        // A column of `n/a` totalling `0` reads as "this cost nothing" when it
+        // means "there is nothing here to add", and a reader acts on the
+        // first. The empty-sum-is-zero convention is a fact about arithmetic,
+        // not about the user's spreadsheet.
         let none: Vec<f64> = vec![];
         assert_eq!(none.iter().copied().reduce(f64::min), None);
+        assert_eq!(none.iter().sum::<f64>(), 0.0, "which is why it is not used");
     }
 
     #[test]
@@ -534,4 +571,76 @@ mod tests {
         assert_eq!(Op::parse("AVERAGE"), Some(Op::Mean));
         assert_eq!(Op::parse("median"), None);
     }
+}
+
+/// One key and what the rows under it come to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Group {
+    /// The value in the grouping column, as the sheet writes it.
+    pub key: String,
+    pub computed: Computed,
+}
+
+/// The same computation, once per distinct value of a column.
+///
+/// "What did each category come to" is the question a total cannot answer, and
+/// the one a person asks second. It is [`compute`] run per key rather than a
+/// second implementation, so every guard it took to make a single total honest
+/// — the unit mismatch, the named skips, the refusal to report no-match as zero
+/// — applies to each group without being written twice.
+///
+/// Per group is also the right granularity for the unit check: a table whose
+/// rent rows are in pounds and travel rows in euros has two internally
+/// consistent groups, and refusing the whole breakdown because the *table*
+/// mixes units would be a false alarm.
+pub fn compute_by(
+    conn: &Connection,
+    version_id: VersionId,
+    op: Op,
+    reference: &str,
+    by: u32,
+) -> Result<Vec<Group>> {
+    let r = resolve(conn, version_id, reference)?;
+    let (r0, _, r1, _) = r.bounds;
+
+    // Distinct values in document order, not sorted: a sheet's own order is
+    // information — a ledger is usually chronological — and re-sorting it
+    // alphabetically discards that for no gain.
+    let mut keys: Vec<String> = Vec::new();
+    for cell in cells_for(conn, &r.table_id)? {
+        let row = cell.row_idx as u32;
+        if row < r0 || row > r1 || cell.col_idx as u32 != by {
+            continue;
+        }
+        let key = cell.raw_text.trim();
+        // A blank in the grouping column is not a group. It is a row nobody
+        // named, and inventing an empty-string bucket for it would put
+        // unrelated rows together under a heading that reads as a mistake.
+        if key.is_empty() || keys.iter().any(|k| k.eq_ignore_ascii_case(key)) {
+            continue;
+        }
+        keys.push(key.to_owned());
+    }
+
+    if keys.is_empty() {
+        return Err(Error::new(
+            Code::CfgInvalid,
+            format!(
+                "Column {} has nothing to group by in that range — every cell in it is \
+                 blank.",
+                marrow_core::a1::column_name(by),
+            ),
+        ));
+    }
+
+    keys.into_iter()
+        .map(|key| {
+            let w = Where {
+                column: by,
+                equals: key.clone(),
+            };
+            compute(conn, version_id, op, reference, Some(&w))
+                .map(|computed| Group { key, computed })
+        })
+        .collect()
 }

@@ -264,8 +264,22 @@ recorded only in the Log (`a8362be`, `c2141d1`, `cd9b50f`, `e883546`) and in
       contribute here at all — calamine resolves the format code to `Other`, so
       `0.00%` and `$#,##0` are indistinguishable from a decimal (noted in
       `xlsx.rs`); the units seen in practice come from Markdown and DOCX
-- [~] `table compute`: sum / filter / group / lookup, citing cells — **sum and
-      filter done.** `marrow table sum|mean|min|max|count <file> <range>
+- [~] `table compute`: sum / filter / group / lookup, citing cells — **sum,
+      filter and group done; lookup is what is left.** `--by A` gives one
+      result per distinct value, in the sheet's own order — a ledger is usually
+      chronological and re-sorting it alphabetically discards that. It is
+      `--where` run per key rather than a second implementation, so every guard
+      applies to each group; the unit check is per group, since a table whose
+      rent rows are in pounds and travel rows in euros has two internally
+      consistent groups.
+
+      Grouping also corrected `sum`: an empty total now reports "no cells held
+      a number" rather than `0`. The convention that an empty sum is zero is a
+      fact about arithmetic, not about the user's spreadsheet — a `Travel` row
+      of `n/a` totalling `0` reads as "this cost nothing". `count` is the
+      exception and genuinely is 0.
+
+      Previously: `marrow table sum|mean|min|max|count <file> <range>
       [--where 'A=Rent']`. The filter column may sit outside the range being
       totalled, which is the ordinary shape of the question and the case the
       design turns on. A filter matching no row is refused rather than reported

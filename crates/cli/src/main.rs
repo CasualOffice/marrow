@@ -215,6 +215,12 @@ enum Cmd {
         /// sheet says, so `$1,200` is matched by what you can read in it.
         #[arg(long = "where", value_name = "COL=VALUE")]
         filter: Option<String>,
+        /// One result per distinct value of a column: `--by A`.
+        ///
+        /// "What did each category come to" is the question a single total
+        /// cannot answer. Blank cells are not a group.
+        #[arg(long = "by", value_name = "COL", conflicts_with = "filter")]
+        by: Option<String>,
     },
     /// Serve the index over MCP on stdio
     ///
@@ -436,7 +442,17 @@ fn run(cli: &Cli, style: Style) -> Result<()> {
             path,
             range,
             filter,
-        } => table(op, path, range, filter.as_deref(), cli.json, style, out),
+            by,
+        } => table(
+            op,
+            path,
+            range,
+            filter.as_deref(),
+            by.as_deref(),
+            cli.json,
+            style,
+            out,
+        ),
         Cmd::Watch { name } => watch(name.as_deref(), cli.json, style, out),
         Cmd::Mcp => {
             let store = open_store()?;
@@ -826,11 +842,13 @@ fn ids_for(
 /// eighteen cells, and this repository keeps finding the same defect — a
 /// figure accurate about what the code did, shown where a reader takes it as a
 /// fact about their data.
+#[allow(clippy::too_many_arguments)]
 fn table(
     op: &str,
     path: &str,
     range: &str,
     filter: Option<&str>,
+    by: Option<&str>,
     json: bool,
     style: Style,
     out: &mut impl Write,
@@ -881,6 +899,21 @@ fn table(
         })?),
         None => None,
     };
+
+    if let Some(by) = by {
+        // Same column arithmetic as a filter's, so `--by A` and `--where A=…`
+        // cannot disagree about which column `A` is.
+        let column = marrow_core::a1::parse_cell_ref(&format!("{}1", by.trim()))
+            .map(|(_, c)| c)
+            .ok_or_else(|| {
+                Error::new(
+                    marrow_core::Code::CfgInvalid,
+                    format!("`{by}` is not a column. Use a letter, like `--by A`."),
+                )
+            })?;
+        let groups = marrow_query::table::compute_by(&conn, version, op, range, column)?;
+        return render_groups(&groups, op, range, column, json, style, out);
+    }
 
     let computed = marrow_query::table::compute(&conn, version, op, range, filter.as_ref())?;
 
@@ -982,6 +1015,81 @@ fn table(
             )?;
         }
     }
+    Ok(())
+}
+
+/// One row per group, widest key first so the numbers line up.
+///
+/// Each group carries its own skipped cells. They are summarised rather than
+/// listed here — twelve groups of three would bury the totals the breakdown was
+/// asked for — but the count is always shown, because a group whose total came
+/// from two of its five rows is not a total of that group.
+fn render_groups(
+    groups: &[marrow_query::table::Group],
+    op: marrow_query::table::Op,
+    range: &str,
+    column: u32,
+    json: bool,
+    style: Style,
+    out: &mut impl Write,
+) -> Result<()> {
+    if json {
+        writeln!(
+            out,
+            "{}",
+            serde_json::json!({
+                "op": op.as_str(),
+                "range": range,
+                "grouped_by": marrow_core::a1::column_name(column),
+                "groups": groups.iter().map(|g| serde_json::json!({
+                    "key": g.key,
+                    "value": g.computed.value,
+                    "contributing_cells": g.computed.contributing,
+                    "skipped_cells": g.computed.skipped.len(),
+                })).collect::<Vec<_>>(),
+            })
+        )?;
+        return Ok(());
+    }
+
+    let width = groups
+        .iter()
+        .map(|g| g.key.chars().count())
+        .max()
+        .unwrap_or(0);
+    for g in groups {
+        let value = match g.computed.value {
+            Some(v) => fmt_number(v),
+            None => "—".into(),
+        };
+        write!(out, "  {:<width$}  {}", g.key, style.bold(&value))?;
+        if g.computed.is_partial() {
+            write!(
+                out,
+                "{}",
+                style.dim(&format!(
+                    "   ({} cell{} did not count)",
+                    g.computed.skipped.len(),
+                    if g.computed.skipped.len() == 1 {
+                        ""
+                    } else {
+                        "s"
+                    },
+                ))
+            )?;
+        }
+        writeln!(out)?;
+    }
+    writeln!(
+        out,
+        "{}",
+        style.dim(&format!(
+            "{} of {}, grouped by {}",
+            op.as_str(),
+            range,
+            marrow_core::a1::column_name(column)
+        ))
+    )?;
     Ok(())
 }
 

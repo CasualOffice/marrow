@@ -296,3 +296,97 @@ mod filtering {
         assert_eq!(got.value, Some(300.0));
     }
 }
+
+#[test]
+fn a_range_with_no_numbers_says_so_rather_than_totalling_zero() {
+    // **The convention that an empty sum is zero is a fact about arithmetic,
+    // not about the user's spreadsheet.** A column of `n/a` totalling `0`
+    // reads as "this cost nothing" when it means "there is nothing here to
+    // add", and a reader acts on the first.
+    let (_d, store, v) = workbook(&[(0, 0, "n/a", "string"), (1, 0, "tbd", "string")]);
+    let conn = store.reader().expect("reader");
+    let got = compute(&conn, v, Op::Sum, "Q2!A1:A2", None).expect("not an error");
+    assert_eq!(got.value, None, "no number is not zero");
+    assert_eq!(got.contributing, 0);
+    assert_eq!(got.skipped.len(), 2, "and it names both");
+
+    // Counting is the exception: counting nothing is a real answer to the
+    // question that was asked.
+    let counted = compute(&conn, v, Op::Count, "Q2!A1:A2", None).expect("a count");
+    assert_eq!(counted.value, Some(0.0));
+}
+
+/// `--by A` is `--where A=…` run once per distinct value, so every guard that
+/// makes a single total honest applies to each group without being rewritten.
+mod grouping {
+    use super::*;
+    use marrow_query::table::compute_by;
+
+    fn ledger() -> (
+        tempfile::TempDir,
+        marrow_store::Store,
+        marrow_core::VersionId,
+    ) {
+        workbook(&[
+            (0, 0, "Rent", "string"),
+            (0, 1, "1200", "decimal"),
+            (1, 0, "Food", "string"),
+            (1, 1, "300", "decimal"),
+            (2, 0, "Rent", "string"),
+            (2, 1, "800", "decimal"),
+            (3, 0, "Travel", "string"),
+            (3, 1, "n/a", "string"),
+        ])
+    }
+
+    #[test]
+    fn each_key_gets_its_own_total() {
+        let (_d, store, v) = ledger();
+        let conn = store.reader().expect("reader");
+        let g = compute_by(&conn, v, Op::Sum, "Q2!B1:B4", 0).expect("groups");
+        let got: Vec<(&str, Option<f64>)> = g
+            .iter()
+            .map(|x| (x.key.as_str(), x.computed.value))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("Rent", Some(2000.0)),
+                ("Food", Some(300.0)),
+                // Its only row is `n/a`. Zero would read as "Travel cost
+                // nothing" rather than "there is nothing here to add".
+                ("Travel", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn keys_keep_the_sheets_own_order_rather_than_being_sorted() {
+        // A ledger is usually chronological, and re-sorting it alphabetically
+        // discards that for no gain. `Rent` comes first because it is first.
+        let (_d, store, v) = ledger();
+        let conn = store.reader().expect("reader");
+        let g = compute_by(&conn, v, Op::Sum, "Q2!B1:B4", 0).expect("groups");
+        assert_eq!(g.first().map(|x| x.key.as_str()), Some("Rent"));
+    }
+
+    #[test]
+    fn a_group_carries_the_cells_it_could_not_count() {
+        let (_d, store, v) = ledger();
+        let conn = store.reader().expect("reader");
+        let g = compute_by(&conn, v, Op::Sum, "Q2!B1:B4", 0).expect("groups");
+        let travel = g.iter().find(|x| x.key == "Travel").expect("travel");
+        assert_eq!(travel.computed.skipped.len(), 1);
+        assert_eq!(travel.computed.skipped[0].reference, "Q2!B4");
+    }
+
+    #[test]
+    fn a_column_of_blanks_has_nothing_to_group_by_and_says_so() {
+        // An empty-string bucket would put unrelated rows together under a
+        // heading that reads as a mistake.
+        let (_d, store, v) = workbook(&[(0, 0, "", "empty"), (0, 1, "5", "decimal")]);
+        let conn = store.reader().expect("reader");
+        let err = compute_by(&conn, v, Op::Sum, "Q2!B1:B1", 0).expect_err("must refuse");
+        assert!(err.message().contains('A'), "{}", err.message());
+    }
+}
