@@ -25,6 +25,10 @@ blake3.workspace = true
 # is no system TLS library to go missing.
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 sha2 = "0.10"
+# The retrieval corpus is TOML for the same reason the write-path one is: a new
+# case must be six lines of data and no new test function, or the suite stops
+# growing the moment it is inconvenient.
+toml = "0.8"
 # Unpacking the runtime archive. Both are pure Rust — `flate2` on the
 # `rust_backend` deliberately, because a C toolchain in the dependency graph is
 # exactly the kind of thing that stops a project building in two years, and

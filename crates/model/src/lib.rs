@@ -29,6 +29,7 @@ pub mod detect;
 pub mod download;
 pub mod embed;
 pub mod envelope;
+pub mod injection;
 pub mod kv;
 pub mod openai;
 pub mod provider;

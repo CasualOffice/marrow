@@ -39,6 +39,48 @@ commit that quietly relaxes an expectation to make a test pass.
 | `placeholder.toml` | Reading a cloud placeholder to satisfy the stale check (invariant #3) |
 | `self_written.toml` | Writes that are *allowed* — and must come back `origin = SELF` |
 
+## `retrieval/` — the other half
+
+The files above attack the **write path**: a tool call, a workspace, and the
+exact error code the call must produce. `retrieval/` attacks the **read path**,
+and it needs a different shape because these attacks never arrive as a call.
+
+A PDF page, a README, text recognised from a screenshot, an EXIF comment —
+indexed like anything else, surfaced because they genuinely matched a question,
+and carrying instructions. There is nothing to refuse. The question is not *is
+this refused* but *does this text get to be an instruction at all*.
+
+So a case there is a **payload**, and the assertions are four fixed properties
+checked against every one of them:
+
+1. It lands in an `EVIDENCE` block and in no other kind — never `SYS`, never `FACT`.
+2. That block is labelled `trust=UNTRUSTED_CONTENT`, whatever the text claims about itself.
+3. It cannot close its own block; a payload containing the delimiter regenerates it rather than escaping it.
+4. It is never last. The final block in the prompt is runtime text.
+
+`cargo test -p marrow-model` runs them (`every_hostile_payload_stays_untrusted_data`).
+
+| File | Where the payload arrives from |
+|---|---|
+| `retrieval/pdf.toml` | A page of a document someone sent you |
+| `retrieval/repo.toml` | A file in a cloned repository — README, CONTRIBUTING |
+| `retrieval/ocr.toml` | Text recognised from pixels: a screenshot, a photographed whiteboard |
+| `retrieval/exif.toml` | A metadata field, invisible in every viewer a person uses |
+
+**What this does not claim.** Not that a model will comply with none of it. The
+envelope is defence in depth; hard rule 4 is the rule and the policy engine is
+the enforcement. What is testable is that Marrow never *hands over* the
+authority — that no arrangement of bytes promotes itself out of the untrusted
+block. That is a property of this code. "The model ignored it" is a property of
+a model, and is not asserted anywhere.
+
+**Mutation-tested, because a suite that passes on its first run has proved
+nothing.** Three mutations to `envelope.rs`, each reverted after:
+disabling collision regeneration reddens the delimiter case; removing the
+closing runtime block reddens all eleven payloads with *"the prompt ends with a
+USER block"*; relabelling evidence `DETERMINISTIC_RUNTIME` reddens all eleven
+with *"not labelled UNTRUSTED_CONTENT"*.
+
 ## Adding a case
 
 Append to whichever file matches, or start a new one. Anything ending `.toml`
