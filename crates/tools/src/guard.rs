@@ -68,6 +68,9 @@ pub struct Written {
     bytes: u64,
     origin: Origin,
     replaced: Option<ContentHash>,
+    /// The bytes this write displaced, if it displaced any and the workspace
+    /// was given somewhere to keep them.
+    snapshot: Option<crate::snapshot::SnapshotId>,
     written_at: Timestamp,
 }
 
@@ -93,6 +96,24 @@ impl Written {
     }
 
     /// Digest of the content this write replaced, if it replaced anything.
+    /// The handle that undoes this write.
+    ///
+    /// `None` for a creation — there is nothing to restore, and undoing one
+    /// means removing the file, which [`Workspace::undo`] does from the digest
+    /// rather than from a snapshot. Also `None` when the workspace has no
+    /// store, which is how a caller finds out that this replacement is final.
+    pub fn snapshot(&self) -> Option<&crate::snapshot::SnapshotId> {
+        self.snapshot.as_ref()
+    }
+
+    /// Whether [`Workspace::undo`] can put this back.
+    ///
+    /// A creation is always undoable. A replacement is undoable only if
+    /// something caught what it displaced.
+    pub fn is_undoable(&self) -> bool {
+        self.replaced.is_none() || self.snapshot.is_some()
+    }
+
     pub fn replaced(&self) -> Option<ContentHash> {
         self.replaced
     }
@@ -122,6 +143,13 @@ pub struct Workspace {
     /// Subtrees refused outright — the model directory, the index, anything
     /// else whose contents this crate must never author.
     protected: Vec<PathBuf>,
+    /// Where overwritten content is kept, when the caller supplied a store.
+    ///
+    /// `Option`, and the absence is load-bearing rather than lazy: a workspace
+    /// with no store can still *create* files, and only a replacement needs
+    /// somewhere to put what it displaced. Making it mandatory would mean every
+    /// caller that only ever creates has to invent a directory.
+    snapshots: Option<crate::snapshot::Snapshots>,
     race: Option<RaceHook>,
 }
 
@@ -131,6 +159,7 @@ impl fmt::Debug for Workspace {
             .field("root", &self.root.path())
             .field("excluded", &self.excluded)
             .field("protected", &self.protected)
+            .field("snapshots", &self.snapshots.as_ref().map(|s| s.dir()))
             .finish()
     }
 }
@@ -147,6 +176,7 @@ impl Workspace {
             root: AuthorizedRoot::open(root)?,
             excluded: DEFAULT_NOISE_DIRS.iter().map(|d| fold(d)).collect(),
             protected: Vec::new(),
+            snapshots: None,
             race: None,
         })
     }
@@ -181,6 +211,22 @@ impl Workspace {
         // created yet is still protected.
         self.protected
             .push(fs::canonicalize(&joined).unwrap_or(joined));
+        self
+    }
+
+    /// Keep what replacements displace, so they can be undone.
+    ///
+    /// The store belongs beside the index rather than in the workspace: a
+    /// snapshot written next to its original would be indexed, cited, and
+    /// eventually snapshotted itself — and it has to outlive the workspace
+    /// being deleted, which is one of the things people want undone.
+    ///
+    /// Without one, [`Workspace::write`] still refuses every *wrong* write and
+    /// still cannot undo a right-looking one. It says so through
+    /// [`Written::snapshot`] returning `None` rather than by failing, because a
+    /// caller that only creates files has nothing to lose.
+    pub fn with_snapshots(mut self, snapshots: crate::snapshot::Snapshots) -> Self {
+        self.snapshots = Some(snapshots);
         self
     }
 
@@ -237,6 +283,11 @@ impl Workspace {
 
         let replaced = self.check_precondition(&plan.target, expect)?;
 
+        // **After the precondition, before the rename.** Before it, and the
+        // bytes captured might not be the ones this write was authorised to
+        // replace; after it, and there is nothing left to capture.
+        let snapshot = self.capture_replaced(&plan.target, replaced.as_ref())?;
+
         temp.commit(&plan.target)?;
         sync_dir(&parent_now);
 
@@ -255,8 +306,161 @@ impl Workspace {
             // `origin = SELF`. Not a parameter, so no caller can weaken it.
             origin: Origin::SelfWritten,
             replaced,
+            snapshot,
             written_at: Timestamp::now(),
         })
+    }
+
+    /// Keep what a replacement is about to destroy.
+    ///
+    /// `None` when nothing was there, and `None` when no store was configured —
+    /// the two cases are different and neither is an error. A workspace that
+    /// only creates files has nothing to lose, and saying so through
+    /// [`Written::snapshot`] beats refusing writes to demand a directory the
+    /// caller has no use for.
+    ///
+    /// **The read is verified against the digest the precondition just
+    /// established.** `check_precondition` hashed the file; this opens it
+    /// again, and between the two a sync client or an editor can land. Trusting
+    /// the second read would file the wrong bytes under the right digest, so an
+    /// undo would restore content that was never there — a corruption invented
+    /// by the recovery path, which is the worst place to invent one.
+    fn capture_replaced(
+        &self,
+        target: &Path,
+        replaced: Option<&ContentHash>,
+    ) -> Result<Option<crate::snapshot::SnapshotId>> {
+        let (Some(expected), Some(store)) = (replaced, &self.snapshots) else {
+            return Ok(None);
+        };
+
+        // Safe to read: `check_precondition` reached `hash_file`, which refuses
+        // a cloud placeholder before opening it, so anything still here is
+        // resident. Never hydrate a placeholder is upheld upstream rather than
+        // re-asked, because re-asking would mean a second `stat` and a third
+        // window.
+        let bytes = fs::read(target)
+            .map_err(|e| Error::from(e).with_context(target.display().to_string()))?;
+        let actual = ContentHash::of(&bytes);
+        if actual != *expected {
+            return Err(Error::new(
+                Code::ActStaleVersion,
+                "The file changed while this write was being prepared, so the copy kept for \
+                 undo would not have matched what was replaced. Nothing was written.",
+            )
+            .with_context(format!(
+                "{} — expected {expected}, found {actual}",
+                target.display()
+            )));
+        }
+        store.capture(&bytes).map(Some)
+    }
+
+    /// Put back what a write displaced.
+    ///
+    /// Two shapes, because a write has two:
+    ///
+    /// - **A replacement** is undone by restoring the snapshot, through
+    ///   [`Workspace::write`] and therefore through every containment and
+    ///   symlink check the original write passed. Nothing here writes on its
+    ///   own account; one `rename` for the crate is the point of the crate.
+    /// - **A creation** is undone by removing the file. There is no earlier
+    ///   content to restore, and leaving it would make "undo" mean "nearly".
+    ///
+    /// **Both are stale-checked against what this write left behind.** If the
+    /// file no longer hashes to [`Written::digest`], somebody edited it after
+    /// the tool ran, and undoing would be the second destruction rather than
+    /// the repair of the first. That is refused, with the digests in the
+    /// message, and it is the case worth having a test for: an undo that
+    /// discards a human edit is worse than the write it was undoing.
+    ///
+    /// # Origin
+    ///
+    /// [`Undone::origin`] is [`Origin::User`], not `SelfWritten`, and the
+    /// difference is not cosmetic. Restoring somebody's file gives them their
+    /// own words back; continuing to mark them as this system's output would
+    /// keep them out of evidence under the `origin = SELF` rule, so an undo
+    /// would silently cost the user a citable source. The caller owns writing
+    /// that back to `files.origin`, exactly as it owns writing `SELF` after a
+    /// normal write.
+    pub fn undo(&self, written: &Written) -> Result<Undone> {
+        let relative = written
+            .path()
+            .strip_prefix(self.root.path())
+            .map_err(|_| Error::invariant("undoing a write that is not inside this workspace"))?
+            .to_str()
+            .ok_or_else(|| {
+                Error::new(
+                    Code::FsNotUtf8Path,
+                    "That file's path is not valid UTF-8, so it cannot be undone by name.",
+                )
+            })?
+            .to_string();
+
+        match (&written.replaced, &written.snapshot) {
+            // A replacement whose displaced bytes were kept.
+            (Some(_), Some(id)) => {
+                let store = self.snapshots.as_ref().ok_or_else(|| {
+                    Error::new(
+                        Code::CfgInvalid,
+                        "This workspace has nowhere to read saved copies from, so that write \
+                         cannot be undone here.",
+                    )
+                })?;
+                let bytes = store.read(id)?;
+                // Through the front door: the same containment, the same
+                // symlink re-check, the same atomic rename. `Replacing` is what
+                // makes this refuse if the file moved on since.
+                let restored =
+                    self.write(&relative, &bytes, &Expect::Replacing(written.digest()))?;
+                Ok(Undone {
+                    path: restored.path().to_path_buf(),
+                    digest: restored.digest(),
+                    bytes: restored.bytes(),
+                    removed: false,
+                    origin: Origin::User,
+                })
+            }
+            // A replacement whose displaced bytes were not kept. Nothing to do
+            // but say so plainly — silently doing nothing, or removing the file
+            // as if it had been a creation, are both worse.
+            (Some(_), None) => Err(Error::new(
+                Code::ActNotReversible,
+                "That write replaced a file and no copy of the earlier content was kept, so \
+                 it cannot be undone. Configure a snapshot store before writes that replace.",
+            )
+            .with_context(written.path().display().to_string())),
+            // A creation. Undoing it is removing it.
+            (None, _) => {
+                let target = self.canonical_within(written.path())?;
+                let actual = marrow_scan::hash_file(&target)?;
+                if actual != written.digest() {
+                    return Err(Error::new(
+                        Code::ActStaleVersion,
+                        "That file changed after it was created, so it was left alone. \
+                         Removing it now would discard an edit somebody made since.",
+                    )
+                    .with_context(format!(
+                        "{} — expected {}, found {actual}",
+                        target.display(),
+                        written.digest()
+                    )));
+                }
+                fs::remove_file(&target)
+                    .map_err(|e| Error::from(e).with_context(target.display().to_string()))?;
+                if let Some(parent) = target.parent() {
+                    sync_dir(parent);
+                }
+                tracing::info!(path = %target.display(), "undid a creation by removing it");
+                Ok(Undone {
+                    path: target,
+                    digest: written.digest(),
+                    bytes: 0,
+                    removed: true,
+                    origin: Origin::User,
+                })
+            }
+        }
     }
 
     /// Steps 1–4: everything decidable before the destination directory is
@@ -468,6 +672,49 @@ impl Workspace {
     }
 }
 
+/// What an undo did.
+///
+/// A separate type from [`Written`] rather than a reuse, because the two differ
+/// on the field that matters most: a write produces
+/// [`Origin::SelfWritten`] content and an undo hands the user their own back.
+/// Sharing the type would mean the `origin = SELF` rule depended on a caller
+/// reading a boolean correctly.
+#[derive(Clone, Debug, Serialize)]
+pub struct Undone {
+    path: PathBuf,
+    digest: ContentHash,
+    bytes: u64,
+    removed: bool,
+    origin: Origin,
+}
+
+impl Undone {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The digest of what is there now. For a removal, the digest of what was
+    /// removed — the file is gone, and naming what went is more useful than a
+    /// hash of nothing.
+    pub fn digest(&self) -> ContentHash {
+        self.digest
+    }
+
+    pub fn bytes(&self) -> u64 {
+        self.bytes
+    }
+
+    /// True when undoing meant deleting, because the write had created it.
+    pub fn removed(&self) -> bool {
+        self.removed
+    }
+
+    /// Always [`Origin::User`]. See [`Workspace::undo`].
+    pub fn origin(&self) -> Origin {
+        self.origin
+    }
+}
+
 #[derive(Debug)]
 struct Plan {
     /// Canonical destination directory, proven inside the root.
@@ -613,6 +860,181 @@ mod tests {
 
     fn ws(s: &Sandbox) -> Workspace {
         Workspace::open(&s.root).expect("open workspace")
+    }
+
+    /// A workspace that keeps what it replaces. The store sits beside the
+    /// workspace rather than inside it — a snapshot under the root would be
+    /// indexed, and would eventually be snapshotted itself.
+    fn ws_undoable(s: &Sandbox) -> Workspace {
+        let store = crate::snapshot::Snapshots::open(s.outside.join("snapshots"))
+            .expect("open snapshot store");
+        Workspace::open(&s.root)
+            .expect("open workspace")
+            .with_snapshots(store)
+    }
+
+    #[test]
+    fn a_replacement_can_be_undone_and_gives_the_user_their_own_words_back() {
+        let s = sandbox();
+        let w = ws_undoable(&s);
+        let original = b"the paragraph the user typed";
+
+        let first = w.write("notes.md", original, &Expect::New).unwrap();
+        let replaced = w
+            .write(
+                "notes.md",
+                b"what the model wrote",
+                &Expect::Replacing(first.digest()),
+            )
+            .unwrap();
+
+        assert!(
+            replaced.snapshot().is_some(),
+            "the displaced bytes were kept"
+        );
+        assert!(replaced.is_undoable());
+        assert_eq!(
+            fs::read(s.root.join("notes.md")).unwrap(),
+            b"what the model wrote"
+        );
+
+        let undone = w.undo(&replaced).expect("undo");
+        assert!(!undone.removed());
+        assert_eq!(fs::read(s.root.join("notes.md")).unwrap(), original);
+        // The `origin = SELF` rule, from the other side: giving somebody their
+        // file back and still calling it this system's output would quietly
+        // cost them a citable source.
+        assert_eq!(undone.origin(), Origin::User);
+    }
+
+    /// The case worth having a test for. An undo that discards a human edit is
+    /// worse than the write it was undoing.
+    #[test]
+    fn an_undo_that_would_discard_a_later_human_edit_is_refused() {
+        let s = sandbox();
+        let w = ws_undoable(&s);
+
+        let first = w.write("notes.md", b"original", &Expect::New).unwrap();
+        let replaced = w
+            .write(
+                "notes.md",
+                b"model output",
+                &Expect::Replacing(first.digest()),
+            )
+            .unwrap();
+
+        // The user opens it and types.
+        fs::write(s.root.join("notes.md"), b"model output, then my edit").unwrap();
+
+        let e = w.undo(&replaced).expect_err("must refuse");
+        assert_eq!(e.code(), Code::ActStaleVersion);
+        assert_eq!(
+            fs::read(s.root.join("notes.md")).unwrap(),
+            b"model output, then my edit",
+            "the edit survives the refusal"
+        );
+    }
+
+    #[test]
+    fn undoing_a_creation_removes_the_file() {
+        let s = sandbox();
+        let w = ws_undoable(&s);
+        let made = w
+            .write("scratch/new.md", b"invented", &Expect::New)
+            .unwrap();
+        assert!(made.snapshot().is_none(), "nothing was displaced");
+        assert!(made.is_undoable(), "a creation is always undoable");
+
+        let undone = w.undo(&made).expect("undo");
+        assert!(undone.removed());
+        assert!(!s.root.join("scratch/new.md").exists());
+    }
+
+    #[test]
+    fn undoing_a_creation_that_was_edited_since_leaves_it_alone() {
+        let s = sandbox();
+        let w = ws_undoable(&s);
+        let made = w.write("draft.md", b"invented", &Expect::New).unwrap();
+        fs::write(s.root.join("draft.md"), b"invented, then improved").unwrap();
+
+        let e = w.undo(&made).expect_err("must refuse");
+        assert_eq!(e.code(), Code::ActStaleVersion);
+        assert!(s.root.join("draft.md").exists(), "and it is still there");
+    }
+
+    /// A workspace with no store can still replace, and must say that the
+    /// replacement is final rather than pretending otherwise.
+    #[test]
+    fn a_replacement_with_nowhere_to_keep_the_old_bytes_says_it_cannot_be_undone() {
+        let s = sandbox();
+        let w = ws(&s);
+        let first = w.write("notes.md", b"original", &Expect::New).unwrap();
+        let replaced = w
+            .write(
+                "notes.md",
+                b"replacement",
+                &Expect::Replacing(first.digest()),
+            )
+            .unwrap();
+
+        assert!(replaced.snapshot().is_none());
+        assert!(!replaced.is_undoable(), "and it says so before being asked");
+
+        let e = w.undo(&replaced).expect_err("must refuse");
+        assert_eq!(e.code(), Code::ActNotReversible);
+    }
+
+    #[test]
+    fn replacing_the_same_file_twice_keeps_both_earlier_states() {
+        let s = sandbox();
+        let w = ws_undoable(&s);
+        let a = w.write("n.md", b"first", &Expect::New).unwrap();
+        let b = w
+            .write("n.md", b"second", &Expect::Replacing(a.digest()))
+            .unwrap();
+        let c = w
+            .write("n.md", b"third", &Expect::Replacing(b.digest()))
+            .unwrap();
+
+        // Undo the last write, then the one before it: two steps back, each
+        // through its own snapshot rather than through a stack.
+        w.undo(&c).expect("undo the third");
+        assert_eq!(fs::read(s.root.join("n.md")).unwrap(), b"second");
+        w.undo(&b).expect("undo the second");
+        assert_eq!(fs::read(s.root.join("n.md")).unwrap(), b"first");
+    }
+
+    /// An undo is a write, and gets no exemption from containment.
+    #[test]
+    fn an_undo_goes_through_the_same_guarded_path_as_the_write() {
+        let s = sandbox();
+        let w = ws_undoable(&s);
+        let first = w.write("notes.md", b"original", &Expect::New).unwrap();
+        let replaced = w
+            .write(
+                "notes.md",
+                b"model output",
+                &Expect::Replacing(first.digest()),
+            )
+            .unwrap();
+
+        // The file becomes a symlink pointing out of the workspace between the
+        // write and the undo — the escape the whole crate is shaped around.
+        fs::remove_file(s.root.join("notes.md")).unwrap();
+        symlink(s.outside.join("target.md"), s.root.join("notes.md")).unwrap();
+        fs::write(s.outside.join("target.md"), b"outside").unwrap();
+
+        let e = w.undo(&replaced).expect_err("must refuse");
+        assert!(
+            matches!(e.code(), Code::FsPathEscapeBlocked | Code::ActStaleVersion),
+            "unexpected code {:?}",
+            e.code()
+        );
+        assert_eq!(
+            fs::read(s.outside.join("target.md")).unwrap(),
+            b"outside",
+            "nothing outside the workspace was touched"
+        );
     }
 
     fn digest_of(p: &Path) -> ContentHash {

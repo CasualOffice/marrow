@@ -160,6 +160,11 @@ codes! {
     /// The name is not one this system will create — a NUL, a control
     /// character, a reserved device name, an over-long component.
     ActNameRejected         => "ACT_NAME_REJECTED",   Action, false;
+    /// The write happened and cannot be taken back — it replaced a file and no
+    /// copy of the earlier content was kept. Distinct from a refusal on
+    /// purpose: nothing was prevented here, and the caller is being told the
+    /// state of the world rather than why their request was declined.
+    ActNotReversible        => "ACT_NOT_REVERSIBLE", Action, false;
 
     // POL_ — policy (never retryable)
     PolDenied               => "POL_DENIED",                 Policy, false;
