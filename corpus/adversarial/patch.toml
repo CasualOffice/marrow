@@ -60,3 +60,27 @@ why     = "A patched file is this system's output as much as a created one. If a
 setup   = [{ kind = "file", path = "notes.md", contents = "The meeting is on Tuesday.\n" }]
 input   = { op = "patch", path = "notes.md", find = "Tuesday", replace = "Thursday", precondition = "current" }
 expect  = { outcome = "written", at = "notes.md", contains = "Thursday" }
+
+[[case]]
+id      = "patch-that-would-break-json-is-refused"
+attacks = "validity regression"
+why     = "An anchored edit is exact, and exact is not the same as right. An anchor that takes a closing brace with it produces a config a program cannot load at startup, and the damage surfaces somewhere else entirely, hours later."
+setup   = [{ kind = "file", path = "app.json", contents = "{\n  \"port\": 8080,\n  \"host\": \"localhost\"\n}\n" }]
+input   = { op = "patch", path = "app.json", find = "\"host\": \"localhost\"\n}", replace = "\"host\": \"localhost\"", precondition = "current" }
+expect  = { outcome = "refused", code = "ACT_VALIDATION_FAILED" }
+
+[[case]]
+id      = "patch-repairing-an-already-broken-file-is-allowed"
+attacks = "validity regression"
+why     = "The rule is that validity may not be *lost*, never that it must be achieved. Refusing an edit to a file that is already broken would block the one edit most worth allowing — the repair — and somebody with a trailing comma in their config must be able to fix it."
+setup   = [{ kind = "file", path = "broken.json", contents = "{\n  \"port\": 8080,\n}\n" }]
+input   = { op = "patch", path = "broken.json", find = "8080,", replace = "8080", precondition = "current" }
+expect  = { outcome = "written", at = "broken.json", contains = "8080" }
+
+[[case]]
+id      = "patch-on-a-broken-file-that-stays-broken-is-still-allowed"
+attacks = "validity regression"
+why     = "The case that separates a regression check from a validity check. Repairing a broken file usually produces valid output and would pass either rule; editing a broken file *without* fixing it only passes if the rule is really about what was lost. A caller renaming a key in a config that has an unrelated syntax error three lines down must not be blocked by the error it did not cause."
+setup   = [{ kind = "file", path = "still-broken.json", contents = "{\n  \"name\": \"old\",\n  \"oops\": ,\n}\n" }]
+input   = { op = "patch", path = "still-broken.json", find = "\"old\"", replace = "\"new\"", precondition = "current" }
+expect  = { outcome = "written", at = "still-broken.json", contains = "\"new\"" }

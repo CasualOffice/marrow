@@ -136,6 +136,17 @@ pub fn patch(ws: &Workspace, req: &Patch) -> Result<Written> {
         .with_context(req.path.clone()));
     }
 
+    // **Validity may not be lost.** Checked here rather than in
+    // `Workspace::write` for a reason worth stating: `write` does not read the
+    // old content unless it happens to be snapshotting, so validating there
+    // would either add a read to every write or make a safety check depend on
+    // whether a snapshot store is configured. A check that is on or off
+    // according to unrelated configuration is worse than one that is honestly
+    // scoped, and a patch is the operation that has both versions in hand
+    // anyway.
+    let target = ws.resolve_existing(&req.path)?;
+    crate::validate::check_no_regression(&target, &current, &updated)?;
+
     // Through the one guarded path, with the caller's own precondition. Every
     // rule the whole-file write has — containment re-proved at operation time,
     // the stale check immediately before the rename, the snapshot for undo,

@@ -572,7 +572,7 @@ mod tests {
         // that lowers it is deleting a defence someone found the hard way.
         let cases = corpus();
         assert!(
-            cases.len() >= 65,
+            cases.len() >= 68,
             "the corpus has shrunk to {} cases",
             cases.len()
         );
@@ -623,6 +623,7 @@ mod tests {
             // somewhere plausible in a way a whole-file write cannot.
             "ambiguous edit",
             "read-before-edit",
+            "validity regression",
         ] {
             assert!(
                 present.contains(required),

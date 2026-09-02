@@ -48,8 +48,10 @@ pub mod guard;
 mod name;
 pub mod patch;
 pub mod snapshot;
+pub mod validate;
 
 pub use create::{create_diagram, create_file, create_page, CreateDiagram, CreateFile, CreatePage};
 pub use guard::{Expect, Undo, Undone, Workspace, Written};
 pub use patch::{patch, Patch};
 pub use snapshot::{Pruned, Retention, SnapshotId, Snapshots};
+pub use validate::{check_no_regression, Checked, Format};

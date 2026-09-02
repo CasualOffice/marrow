@@ -165,6 +165,10 @@ codes! {
     /// purpose: nothing was prevented here, and the caller is being told the
     /// state of the world rather than why their request was declined.
     ActNotReversible        => "ACT_NOT_REVERSIBLE", Action, false;
+    /// The edit would leave the file structurally invalid, and it parsed
+    /// before. A regression, not a validity judgement: a file that was already
+    /// broken can still be edited, or nothing could ever repair one.
+    ActValidationFailed     => "ACT_VALIDATION_FAILED", Action, false;
 
     // POL_ — policy (never retryable)
     PolDenied               => "POL_DENIED",                 Policy, false;
