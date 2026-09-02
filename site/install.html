@@ -37,12 +37,15 @@
 
     <div class="warn">
       <p>
-        <strong>Do not use <code>v0.0.0</code>.</strong> That build was broken
-        in two ways that made it useless: the MLX worker script was never put
-        into the app bundle, so it could not load a model, and the app declared
-        no macOS folder-usage strings, so it could not read a folder you had
-        granted it. Both are fixed in <code>v0.0.1</code>. If you already have
-        <code>v0.0.0</code>, replace it.
+        <strong>Use <code>v0.0.5</code> or later.</strong> No earlier build
+        could answer a question on a machine that was not the one that built
+        it. <code>v0.0.0</code> left the MLX worker script out of the bundle
+        and declared no macOS folder-usage strings, so it could neither load a
+        model nor read a folder you had granted — fixed in <code>v0.0.1</code>.
+        But the <em>interpreter</em> that worker runs on was never in any
+        bundle either, and the instructions this page used to give you started
+        one step after the step that was missing. <code>v0.0.5</code> installs
+        it for you. If you have an earlier build, replace it.
       </p>
     </div>
   </div>
@@ -70,8 +73,8 @@
             <td>Keyword and filename search need no model, no GPU and no network. That is a hard rule of the project.</td>
           </tr>
           <tr>
-            <td>Python 3.11, to answer locally</td>
-            <td>Local generation and embedding run in an MLX worker process. The app tells you the exact two commands if the runtime is missing; roughly 450&nbsp;MB. Or skip it and point Marrow at a <a href="guide-cloud-model.html">cloud endpoint</a> instead.</td>
+            <td>Nothing, to answer locally</td>
+            <td>Local generation and embedding run in an MLX worker process, and the Models page installs it: one button, a 193&nbsp;MB download that brings its own Python, unpacked to about 626&nbsp;MB under <code>~/.local/share/marrow/runtime/</code>. Nothing else on the machine is touched and no Python of your own is needed. Or skip it and point Marrow at a <a href="guide-cloud-model.html">cloud endpoint</a> instead.</td>
           </tr>
         </tbody>
       </table>

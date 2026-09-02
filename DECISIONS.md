@@ -227,6 +227,42 @@ The real fragility is not the sidecar: `mlx` and `mlx-lm` are Apple's and
 pushed daily, but **`mlx-embeddings` is one person's**. That is the thing to
 watch.
 
+### D55.1 — Bundle the venv, or fetch it? → **Fetch it, pinned, on first run** *(settled 2026-09-03)*
+
+[D55](#d55--replace-the-python-mlx-sidecar--no-keep-it-bundle-the-venv) said
+"keep it, bundle the venv" and
+[Decision_MLX_Runtime.md](docs/Decision_MLX_Runtime.md) §7.2 costed it as *"a
+build or first-run step"*. It was never built, and for four releases the app
+shipped the worker script with no interpreter to run it. This settles the half
+§7.2 left open, because the two readings of "bundle" have very different bills.
+
+**Inside the `.app`** is what §7.2 sounds like. It costs a ~450 MB DMG and,
+worse, several thousand nested Mach-O files that must all be signed or the
+bundle signature does not verify. This project has already shipped two releases
+that died on launch from a signature problem (`53623ed`); adding three thousand
+nested binaries to that surface to save one download is the wrong trade.
+
+**Fetched on first run** is what shipped. The archive lives on its own
+`runtime-vN` tag, pinned by digest in `runtime.rs`, and reuses the discipline
+`download.rs` already had — resumable, verified before anything is extracted,
+published by one rename. The DMG does not grow, code signing is untouched, and
+the runtime versions independently of the app, which matters because a UI fix
+must not invalidate a 193 MB install that already works.
+
+**What it costs, stated plainly:** the first run needs a network. §13.7 of the
+comparison was right that "one binary plus a parser subprocess" stopped being
+true a while ago, and this does not make it true again — it makes it
+*automatic*, which was always the achievable half.
+
+**And it is not a venv.** A venv records the interpreter that built it — an
+absolute `home` in `pyvenv.cfg`, `bin/python` symlinked out to Homebrew — so a
+venv is portable to exactly one machine. That is not a detail of how the old
+one was made; it is why a hand-made one could never have been shipped, and why
+the word "bundle" in D55 could not have been satisfied by copying what was on
+the author's disk. python-build-standalone's `install_only` distribution is
+relocatable, and `build-runtime.sh` refuses to publish an archive with a build
+path anywhere inside it.
+
 ### D56 — The milestone boundary dissolved, and nobody said so *(recorded 2026-08-30)*
 
 Recorded because it is a process decision that was made by not making it.

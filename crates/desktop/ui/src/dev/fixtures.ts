@@ -371,6 +371,13 @@ function devModels(): ModelsSnapshot {
     models: DEV_MODELS,
     runtimeReady: true,
     runtimeSetup: null,
+    // The dev fixture has a runtime, so there is nothing to install. Flip
+    // `runtimeSetup` to a string and `runtimeReady` to false to see the other
+    // half of this page — which is the half every released build showed on
+    // every machine that was not the one that built it.
+    runtimeInstallable: true,
+    runtimeDownloadBytes: 202_574_441,
+    runtimeInstall: null,
     runtimeStatus:
       "MLX is available on this machine. A model that is installed and fits can answer questions locally — nothing leaves this device.",
     // Nothing configured, which is what makes the sentence above true.

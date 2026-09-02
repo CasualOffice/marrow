@@ -675,6 +675,9 @@ const COMMAND_NAMES: &[&str] = &[
     "set_user_name",
     "cancel_model_download",
     "dismiss_model_download",
+    "install_runtime",
+    "cancel_runtime_install",
+    "dismiss_runtime_install",
     "ask",
     "cancel_ask",
     "release_model",
@@ -857,7 +860,17 @@ mod tests {
         // 36 with `user_name` and `set_user_name`: one field of
         // `preferences.json`, and the only thing this app knows about the
         // person using it. Neither reads anything of theirs.
-        assert_eq!(COMMAND_NAMES.len(), 36);
+        //
+        // 39 with `install_runtime` and its cancel and dismiss. It writes the
+        // most of anything here — a 193 MB download unpacked into ~626 MB
+        // under `runtime/` — and it is still not a mutation of the user's
+        // disk: it writes only inside Marrow's own data directory, to a path
+        // that did not exist, and every byte is checked against a pinned
+        // digest before a single file is extracted. It is on this list at all
+        // because the alternative was what shipped for four releases: an app
+        // that needed a runtime it never installed, on every machine that was
+        // not the one that built it.
+        assert_eq!(COMMAND_NAMES.len(), 39);
         for n in COMMAND_NAMES {
             if DELIBERATE_MUTATIONS.contains(n) {
                 continue;
@@ -1021,6 +1034,56 @@ pub async fn cancel_model_download(
     let hub = Arc::clone(&hub);
     blocking(move || {
         hub.cancel_download(&model_id);
+        Ok(hub.snapshot())
+    })
+    .await
+}
+
+/// Set up the MLX runtime.
+///
+/// Returns immediately with a fresh snapshot; the install runs on its own
+/// thread and its progress arrives through `models_overview`, the same way a
+/// model download does.
+///
+/// This is the command that makes a released build usable on a machine that is
+/// not the one that built it. Until it existed, the app expected an
+/// interpreter that was never in the bundle and printed a fix beginning with a
+/// command macOS does not ship.
+#[tauri::command]
+pub async fn install_runtime(
+    hub: State<'_, Arc<crate::models::Hub>>,
+) -> Result<crate::models::ModelsSnapshot, UiError> {
+    let hub = Arc::clone(&hub);
+    blocking(move || {
+        hub.install_runtime()?;
+        Ok(hub.snapshot())
+    })
+    .await
+}
+
+/// Stop an install in flight. What was downloaded is kept, so starting again
+/// resumes rather than restarts.
+#[tauri::command]
+pub async fn cancel_runtime_install(
+    hub: State<'_, Arc<crate::models::Hub>>,
+) -> Result<crate::models::ModelsSnapshot, UiError> {
+    let hub = Arc::clone(&hub);
+    blocking(move || {
+        hub.cancel_runtime_install();
+        Ok(hub.snapshot())
+    })
+    .await
+}
+
+/// Clear a settled install row, so a failure that has been read stops being
+/// shown for the rest of the session.
+#[tauri::command]
+pub async fn dismiss_runtime_install(
+    hub: State<'_, Arc<crate::models::Hub>>,
+) -> Result<crate::models::ModelsSnapshot, UiError> {
+    let hub = Arc::clone(&hub);
+    blocking(move || {
+        hub.dismiss_runtime_install();
         Ok(hub.snapshot())
     })
     .await

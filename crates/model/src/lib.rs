@@ -35,6 +35,7 @@ pub mod provider;
 pub mod queue;
 pub mod registry;
 pub mod request;
+pub mod runtime;
 pub mod scratch;
 pub mod secrets;
 pub mod supervisor;
@@ -54,6 +55,7 @@ pub use provider::{
 pub use queue::{Cancel, Depth, Queue};
 pub use registry::{Artifact, Capabilities, Entry, Format, Licence, Registry, Source};
 pub use request::{Priority, Reasoning, Request};
+pub use runtime::{install as install_runtime, Archive, Install};
 pub use scratch::{ModelWorkspace, Scratch};
 pub use secrets::{Keyring, MemorySecrets, Secret, SecretStore};
 pub use supervisor::{Command, Event, LoadStage, ModelState, Supervisor};

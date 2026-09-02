@@ -25,6 +25,12 @@ blake3.workspace = true
 # is no system TLS library to go missing.
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 sha2 = "0.10"
+# Unpacking the runtime archive. Both are pure Rust — `flate2` on the
+# `rust_backend` deliberately, because a C toolchain in the dependency graph is
+# exactly the kind of thing that stops a project building in two years, and
+# gzip over zstd costs about 12% of one download to avoid one.
+tar = "0.4"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 # The OS keyring, for a provider key (LLM-030, SEC-005). `apple-native` is the
 # macOS keychain; no other backend is compiled in, because there is no other
 # platform to be wrong about.

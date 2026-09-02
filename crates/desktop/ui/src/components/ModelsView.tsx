@@ -21,6 +21,7 @@ import { StateBadge, type StateTone } from "./Badges";
 import { ErrorNotice } from "./ErrorNotice";
 import { Icon } from "./Icon";
 import { useModels } from "../queries";
+import { useUi } from "../store";
 import {
   asUiError,
   cancelModelDownload,
@@ -33,8 +34,12 @@ import {
   setAiProfile,
   startSemanticBackfill,
   stopSemanticBackfill,
+  cancelRuntimeInstall,
+  dismissRuntimeInstall,
+  installRuntime,
   type DownloadProgress,
   type ModelRow,
+  type RuntimeInstall,
   type ModelState,
   type SemanticStatus,
 } from "../api";
@@ -135,6 +140,193 @@ function DownloadBar({
               Cancel
             </button>
           </>
+        )}
+        {stopped && (
+          <button type="button" className={styles.linkBtn} onClick={onDismiss}>
+            Dismiss
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Setting up the MLX runtime, with a button rather than a paragraph.
+ *
+ * **Why this is here at all.** Every release up to v0.0.4 shipped the worker
+ * script and expected the interpreter to already be in the user's data
+ * directory, where only a hand-made venv ever put one. On any Mac but the one
+ * that built it, the app indexed happily and could not answer a question — and
+ * the printed fix began `python3.11 -m venv`, a command macOS does not have.
+ * The instruction started one step after the step that was missing.
+ *
+ * So: no terminal, no Python, no Homebrew. The commands stay underneath as a
+ * fallback for someone who would rather do it themselves.
+ */
+/*
+ * Exported, and imported by `Welcome` — the one place in this UI where a view
+ * reaches into another view's module.
+ *
+ * The alternative was a third file and a copy of the progress-bar styles, to
+ * express that first run and the Models page offer the same thing. They *are*
+ * the same thing: whichever screen a user is looking at when they discover
+ * this machine cannot answer a question is the screen that has to fix it.
+ */
+export function RuntimeSetup({
+  installable,
+  downloadBytes,
+  install,
+  setup,
+}: {
+  installable: boolean;
+  downloadBytes: number;
+  install: RuntimeInstall | null;
+  setup: string;
+}) {
+  const client = useQueryClient();
+  const notify = useUi((s) => s.notify);
+  const [busy, setBusy] = useState(false);
+
+  // Only fires when the *command* throws — starting a thread, or a poisoned
+  // lock. A failing install reports itself through `Stage::Failed`, which the
+  // bar below renders with the reason the core wrote.
+  const run = useCallback(
+    async (fn: () => Promise<ModelsSnapshot>) => {
+      setBusy(true);
+      try {
+        client.setQueryData(["models"], await fn());
+      } catch (e) {
+        notify(asUiError(e).message);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [client, notify],
+  );
+
+  const stage = install?.stage.stage;
+  const running = install != null && stage !== "ready" && stage !== "cancelled" && stage !== "failed";
+
+  return (
+    <div className={styles.runtimeSetup}>
+      {installable && !running && (
+        <div className={styles.runtimeOffer}>
+          <button
+            type="button"
+            className={styles.get}
+            disabled={busy}
+            onClick={() => run(installRuntime)}
+          >
+            {stage === "cancelled" || stage === "failed" ? "Try again" : "Install runtime"}
+          </button>
+          {/* The cost, before the click rather than after it. */}
+          <span className={styles.runtimeOfferNote}>
+            {bytes(downloadBytes)} once. No Python needed — it brings its own.
+          </span>
+        </div>
+      )}
+
+      {install && (
+        <RuntimeBar
+          p={install}
+          onCancel={() => run(cancelRuntimeInstall)}
+          onDismiss={() => run(dismissRuntimeInstall)}
+        />
+      )}
+
+      {/* The fix, not the problem. Still shown while an install runs, because
+          someone watching a four-minute bar is exactly who wants to know what
+          it is doing. */}
+      <pre className={styles.setup}>{setup}</pre>
+    </div>
+  );
+}
+
+/**
+ * SKEL-005 again, for the install. Same shape as {@link DownloadBar} on
+ * purpose — it is the same act from the user's side.
+ *
+ * The one difference is `extracting`: the bytes are all spent by then, so the
+ * bar holds and the line counts files. A frozen bar with a moving number reads
+ * as working; a frozen bar with nothing reads as hung.
+ */
+function RuntimeBar({
+  p,
+  onCancel,
+  onDismiss,
+}: {
+  p: RuntimeInstall;
+  onCancel: () => void;
+  onDismiss: () => void;
+}) {
+  const pct = p.bytesTotal > 0 ? (p.bytesDone / p.bytesTotal) * 100 : 0;
+  const done = p.stage.stage === "ready";
+  const failed = p.stage.stage === "failed";
+  const stopped = failed || p.stage.stage === "cancelled";
+
+  let line: string;
+  switch (p.stage.stage) {
+    case "downloading":
+      line = "downloading the runtime";
+      break;
+    case "verifying":
+      line = "checking what arrived against its published checksum";
+      break;
+    case "extracting":
+      line = `unpacking · ${p.stage.files.toLocaleString()} files`;
+      break;
+    case "proving":
+      line = "starting it, to be sure it runs";
+      break;
+    case "ready":
+      line = "ready — this machine can answer questions now";
+      break;
+    case "cancelled":
+      line = "cancelled — what was downloaded is kept, so starting again resumes";
+      break;
+    case "failed":
+      line = p.stage.reason;
+      break;
+  }
+
+  const transferring = p.stage.stage === "downloading";
+
+  return (
+    <div className={styles.progress}>
+      <div
+        className={styles.bar}
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(done ? 100 : pct)}
+        aria-label="Runtime install progress"
+      >
+        <div
+          className={cx(styles.barFill, done && styles.barDone, stopped && styles.barStopped)}
+          style={{ width: `${done ? 100 : pct}%` }}
+        />
+      </div>
+      <div className={styles.progressLine}>
+        <span className={failed ? styles.progressFailed : styles.progressStage}>{line}</span>
+        <span className={styles.grow} />
+        {transferring && (
+          <>
+            <span className={styles.progressNums}>
+              {bytes(p.bytesDone)} of {bytes(p.bytesTotal)}
+            </span>
+            {p.bytesPerSec > 0 && (
+              <span className={styles.progressNums}>{bytes(p.bytesPerSec)}/s</span>
+            )}
+            {p.etaSecs !== null && (
+              <span className={styles.progressNums}>{duration(p.etaSecs)} left</span>
+            )}
+          </>
+        )}
+        {!stopped && !done && (
+          <button type="button" className={styles.linkBtn} onClick={onCancel}>
+            Cancel
+          </button>
         )}
         {stopped && (
           <button type="button" className={styles.linkBtn} onClick={onDismiss}>
@@ -452,9 +644,12 @@ export function ModelsView() {
               {s.runtimeStatus}
             </p>
             {s.runtimeSetup && (
-              /* The fix, not the problem. A setup step the user can copy beats
-                 a sentence telling them something is missing. */
-              <pre className={styles.setup}>{s.runtimeSetup}</pre>
+              <RuntimeSetup
+                installable={s.runtimeInstallable}
+                downloadBytes={s.runtimeDownloadBytes}
+                install={s.runtimeInstall}
+                setup={s.runtimeSetup}
+              />
             )}
             {s.modelsDirProblem && (
               <p className={styles.dirProblem}>

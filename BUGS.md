@@ -25,6 +25,7 @@ Fixed items move to the TRACKER Log and come off this list.
 
 | What | Commit |
 |---|---|
+| **No released build could answer a question on any machine but the one that built it.** The app shipped `mlx_worker.py` and never the interpreter; the printed fix began with a command macOS does not have | *this change* |
 | CLI and MCP could not open the desktop's index at all — migration chain drift | `8706630` |
 | Semantic search built, tested, and unreachable: no CLI command, no UI control | `8706630` |
 | `search_literal` not exposed over MCP | `5aff922` |

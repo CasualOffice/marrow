@@ -172,6 +172,15 @@ pub struct ModelsSnapshot {
     /// The commands that would create one. Named, because "MLX is not
     /// available" is a dead end and this is something the user can do.
     pub runtime_setup: Option<String>,
+    /// Whether this build has an archive it can actually install. False means
+    /// the button is not offered at all — a button that always fails is worse
+    /// than no button, and the hint below it is then the only route.
+    pub runtime_installable: bool,
+    /// How big the download is, so the offer states its cost before it is
+    /// accepted rather than after.
+    pub runtime_download_bytes: u64,
+    /// Where an install is, while one is running and for a moment after.
+    pub runtime_install: Option<marrow_model::runtime::Install>,
     /// The remote endpoint, if one is configured. On this page because
     /// `runtime_status` used to say "nothing leaves this device" as a
     /// constant, and that sentence is only true while this is `None` or off.
@@ -296,7 +305,16 @@ pub struct Hub {
     /// The Python interpreter and worker script, when one was found.
     /// LLM-036: found is not the same as verified — starting a worker proves
     /// it, and this only says a candidate exists.
-    runtime: Option<Runtime>,
+    ///
+    /// Behind a lock because it is no longer decided once at startup: the app
+    /// can now install a runtime while the window is open, and a field settled
+    /// at `Hub::start` would leave the user looking at "no runtime" until they
+    /// quit and reopened the thing that had just told them it was ready.
+    runtime: Arc<Mutex<Option<Runtime>>>,
+    /// Where the runtime install is, while one is running and for a moment
+    /// after, so a page that refetches every four seconds keeps the same bar.
+    runtime_install: Arc<Mutex<Option<marrow_model::runtime::Install>>>,
+    runtime_cancel: Mutex<Option<Cancel>>,
     data_dir: PathBuf,
     /// One entry per transfer in flight or recently finished, so a page that
     /// refetches every four seconds keeps showing the bar.
@@ -443,7 +461,9 @@ impl Hub {
             // provider actually answers a question.
             secrets: Arc::new(Keyring),
             provider_cache: Mutex::new(None),
-            runtime,
+            runtime: Arc::new(Mutex::new(runtime)),
+            runtime_install: Arc::new(Mutex::new(None)),
+            runtime_cancel: Mutex::new(None),
             data_dir,
             machine,
             sampler,
@@ -481,6 +501,140 @@ impl Hub {
         }
         if let Ok(mut s) = self.scan.lock() {
             *s = fresh;
+        }
+    }
+
+    /// The runtime, if there is one.
+    ///
+    /// Read through the lock rather than from a field, because
+    /// [`Hub::install_runtime`] can put one there while the window is open.
+    pub fn runtime(&self) -> Option<Runtime> {
+        self.runtime.lock().ok().and_then(|r| r.clone())
+    }
+
+    /// Install the MLX runtime.
+    ///
+    /// **The reason this exists.** Up to v0.0.4 the app shipped
+    /// `mlx_worker.py` in the bundle and expected the interpreter to already
+    /// be in the user's data directory — where only the author's hand-made
+    /// venv ever put one. Every release verified "the worker is in
+    /// `Contents/Resources`" on the machine that built it, which is the one
+    /// machine where the missing half cannot be missing. On any other Mac the
+    /// app indexed happily and could not answer a question, and the printed
+    /// fix began with a command macOS does not have.
+    ///
+    /// Runs on its own thread and reports into `runtime_install`, the same
+    /// shape as a model download, so the page renders it the same way.
+    pub fn install_runtime(&self) -> marrow_core::Result<()> {
+        if self.runtime().is_some() {
+            return Ok(());
+        }
+        {
+            let mut slot = self.runtime_install.lock().map_err(|_| poisoned())?;
+            // Already running. Not an error — the user pressed the button
+            // twice, which is what people do when something takes four
+            // minutes and says nothing.
+            if slot.as_ref().is_some_and(|p| !p.is_settled()) {
+                return Ok(());
+            }
+            *slot = None;
+        }
+
+        let cancel = Cancel::new();
+        if let Ok(mut c) = self.runtime_cancel.lock() {
+            *c = Some(cancel.clone());
+        }
+
+        let progress = Arc::clone(&self.runtime_install);
+        let data_dir = self.data_dir.clone();
+        let script = worker_script();
+        let runtime_slot = Arc::clone(&self.runtime);
+
+        std::thread::Builder::new()
+            .name("marrow-runtime-install".into())
+            .spawn(move || {
+                let mut sink = |p: marrow_model::runtime::Install| {
+                    if let Ok(mut s) = progress.lock() {
+                        *s = Some(p);
+                    }
+                };
+                let outcome = marrow_model::runtime::install(
+                    &data_dir,
+                    script,
+                    &marrow_model::runtime::ARCHIVE,
+                    &marrow_model::Https,
+                    &cancel,
+                    &mut sink,
+                );
+                match outcome {
+                    Ok(runtime) => {
+                        // Published before the stage flips to Ready, so a page
+                        // that reads "ready" and immediately asks a question
+                        // cannot find the runtime still absent.
+                        if let Ok(mut r) = runtime_slot.lock() {
+                            *r = Some(runtime);
+                        }
+                        if let Ok(mut s) = progress.lock() {
+                            *s = Some(marrow_model::runtime::Install {
+                                stage: marrow_model::runtime::Stage::Ready,
+                                ..s.clone().unwrap_or_else(ready_install)
+                            });
+                        }
+                        tracing::info!("model runtime installed");
+                    }
+                    Err(e) => {
+                        // The code, not just the sentence: MOD_CANCELLED and
+                        // MOD_INTEGRITY_FAILED are different rows on the page
+                        // and only one of them is worth retrying.
+                        tracing::warn!(code = %e.code(), "runtime install failed: {}", e.message());
+                        if let Ok(mut s) = progress.lock() {
+                            let stage = if e.code() == marrow_core::Code::ModCancelled {
+                                marrow_model::runtime::Stage::Cancelled
+                            } else {
+                                marrow_model::runtime::Stage::Failed {
+                                    code: e.code().to_string(),
+                                    reason: e.message().to_string(),
+                                }
+                            };
+                            *s = Some(marrow_model::runtime::Install {
+                                stage,
+                                ..s.clone().unwrap_or_else(ready_install)
+                            });
+                        }
+                    }
+                }
+            })
+            .map_err(|e| {
+                marrow_core::Error::new(
+                    marrow_core::Code::CfgInvalid,
+                    "Could not start setting up the model runtime.",
+                )
+                .with_source(e)
+            })?;
+        Ok(())
+    }
+
+    /// Stop an install in flight. What was downloaded is kept.
+    pub fn cancel_runtime_install(&self) -> bool {
+        let Ok(mut c) = self.runtime_cancel.lock() else {
+            return false;
+        };
+        match c.take() {
+            Some(cancel) => {
+                cancel.cancel();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Clear a settled install row, so a failure the user has read stops being
+    /// shown forever.
+    pub fn dismiss_runtime_install(&self) {
+        if let Ok(mut s) = self.runtime_install.lock() {
+            if s.as_ref().is_some_and(|p| p.is_settled()) {
+                *s = None;
+            }
         }
     }
 
@@ -745,7 +899,7 @@ impl Hub {
 
     /// Why there is nothing to answer with, and what to do about it.
     fn no_generator_message(&self) -> String {
-        if self.runtime.is_none() {
+        if self.runtime().is_none() {
             "No inference runtime is installed, so questions cannot be answered yet. \
              Search still works. The Models page has the two commands that install one, \
              or you can point Marrow at an OpenAI-compatible endpoint in Settings."
@@ -917,7 +1071,7 @@ impl Hub {
             // holding both would be exactly the memory spike admission exists
             // to prevent.
             *slot = None;
-            let runtime = self.runtime.clone().ok_or_else(|| {
+            let runtime = self.runtime().ok_or_else(|| {
                 marrow_core::Error::new(
                     marrow_core::Code::CfgInvalid,
                     Runtime::setup_hint(&self.data_dir),
@@ -1329,7 +1483,7 @@ impl Hub {
     }
 
     fn start_embedder(&self) -> marrow_core::Result<std::sync::Arc<Embedder>> {
-        let runtime = self.runtime.clone().ok_or_else(|| {
+        let runtime = self.runtime().ok_or_else(|| {
             marrow_core::Error::new(
                 marrow_core::Code::CfgInvalid,
                 Runtime::setup_hint(&self.data_dir),
@@ -1634,8 +1788,8 @@ impl Hub {
             generator: role_row(profile, Workload::Generation),
             embedder: role_row(profile, Workload::Embedding),
             models,
-            runtime_ready: self.runtime.is_some(),
-            runtime_status: match (&self.runtime, remote.enabled) {
+            runtime_ready: self.runtime().is_some(),
+            runtime_status: match (&self.runtime(), remote.enabled) {
                 // "Nothing leaves this device" was a constant, and it stops
                 // being true the moment the user turns on an endpoint. The
                 // sentence is now assembled from what is actually configured.
@@ -1653,9 +1807,12 @@ impl Hub {
                 (None, false) => RUNTIME_MISSING.to_string(),
             },
             runtime_setup: self
-                .runtime
+                .runtime()
                 .is_none()
                 .then(|| Runtime::setup_hint(&self.data_dir)),
+            runtime_installable: marrow_model::runtime::ARCHIVE.is_pinned(),
+            runtime_download_bytes: marrow_model::runtime::ARCHIVE.size,
+            runtime_install: self.runtime_install.lock().ok().and_then(|p| p.clone()),
             remote,
         }
     }
@@ -1845,6 +2002,21 @@ struct Loaded {
 /// The compile-time fallback is kept for `cargo run` from a checkout and only
 /// there: shipping a binary that reaches for an absolute path on the machine
 /// that built it is how this happened in the first place.
+/// A settled install row with no measurements in it.
+///
+/// Only ever used to carry a terminal stage when the install ended before any
+/// progress landed — a refusal on the first line, say. The numbers are zero
+/// because they are unknown, not because nothing was transferred.
+fn ready_install() -> marrow_model::runtime::Install {
+    marrow_model::runtime::Install {
+        stage: marrow_model::runtime::Stage::Ready,
+        bytes_done: 0,
+        bytes_total: marrow_model::runtime::ARCHIVE.size,
+        bytes_per_sec: 0,
+        eta_secs: None,
+    }
+}
+
 fn worker_script() -> PathBuf {
     let exe = std::env::current_exe().ok();
     let beside = exe
@@ -2234,6 +2406,62 @@ mod tests {
         let setup = s.runtime_setup.expect("must name the fix");
         assert!(setup.contains("mlx-lm"), "{setup}");
         assert!(setup.contains("venv"), "{setup}");
+        hub.shutdown();
+    }
+
+    /// **The state every released build up to v0.0.4 was in on every machine
+    /// but the one that built it**, asserted rather than described.
+    ///
+    /// A fresh data directory has no `runtime/mlx`, because nothing in the
+    /// bundle ever put one there. What the page offers in that state was a
+    /// paragraph of commands whose first line macOS cannot run. It must now be
+    /// something clickable, with its cost stated before the click.
+    #[test]
+    fn a_machine_with_no_runtime_is_offered_one_it_can_actually_install() {
+        let t = tempfile::tempdir().unwrap();
+        let hub = Hub::start(t.path().join("models"), &[]);
+        let s = hub.snapshot();
+
+        assert!(!s.runtime_ready, "a fresh data directory has no runtime");
+        assert!(
+            s.runtime_installable,
+            "a build that cannot install one leaves the user where v0.0.4 did"
+        );
+        assert!(
+            s.runtime_download_bytes > 0,
+            "the offer states its cost before it is accepted"
+        );
+        assert!(
+            s.runtime_install.is_none(),
+            "nothing is in flight until the user asks"
+        );
+        hub.shutdown();
+    }
+
+    /// An install is never started over a runtime that already works.
+    ///
+    /// The author's hand-made venv predates all of this and is the only
+    /// runtime on the machine that found the bug. An installer that replaced
+    /// it would be a worse bug than the one it fixes.
+    #[test]
+    fn a_machine_that_already_has_a_runtime_is_left_alone() {
+        let t = tempfile::tempdir().unwrap();
+        let bin = t.path().join("runtime/mlx/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("python"), "#!/bin/sh\n").unwrap();
+
+        let hub = Hub::start(t.path().join("models"), &[]);
+        let before = hub.snapshot();
+        hub.install_runtime().expect("a no-op, not an error");
+        let after = hub.snapshot();
+
+        assert_eq!(before.runtime_ready, after.runtime_ready);
+        assert!(
+            after.runtime_install.is_none(),
+            "nothing was started: {:?}",
+            after.runtime_install
+        );
+        assert!(bin.join("python").exists(), "and nothing was removed");
         hub.shutdown();
     }
 

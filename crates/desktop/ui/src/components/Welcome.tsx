@@ -50,6 +50,7 @@ import { Icon } from "./Icon";
 import { Kbd } from "./Kbd";
 import { grantFolder, pickFiles } from "../actions";
 import { asUiError, downloadModel, type ModelRow, type ModelsSnapshot } from "../api";
+import { RuntimeSetup } from "./ModelsView";
 import { useIndexHealth, useModels, useWorkspaces } from "../queries";
 import { useUi } from "../store";
 
@@ -470,15 +471,24 @@ function ModelStep({
   }
 
   if (!snapshot.runtimeReady) {
-    // Never a button that cannot work. The runtime status is the core's own
-    // words, and `runtimeSetup` is the thing the user can actually do.
+    // Never a button that cannot work — and for four releases this screen had
+    // the opposite problem: no button at all, and a printed instruction whose
+    // first line macOS could not run. This is where a fresh install lands, so
+    // this is where the fix has to be reachable.
     return (
       <>
         <p className={styles.blocked}>
           <Icon name="warning" size={13} />
           {snapshot.runtimeStatus}
         </p>
-        {snapshot.runtimeSetup && <pre className={styles.setup}>{snapshot.runtimeSetup}</pre>}
+        {snapshot.runtimeSetup && (
+          <RuntimeSetup
+            installable={snapshot.runtimeInstallable}
+            downloadBytes={snapshot.runtimeDownloadBytes}
+            install={snapshot.runtimeInstall}
+            setup={snapshot.runtimeSetup}
+          />
+        )}
         <p className={styles.aside}>
           None of this affects search, which is already working.
         </p>

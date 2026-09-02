@@ -152,20 +152,35 @@ impl Runtime {
 
     /// What to tell the user when there is no runtime.
     ///
-    /// Names the command, because "MLX is not available" is a dead end and
-    /// this is a thing they can actually do.
+    /// **This used to be the only way in, and it did not work.** It began
+    /// `python3.11 -m venv`, and macOS ships no `python3.11`: on any machine
+    /// that was not the author's, the first line was `command not found` and
+    /// the instruction dead-ended one step *after* the step that was missing.
+    /// Every released build reached here, because the interpreter it looks for
+    /// was never in the bundle — only `mlx_worker.py` was.
+    ///
+    /// So the hint is now a fallback behind [`crate::runtime::install`], and
+    /// the fallback names all three commands rather than the last two.
     pub fn setup_hint(data_dir: &Path) -> String {
-        // **Both packages.** `mlx-lm` alone gives a runtime that generates and
-        // cannot embed: `op_load` imports `mlx_embeddings` for an embedding
-        // model, because an embedding model is not a causal LM with the head
-        // removed. Following a hint that named only the first would leave
-        // semantic search broken while Ask worked, with nothing saying why.
+        // **Both packages, and pinned.** `mlx-lm` alone gives a runtime that
+        // generates and cannot embed — `op_load` imports `mlx_embeddings` for
+        // an embedding model, because an embedding model is not a causal LM
+        // with the head removed — so a hint naming only the first leaves
+        // semantic search broken while Ask works, with nothing saying why.
+        // Unpinned, `pip install mlx-lm` resolves to whatever PyPI serves that
+        // day, and one day that is a version where `LRUPromptCache` has moved
+        // and the failure is an ImportError with no version number in it.
         let venv = data_dir.join("runtime/mlx");
         format!(
-            "No MLX runtime found. Create one with:\n\n    \
+            "No MLX runtime is installed. Use “Install runtime” above — it \
+             downloads a self-contained one, needs no Python and nothing else \
+             on this machine.\n\n\
+             To do it by hand instead, all three lines, in order:\n\n    \
+             brew install python@3.11\n    \
              python3.11 -m venv {}\n    \
-             {}/bin/pip install mlx-lm mlx-embeddings\n\n\
-             It needs about 450 MB and Apple Silicon.",
+             {}/bin/pip install 'mlx==0.32.2' 'mlx-lm==0.31.3' \
+             'mlx-embeddings==0.1.0'\n\n\
+             Either way it needs about 450 MB and Apple Silicon.",
             venv.display(),
             venv.display(),
         )
@@ -1099,6 +1114,46 @@ sleep 5"#
         // Both, or semantic search is broken while Ask works.
         assert!(hint.contains("mlx-embeddings"), "{hint}");
         assert!(hint.contains("450 MB"), "must say what it costs: {hint}");
+    }
+
+    /// The defect the whole install path exists for, as a test rather than a
+    /// commit message.
+    ///
+    /// The old hint started at `python3.11 -m venv`. macOS has no
+    /// `python3.11`, so on every machine that was not the one that wrote it,
+    /// step one was `command not found` — an instruction that begins one step
+    /// after the missing step is not an instruction.
+    #[test]
+    fn the_manual_fallback_starts_at_the_step_that_is_actually_missing() {
+        let hint = Runtime::setup_hint(Path::new("/data"));
+        let brew = hint.find("brew install python@3.11");
+        let venv = hint.find("python3.11 -m venv");
+        assert!(
+            brew.is_some(),
+            "macOS ships no python3.11; the hint must say how to get one: {hint}"
+        );
+        assert!(brew < venv, "and must say it before it is used: {hint}");
+    }
+
+    /// An unpinned `pip install mlx-lm` resolves to whatever PyPI serves that
+    /// day. The day it serves one where `LRUPromptCache` moved, the failure is
+    /// an ImportError at load with no version number anywhere in it.
+    #[test]
+    fn the_manual_fallback_pins_every_version_it_names() {
+        let hint = Runtime::setup_hint(Path::new("/data"));
+        for pin in ["mlx==0.32.2", "mlx-lm==0.31.3", "mlx-embeddings==0.1.0"] {
+            assert!(hint.contains(pin), "must pin {pin}: {hint}");
+        }
+    }
+
+    /// And the hint is the fallback now, not the only way in.
+    #[test]
+    fn the_hint_offers_the_thing_that_needs_no_terminal_first() {
+        let hint = Runtime::setup_hint(Path::new("/data"));
+        assert!(
+            hint.find("Install runtime") < hint.find("by hand"),
+            "the button comes before the commands: {hint}"
+        );
     }
 
     #[test]

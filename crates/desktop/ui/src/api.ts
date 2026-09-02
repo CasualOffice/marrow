@@ -564,6 +564,31 @@ export interface DownloadProgress {
   readonly etaSecs: number | null;
 }
 
+/**
+ * Where setting up the MLX runtime has got to. Mirrors
+ * `marrow_model::runtime::Stage`.
+ *
+ * `extracting` carries a file count rather than bytes: the archive size is
+ * already spent by then, and a 626 MB unpack with no number on it is
+ * indistinguishable from a hang.
+ */
+export type RuntimeInstallStage =
+  | { readonly stage: "downloading" }
+  | { readonly stage: "verifying" }
+  | { readonly stage: "extracting"; readonly files: number }
+  | { readonly stage: "proving" }
+  | { readonly stage: "ready" }
+  | { readonly stage: "cancelled" }
+  | { readonly stage: "failed"; readonly code: string; readonly reason: string };
+
+export interface RuntimeInstall {
+  readonly stage: RuntimeInstallStage;
+  readonly bytesDone: number;
+  readonly bytesTotal: number;
+  readonly bytesPerSec: number;
+  readonly etaSecs: number | null;
+}
+
 export interface ModelRow {
   readonly id: string;
   readonly displayName: string;
@@ -653,9 +678,17 @@ export interface ModelsSnapshot {
   readonly runtimeStatus: string;
   /** False means every model here can be downloaded and none can answer. */
   readonly runtimeReady: boolean;
-  /** The commands that would create a runtime. Named, because "MLX is not
-   *  available" is a dead end and this is something the user can do. */
+  /** The commands that would create a runtime by hand. The fallback now —
+   *  `runtimeInstallable` is the route that needs no terminal. */
   readonly runtimeSetup: string | null;
+  /** Whether this build has a published archive it can install. False means no
+   *  button: one that always fails is worse than none, and the commands above
+   *  are then the only route. */
+  readonly runtimeInstallable: boolean;
+  /** How big the download is, so the offer states its cost before it is taken. */
+  readonly runtimeDownloadBytes: number;
+  /** Where an install is, while one runs and for a moment after. */
+  readonly runtimeInstall: RuntimeInstall | null;
   /** The remote endpoint, if one is configured. `runtimeStatus` is written
    *  from it: "nothing leaves this device" is only true while it is off. */
   readonly remote: ProviderStatus;
@@ -791,6 +824,18 @@ export function cancelModelDownload(modelId: string): Promise<ModelsSnapshot> {
 
 export function dismissModelDownload(modelId: string): Promise<ModelsSnapshot> {
   return call<ModelsSnapshot>("dismiss_model_download", { modelId });
+}
+
+export function installRuntime(): Promise<ModelsSnapshot> {
+  return call<ModelsSnapshot>("install_runtime");
+}
+
+export function cancelRuntimeInstall(): Promise<ModelsSnapshot> {
+  return call<ModelsSnapshot>("cancel_runtime_install");
+}
+
+export function dismissRuntimeInstall(): Promise<ModelsSnapshot> {
+  return call<ModelsSnapshot>("dismiss_runtime_install");
 }
 
 // ── ask (Part 8 §148) ─────────────────────────────────────────────────────

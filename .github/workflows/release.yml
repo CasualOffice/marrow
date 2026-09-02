@@ -94,6 +94,41 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$app"
           echo "signature is valid on disk"
 
+      # **The pinned runtime archive must exist and match.**
+      #
+      # This is the check whose absence shipped four broken releases. Every one
+      # of them verified `mlx_worker.py` was in `Contents/Resources` — on the
+      # machine that built it, which is the one machine that already had an
+      # interpreter in its data directory, so the missing half could not
+      # register. "Verifying an artifact where the defect cannot appear is not
+      # evidence" is already a line in this repo's tracker.
+      #
+      # So: fetch what the app will fetch, from the URL the app will use, and
+      # hash it. A pin pointing at a tag that was never published, or at an
+      # archive rebuilt since, fails the release instead of shipping an app
+      # whose "Install runtime" button 404s.
+      - name: the pinned runtime archive must resolve
+        run: |
+          set -euo pipefail
+          pin="$(grep -A14 'pub const ARCHIVE' crates/model/src/runtime.rs)"
+          url="$(sed -n 's/.*url: "\(.*\)".*/\1/p' <<<"$pin")"
+          want="$(sed -n 's/.*sha256: "\([0-9a-f]\{64\}\)".*/\1/p' <<<"$pin")"
+
+          if [ -z "$want" ]; then
+            echo "::error::runtime.rs carries no digest — publish a runtime-vN tag and pin what it printed"
+            exit 1
+          fi
+          echo "pinned $want"
+          echo "at     $url"
+
+          curl --fail --location --silent --show-error "$url" -o "$RUNNER_TEMP/runtime.tar.gz"
+          got="$(shasum -a 256 "$RUNNER_TEMP/runtime.tar.gz" | cut -d" " -f1)"
+          if [ "$got" != "$want" ]; then
+            echo "::error::the published runtime is not the one pinned (got $got)"
+            exit 1
+          fi
+          echo "the archive the app will download is the archive it expects"
+
       - name: collect
         id: collect
         run: |
@@ -148,8 +183,17 @@ jobs:
             per-character boxes, text in images, an MCP server with ten tools,
             and a desktop app that answers questions with citations.
 
-            Answers need a model: either a local one from the Models page, or
-            any OpenAI-compatible endpoint in Settings if this machine has no
-            GPU. **Search itself never needs a model, a GPU or a network.**
+            Answers need two things: a runtime and a model. The Models page
+            installs both — the runtime is a 193 MB download that brings its
+            own Python, so nothing has to be set up by hand and nothing else on
+            the machine is touched. Or point Settings at any OpenAI-compatible
+            endpoint and skip both. **Search itself never needs a model, a
+            runtime, a GPU or a network.**
+
+            Releases before v0.0.5 could not answer a question on any machine
+            but the one that built them: the app expected an MLX interpreter it
+            never shipped, and the printed fix began with a command macOS does
+            not have. If you tried an earlier build and gave up here, this is
+            the one that works.
 
             Verify what you downloaded against `SHA256SUMS.txt`.

@@ -1,0 +1,101 @@
+name: runtime
+
+# The MLX runtime archive, published on its own tag and its own cadence.
+#
+# **Separate from the app release on purpose.** The runtime changes when a
+# package pin changes, which is rarely; the app changes weekly. Tying them
+# together would mean every app release invalidated an install that already
+# worked, and a 193 MB re-download for a UI fix.
+#
+# The app pins this archive by digest in `crates/model/src/runtime.rs`, so the
+# order is always: publish here, read the digest, pin it, then release the app.
+# `release.yml` refuses to tag an app whose pin does not resolve.
+on:
+  push:
+    tags: ["runtime-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    # Apple Silicon, because the archive contains arm64 Mach-O wheels. Building
+    # it anywhere else would produce something that cannot run on the only
+    # platform Marrow supports.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      # The version in the file name is the runtime's, not the app's. Taken
+      # from the tag so the artifact and the tag cannot disagree.
+      - name: version
+        id: v
+        run: |
+          set -euo pipefail
+          v="${GITHUB_REF_NAME#runtime-v}"
+          test -n "$v" || { echo "::error::tag must be runtime-vN"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: build
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: ./crates/model/worker/build-runtime.sh
+
+      # **The check that matters.** The archive is built here and unpacked
+      # somewhere it has never been, and the real worker script is asked to
+      # complete its real handshake against it.
+      #
+      # Every release so far verified "the worker script is in
+      # Contents/Resources" on the machine that built it — a check that passes
+      # whether or not the thing it stands for works, because that machine
+      # already had a runtime in its data directory. This one cannot pass on a
+      # broken archive: a venv with an absolute `home`, a console script with a
+      # baked shebang, or a missing package all fail right here.
+      - name: it must run from a path it was not built at
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/relocated"
+          tar -xzf dist/marrow-runtime-*-macos-arm64.tar.gz -C "$RUNNER_TEMP/relocated"
+          py="$RUNNER_TEMP/relocated/mlx/bin/python"
+          test -x "$py" || { echo "::error::no interpreter at bin/python"; exit 1; }
+
+          echo '{"op":"ping","id":"ci"}' \
+            | PYTHONUNBUFFERED=1 "$py" crates/model/worker/mlx_worker.py \
+            | tee "$RUNNER_TEMP/handshake.jsonl"
+          grep -q '"event": "ready"' "$RUNNER_TEMP/handshake.jsonl" \
+            || { echo "::error::the worker never became ready"; exit 1; }
+          grep -q '"event": "pong"' "$RUNNER_TEMP/handshake.jsonl" \
+            || { echo "::error::the worker never answered"; exit 1; }
+
+          # Both halves, named separately. `mlx-lm` alone gives a runtime that
+          # generates and cannot embed, which leaves semantic search quietly
+          # broken while Ask works — the confusing direction to fail in.
+          "$py" -c 'from mlx_lm import stream_generate; from mlx_embeddings import load; print("both halves import")'
+
+      - name: publish
+        run: |
+          set -euo pipefail
+          ( cd dist && shasum -a 256 * > SHA256SUMS.txt && cat SHA256SUMS.txt )
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          draft: false
+          prerelease: false
+          body: |
+            The MLX runtime Marrow installs on first run. **Not the app** —
+            download the app from the latest `v*` release.
+
+            A relocatable CPython 3.11 and three pinned packages
+            (`mlx`, `mlx-lm`, `mlx-embeddings`), about 193 MB compressed and
+            626 MB unpacked. It is not a venv: a venv records the interpreter
+            that built it and works only on that machine, which is precisely
+            the bug this replaces.
+
+            You do not need to download this by hand. The app fetches it,
+            checks it against the digest pinned in its own source, and unpacks
+            it into `~/.local/share/marrow/runtime/mlx`.
+
+            Verified in CI by unpacking it somewhere it was never built and
+            completing the worker's real handshake against it.
