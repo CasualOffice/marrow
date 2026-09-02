@@ -146,6 +146,15 @@ pub enum Input {
         #[serde(default)]
         precondition: Precondition,
     },
+    /// An anchored edit to an existing file. The only op here that *reads*.
+    Patch {
+        path: String,
+        find: String,
+        #[serde(default)]
+        replace: String,
+        #[serde(default)]
+        precondition: Precondition,
+    },
 }
 
 /// What must happen. A refusal names its code; there is no "it errors somehow".
@@ -296,6 +305,20 @@ fn execute(case: &Case, sandbox: &Path) -> std::result::Result<(), String> {
                 expect,
             },
         ),
+        Input::Patch {
+            path,
+            find,
+            replace,
+            ..
+        } => crate::patch::patch(
+            &ws,
+            &crate::patch::Patch {
+                path: path.clone(),
+                find: find.clone(),
+                replace: replace.clone(),
+                expect,
+            },
+        ),
         Input::CreatePage {
             path, title, body, ..
         } => create::create_page(
@@ -392,7 +415,8 @@ impl Input {
         match self {
             Input::CreateFile { path, .. }
             | Input::CreateDiagram { path, .. }
-            | Input::CreatePage { path, .. } => path,
+            | Input::CreatePage { path, .. }
+            | Input::Patch { path, .. } => path,
         }
     }
 
@@ -400,7 +424,8 @@ impl Input {
         match self {
             Input::CreateFile { precondition, .. }
             | Input::CreateDiagram { precondition, .. }
-            | Input::CreatePage { precondition, .. } => precondition,
+            | Input::CreatePage { precondition, .. }
+            | Input::Patch { precondition, .. } => precondition,
         }
     }
 }
@@ -547,7 +572,7 @@ mod tests {
         // that lowers it is deleting a defence someone found the hard way.
         let cases = corpus();
         assert!(
-            cases.len() >= 59,
+            cases.len() >= 65,
             "the corpus has shrunk to {} cases",
             cases.len()
         );
@@ -593,6 +618,11 @@ mod tests {
             "cloud placeholder",
             "self-poisoning",
             "injection",
+            // Added with `patch`, the first op that edits part of a file. Both
+            // are defences that only exist because a partial edit can land
+            // somewhere plausible in a way a whole-file write cannot.
+            "ambiguous edit",
+            "read-before-edit",
         ] {
             assert!(
                 present.contains(required),

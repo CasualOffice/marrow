@@ -46,8 +46,10 @@ pub mod corpus;
 pub mod create;
 pub mod guard;
 mod name;
+pub mod patch;
 pub mod snapshot;
 
 pub use create::{create_diagram, create_file, create_page, CreateDiagram, CreateFile, CreatePage};
 pub use guard::{Expect, Undo, Undone, Workspace, Written};
+pub use patch::{patch, Patch};
 pub use snapshot::{Pruned, Retention, SnapshotId, Snapshots};

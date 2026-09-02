@@ -511,6 +511,40 @@ impl Workspace {
         }
     }
 
+    /// Resolve an existing workspace-relative file, proven inside the root.
+    ///
+    /// For readers. [`Workspace::write`] cannot be reused for this: it creates
+    /// missing parent directories on the way, which is right for a write and
+    /// wrong for looking something up. The rules that matter are the same ones
+    /// — the name is validated, excluded and protected subtrees are refused,
+    /// and containment is proved by canonicalising the path that exists rather
+    /// than the one that was asked for, so a symlink out of the tree is caught
+    /// here exactly as it would be on the way in.
+    pub fn resolve_existing(&self, relative: &str) -> Result<PathBuf> {
+        let components = name::validate(relative)?;
+        for c in &components {
+            if self.excluded.contains(&fold(c)) {
+                return Err(Error::new(
+                    Code::PolDenied,
+                    format!("`{c}` holds state this system did not author."),
+                )
+                .with_context(relative.to_string()));
+            }
+        }
+        let intended = self.root.path().join(relative);
+        self.refuse_if_protected(&intended, relative)?;
+        let resolved = self.canonical_within(&intended)?;
+        self.refuse_if_protected(&resolved, relative)?;
+        if !resolved.is_file() {
+            return Err(Error::new(
+                Code::FsNotFound,
+                "There is no file at that path in this workspace.",
+            )
+            .with_context(relative.to_string()));
+        }
+        Ok(resolved)
+    }
+
     /// Steps 1–4: everything decidable before the destination directory is
     /// allowed to change under us.
     fn plan(&self, relative: &str) -> Result<Plan> {

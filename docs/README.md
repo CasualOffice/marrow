@@ -78,7 +78,7 @@ The plan as written, with where it actually got to. **[TRACKER.md](../TRACKER.md
 |---|---|---|---|
 | M0 | Measure your own corpus + walk/hash/store spike | 1 wk | Done |
 | M1 | Scan, watch, reconcile, SQLite, text/md/code/CSV parsers, ~~Tantivy~~ **SQLite FTS5** ([D3](../DECISIONS.md)), CLI search | 6–10 wk | Done |
-| **M2** | **MCP server — search, read, file intelligence** | **1–2 wk** | Done — thirteen tools over stdio |
+| **M2** | **MCP server — search, read, file intelligence** | **1–2 wk** | Done — fourteen tools over stdio |
 | M3 | PDF text + page provenance; native table IR + compute | 4–7 wk | In progress. PDF text done on PDFKit ([D54](../DECISIONS.md)); tables read from CSV/MD/HTML/XLSX/DOCX; PDF *ruled* tables and `table compute` not built |
 | M4 | Chunking, local embeddings, vector search, RRF hybrid | 4–6 wk | In progress. Vectors reach the desktop's Ask and `marrow search --semantic`, not the desktop Search view or the MCP `search` tool |
 | M5 | Write tools: patch, stale-check, snapshots, undo, E1 recipes | 4–6 wk | Not started |

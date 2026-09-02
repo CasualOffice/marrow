@@ -1,0 +1,62 @@
+# Anchored edits — the first op in this corpus that *reads* a file.
+#
+# Everything else here writes bytes it was handed. A patch opens the file it is
+# changing, which brings two rules inside the write path that had nothing to say
+# before: never hydrate a placeholder, and containment applies to the read as
+# well as to the write.
+#
+# The cases that matter are not about malformed input. They are about a patch
+# that would land *somewhere plausible* — first-match on an ambiguous anchor,
+# an anchor found in a file that changed underneath, a path that resolves out
+# of the workspace on the way in rather than on the way out.
+
+[[case]]
+id      = "patch-anchor-appearing-twice-is-refused-not-guessed"
+attacks = "ambiguous edit"
+why     = "First-match is the rule that turns an ambiguous instruction into a silent edit in the wrong place. The caller believes one line changed; a different one did."
+setup   = [{ kind = "file", path = "notes.md", contents = "alpha\nbeta\nalpha\n" }]
+input   = { op = "patch", path = "notes.md", find = "alpha", replace = "gamma", precondition = "current" }
+expect  = { outcome = "refused", code = "CFG_INVALID", message_contains = "2 times" }
+
+[[case]]
+id      = "patch-without-a-digest-is-refused"
+attacks = "read-before-edit"
+why     = "A caller with no digest has not read the file. A patch is an edit to something you are supposed to have read, and treating a missing precondition as 'anything' is how a whole-file overwrite gets in through the side door."
+setup   = [{ kind = "file", path = "notes.md", contents = "content\n" }]
+input   = { op = "patch", path = "notes.md", find = "content", replace = "other", precondition = "new" }
+expect  = { outcome = "refused", code = "CFG_INVALID", message_contains = "digest" }
+
+[[case]]
+id      = "patch-against-a-stale-digest-is-refused"
+attacks = "read-before-edit"
+why     = "The user edited the file after the model read it. The anchor may still be present and still be in the wrong place, so the digest is what decides."
+setup   = [{ kind = "file", path = "notes.md", contents = "current content\n" }]
+input   = { op = "patch", path = "notes.md", find = "current", replace = "new", precondition = { digest_of = "what it used to say\n" } }
+expect  = { outcome = "refused", code = "ACT_STALE_VERSION" }
+
+[[case]]
+id      = "patch-traversal-on-the-read-side"
+attacks = "path traversal"
+why     = "Containment has to hold on the way in as well as on the way out. A patch resolves a path to read it before it resolves one to write it, and a check that only covers the write is half a check."
+setup   = [{ kind = "file", path = "notes.md", contents = "x\n" }]
+# A literal digest, not `current`: `current` would have to read the file the
+# case is proving cannot be read, and the traversal has to be refused long
+# before any precondition is evaluated anyway.
+input   = { op = "patch", path = "../outside/target.md", find = "x", replace = "y", precondition = { digest_of = "x\n" } }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED" }
+
+[[case]]
+id      = "patch-into-a-protected-subtree-is-refused"
+attacks = "protected directory"
+why     = "Editing part of a file inside `.git` is the same violation as writing a whole one there, and it is easier to miss because it looks like a small change."
+setup   = [{ kind = "dir", path = ".git" }, { kind = "file", path = ".git/config", contents = "[core]\n" }]
+input   = { op = "patch", path = ".git/config", find = "[core]", replace = "[hacked]", precondition = "current" }
+expect  = { outcome = "refused", code = "POL_DENIED" }
+
+[[case]]
+id      = "patch-that-succeeds-is-still-marked-self-written"
+attacks = "self-poisoning"
+why     = "A patched file is this system's output as much as a created one. If a partial edit escaped the origin rule, an agent could launder its own text into a user's document and cite it back."
+setup   = [{ kind = "file", path = "notes.md", contents = "The meeting is on Tuesday.\n" }]
+input   = { op = "patch", path = "notes.md", find = "Tuesday", replace = "Thursday", precondition = "current" }
+expect  = { outcome = "written", at = "notes.md", contains = "Thursday" }

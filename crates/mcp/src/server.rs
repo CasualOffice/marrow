@@ -138,6 +138,7 @@ impl Server {
             "list_workspaces" => self.list_workspaces(),
             "index_status" => self.index_status(),
             "create_file" | "create_diagram" | "create_page" => self.create(name, &args),
+            "patch_file" => self.patch_file(&args),
             "undo_write" => self.undo_write(&args),
             "fetch_url" => self.fetch(&args),
             _ => unreachable!("checked above"),
@@ -1403,6 +1404,23 @@ impl Server {
         // Recorded before the tool reports success. A write the index does not
         // know about is worse than a write that failed.
         self.remember_write(&written, tool)?;
+        Ok(Self::written_json(&written))
+    }
+
+    /// Replace one exact passage inside a file.
+    ///
+    /// Goes through `marrow_tools::patch`, which goes through the same guarded
+    /// write path as everything else — so containment, the protected subtrees,
+    /// the stale check, the snapshot and `origin = SELF` all apply without this
+    /// function knowing about any of them.
+    fn patch_file(&self, args: &Value) -> Result<Value> {
+        let ws = self.write_workspace(args)?;
+        let written = marrow_tools::patch(&ws, &from_args(args)?)?;
+        // Recorded before success is reported, exactly as a create is. A
+        // patched file is this system's output as much as a created one, and a
+        // write the index does not know about is worse than a write that
+        // failed.
+        self.remember_write(&written, "patch_file")?;
         Ok(Self::written_json(&written))
     }
 

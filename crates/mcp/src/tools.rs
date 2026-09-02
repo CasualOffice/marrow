@@ -505,6 +505,51 @@ protected or excluded directory, a name the filesystem would mangle, a stale \
         },
     },
     Tool {
+        name: "patch_file",
+        description: "\
+Replace one exact passage inside a file, leaving the rest untouched.
+
+Use this instead of `create_file` whenever you are changing part of an \
+existing document. Rewriting a long file to change one line means reproducing \
+the rest from memory, and what gets lost that way is somewhere in the middle \
+where nobody re-reads.
+
+`find` must appear **exactly once**. Zero matches and two matches are both \
+refused, and the refusal says how many there were so you can extend the anchor \
+until it is unique — replacing the first of several would be a guess about \
+which one you meant.
+
+`expect` is required: read the file first and pass its digest. There is no \
+patch that creates a file.
+
+Refuses, with the reason: a path outside the workspace or in a protected \
+directory, a file that is not text, a file larger than 16 MB, a stale digest, \
+an anchor that is missing or ambiguous, and a `find` equal to `replace`.
+
+The patched file is recorded as written by this system and is therefore \
+**excluded from evidence**: `search` finds it, and a later answer cannot cite \
+it as independent corroboration. That applies to the whole file, not just the \
+passage changed — an edited document is no longer wholly the user's. It \
+becomes theirs again if a person edits it, and `undo_write` reverses this \
+edit outright.",
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Workspace-relative path to an existing text file." },
+                    "find": { "type": "string", "description": "The exact text to replace, including whitespace and newlines. Must occur exactly once in the file." },
+                    "replace": { "type": "string", "description": "What goes in its place. Empty removes the anchored text." },
+                    "expect": {
+                        "description": EXPECT_DESCRIPTION,
+                        "oneOf": expect_shape()
+                    },
+                    "workspace": { "type": "string", "description": "Workspace name. Omit when there is only one." }
+                },
+                "required": ["path", "find", "replace", "expect"]
+            })
+        },
+    },
+    Tool {
         name: "undo_write",
         description: "\
 Put a file back the way it was before one of your writes.
@@ -743,6 +788,10 @@ mod tests {
             &["path", "title", "body", "expect", "workspace"],
         ),
         (
+            "patch_file",
+            &["path", "find", "replace", "expect", "workspace"],
+        ),
+        (
             "undo_write",
             &["path", "digest", "snapshot", "created", "workspace"],
         ),
@@ -765,7 +814,7 @@ mod tests {
     fn the_tool_count_is_what_every_document_claims_it_is() {
         assert_eq!(
             all().count(),
-            13,
+            14,
             "the tool list changed; the six documents named above say a number too"
         );
     }
