@@ -100,7 +100,13 @@ archive="$OUT_DIR/marrow-runtime-${VERSION}-macos-arm64.tar.gz"
 echo "==> $archive"
 # `mlx` at the top so extraction lands on `runtime/mlx/bin/python`.
 mv "$root" "$work/mlx"
-tar -czf "$archive" -C "$work" mlx
+# **COPYFILE_DISABLE, or the archive carries a shadow copy of itself.** macOS
+# `tar` writes an AppleDouble `._name` member beside every file that has an
+# extended attribute, to preserve it. bsdtar consumes those again on extract
+# and never shows them, so `tar -tzf | wc -l` says 12,758 while the archive
+# really holds 25,516 entries — and any extractor that is not bsdtar, this
+# project's included, writes 12,758 junk files into the runtime tree.
+COPYFILE_DISABLE=1 tar -czf "$archive" -C "$work" mlx
 
 sha="$(shasum -a 256 "$archive" | cut -d' ' -f1)"
 size="$(stat -f%z "$archive")"

@@ -437,6 +437,25 @@ fn unpack(
         }
         let mut entry = entry.map_err(archive_unreadable)?;
         let path = entry.path().map_err(archive_unreadable)?.into_owned();
+
+        // **AppleDouble, skipped rather than written.** macOS `tar` preserves
+        // extended attributes by writing a `._name` member beside every file
+        // that has one, and bsdtar silently consumes them again on extract —
+        // so an archive built on a Mac looks half its real size to `tar -t`
+        // and unpacks clean *only* under bsdtar. Every other extractor, this
+        // one included, writes the shadow copy out as ordinary files: 12,758
+        // of them in runtime-v1, which is also why the progress count read
+        // double. The build script sets `COPYFILE_DISABLE` now; this is here
+        // because "the archive was built correctly" is not something the
+        // installer can check, and skipping them is free.
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("._"))
+        {
+            continue;
+        }
+
         let dest = safe_join(staging, &path)?;
 
         // A symlink is the one entry kind whose *target* can escape after the
@@ -603,6 +622,7 @@ pub const TYPICAL_INSTALL: Duration = Duration::from_secs(180);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::worker::Worker;
     use std::io::Cursor;
     use std::sync::Mutex;
 
@@ -980,6 +1000,58 @@ mod tests {
         assert!(!t.path().join("runtime/mlx").exists());
     }
 
+    /// macOS `tar` writes a `._name` AppleDouble member beside every file
+    /// carrying an extended attribute, and bsdtar consumes them again on
+    /// extract without ever listing them. That is why `tar -tzf | wc -l` said
+    /// 12,758 for runtime-v1 while the archive really held 25,516 entries, and
+    /// why the first install wrote 12,758 junk files into the runtime tree and
+    /// reported double the file count while it did.
+    #[test]
+    fn appledouble_shadow_files_are_not_written_into_the_runtime() {
+        let t = tempfile::tempdir().unwrap();
+        let bytes = tarball(
+            &[
+                ("mlx/bin/python", b"#!/bin/sh\n"),
+                ("mlx/bin/._python", b"\x00\x05\x16\x07 apple double"),
+                ("mlx/lib/real.py", b"x = 1\n"),
+                ("mlx/lib/._real.py", b"\x00\x05\x16\x07 apple double"),
+            ],
+            &[],
+        );
+        let a = archive_for(&bytes);
+        let mut counts = Vec::new();
+
+        install(
+            t.path(),
+            script(t.path()),
+            &a,
+            &Fake::new(bytes),
+            &Cancel::new(),
+            &mut |p| {
+                if let Stage::Extracting { files } = p.stage {
+                    counts.push(files);
+                }
+            },
+        )
+        .expect("installs");
+
+        let root = t.path().join("runtime/mlx");
+        assert!(root.join("bin/python").is_file());
+        assert!(root.join("lib/real.py").is_file());
+        assert!(
+            !root.join("bin/._python").exists(),
+            "an AppleDouble shadow was written into the runtime"
+        );
+        assert!(!root.join("lib/._real.py").exists());
+
+        // And the count is of what landed, not of what the archive held.
+        assert_eq!(
+            counts.last().copied(),
+            Some(2),
+            "the two real files, and neither shadow: {counts:?}"
+        );
+    }
+
     #[test]
     fn an_archive_with_no_interpreter_in_it_refuses_rather_than_publishing_a_tree() {
         let t = tempfile::tempdir().unwrap();
@@ -1074,6 +1146,61 @@ mod tests {
     /// one built from `version` — and if they drift, every resume writes to a
     /// file the next attempt does not look for. The symptom is a download that
     /// restarts from zero forever, with nothing saying why.
+    /// The whole thing, against the real release, on a machine that has no
+    /// runtime.
+    ///
+    /// Every check that shipped a broken build read something the build
+    /// machine already had. This one cannot: a fresh data directory, the real
+    /// pinned URL, the real digest, and at the end the real `mlx_worker.py`
+    /// completing its real handshake against whatever came down the wire. If
+    /// the archive is unpublished, mispinned, served from a private repo, or
+    /// not relocatable, this is where it fails.
+    #[test]
+    #[ignore = "downloads ~193 MB from github.com and unpacks ~626 MB"]
+    fn the_pinned_runtime_really_installs_and_answers() {
+        let t = tempfile::tempdir().unwrap();
+        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("worker/mlx_worker.py");
+        assert!(
+            script.is_file(),
+            "the worker script must be there to prove it"
+        );
+
+        let mut last = String::new();
+        let runtime = install(
+            t.path(),
+            script.clone(),
+            &ARCHIVE,
+            &crate::download::Https,
+            &Cancel::new(),
+            &mut |p| {
+                let now = format!("{:?}", p.stage);
+                if now != last {
+                    eprintln!("  {now}");
+                    last = now;
+                }
+            },
+        )
+        .expect("the pinned archive installs");
+
+        assert!(runtime.python.is_file());
+        assert_eq!(runtime.python, t.path().join("runtime/mlx/bin/python"));
+
+        // Not "a file exists" — LLM-036 says a runtime is available when it has
+        // answered. Start the real worker and complete the real handshake.
+        let worker = Worker::start(&runtime).expect("the installed runtime starts");
+        drop(worker);
+
+        // And the archive is not left behind: it is 193 MB and is never needed
+        // again once the tree is built.
+        assert!(
+            !t.path()
+                .join("runtime/partial")
+                .join(ARCHIVE.file_name())
+                .exists(),
+            "the archive is cleaned up after a successful install"
+        );
+    }
+
     #[test]
     fn the_pinned_url_and_the_file_it_lands_under_agree() {
         let last = ARCHIVE.url.rsplit('/').next().expect("a URL with a path");
