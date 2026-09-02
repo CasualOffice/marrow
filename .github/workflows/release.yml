@@ -151,13 +151,26 @@ jobs:
         with:
           files: dist/*
           draft: false
-          prerelease: true
-          # **The app is what "latest" means.** GitHub picks the newest
-          # non-prerelease, and failing that the newest release by date — so
-          # publishing a `runtime-vN` archive made it the Latest release, and
-          # `site/install.html` links at `releases/latest`. Anyone following
-          # that link landed on a 193 MB Python tarball instead of the app.
-          # Said explicitly here rather than left to a date comparison.
+          # **Not a prerelease, and that is a deliberate reversal.**
+          #
+          # v0.0.1 through v0.0.5 were all marked `prerelease: true` to say
+          # "this is early". The cost of saying it that way was invisible until
+          # the repository went public: GitHub resolves `releases/latest` to the
+          # newest **non**-prerelease, so with every release a prerelease there
+          # was no latest release at all. `releases/latest` redirected to the
+          # index and `releases/latest/download/…` 404ed — for every build ever
+          # shipped. `site/install.html` links at both.
+          #
+          # `make_latest: true` cannot fix that on its own; GitHub refuses it on
+          # a prerelease ("Latest release cannot be draft or prerelease"). So the
+          # claim about maturity moves to where it is read anyway — the release
+          # notes below say unsigned, Apple Silicon only, and early, in
+          # sentences rather than in a flag — and the flag goes back to meaning
+          # what it navigates to.
+          prerelease: false
+          # And say it rather than leave it to a date comparison: publishing a
+          # `runtime-vN` archive is newer than the last app release, and briefly
+          # made a 193 MB Python tarball the top of the releases page.
           make_latest: true
           body: |
             **Apple Silicon macOS only.** Windows and Linux do not work yet, and
