@@ -2513,7 +2513,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-cli"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "clap",
  "ctrlc",
@@ -2533,7 +2533,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-core"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "blake3",
  "serde",
@@ -2544,7 +2544,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-desktop"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "marrow-core",
  "marrow-hw",
@@ -2566,7 +2566,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-hw"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "libc",
  "marrow-core",
@@ -2576,7 +2576,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-index"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "marrow-core",
  "marrow-store",
@@ -2589,7 +2589,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-ingest"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "filetime",
  "marrow-core",
@@ -2604,7 +2604,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-mcp"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "marrow-core",
  "marrow-index",
@@ -2621,9 +2621,10 @@ dependencies = [
 
 [[package]]
 name = "marrow-model"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "blake3",
+ "flate2",
  "keyring",
  "libc",
  "marrow-core",
@@ -2634,6 +2635,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tar",
  "tempfile",
  "tracing",
  "tracing-subscriber",
@@ -2642,7 +2644,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-net"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "marrow-core",
  "serde",
@@ -2654,7 +2656,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-parse"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "calamine",
  "chardetng",
@@ -2685,7 +2687,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-query"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "marrow-core",
  "marrow-index",
@@ -2698,7 +2700,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-scan"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "blake3",
  "ignore",
@@ -2711,7 +2713,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-store"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "marrow-core",
  "rusqlite",
@@ -2722,7 +2724,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-tools"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "marrow-core",
  "marrow-scan",
@@ -4383,6 +4385,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
 ]
 
 [[package]]
@@ -6089,6 +6102,16 @@ dependencies = [
  "libc",
  "once_cell",
  "pkg-config",
+]
+
+[[package]]
+name = "xattr"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
+dependencies = [
+ "libc",
+ "rustix",
 ]
 
 [[package]]
