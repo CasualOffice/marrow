@@ -23,4 +23,7 @@ toml = "0.8"
 unicode-normalization = "0.1"
 
 [dev-dependencies]
+# To backdate a snapshot, so the age-based retention rules are testable without
+# waiting fourteen days. Already in the tree via `notify`.
+filetime = "0.2"
 tempfile = "3"

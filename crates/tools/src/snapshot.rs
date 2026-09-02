@@ -47,6 +47,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use marrow_core::{Code, ContentHash, Error, Result};
+
+/// The largest single file copied by default: 64 MB.
+///
+/// Above this, a replacement is not undoable and says so. Chosen against what
+/// this program indexes — M0 measured 70.6% of files under 64 KB and nothing at
+/// all above 500 MB — so it is far above ordinary documents and well below the
+/// point where one write costs a meaningful part of a disk.
+pub const DEFAULT_MAX_CAPTURE_BYTES: u64 = 64 * 1024 * 1024;
 use serde::{Deserialize, Serialize};
 
 /// A handle to bytes that were overwritten.
@@ -80,10 +88,61 @@ impl std::fmt::Display for SnapshotId {
     }
 }
 
+/// When a snapshot may be deleted.
+///
+/// **Pruning a snapshot is itself destructive**, and it destroys the one thing
+/// standing between a user and a write they did not want. So the two limits
+/// are not symmetric: the age floor wins, and the size cap is allowed to be
+/// exceeded rather than allowed to delete something recent.
+///
+/// A store that is over its cap entirely because of young snapshots reports
+/// that fact ([`Pruned::kept_despite_cap`]) instead of deleting its way out of
+/// it. Filling a disk is recoverable by hand; deleting the only copy of
+/// somebody's afternoon is not, and that asymmetry is the whole reason this
+/// type exists rather than a single `max_bytes`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Retention {
+    /// Below this age, a snapshot is never deleted whatever the cap says.
+    pub keep_for: std::time::Duration,
+    /// The size the store tries to stay under, by deleting oldest-first among
+    /// the snapshots that are already past `keep_for`.
+    pub max_bytes: u64,
+}
+
+impl Default for Retention {
+    /// Fourteen days and two gigabytes.
+    ///
+    /// Fourteen because "I asked it to rewrite that file last week and I want
+    /// it back" is a real sentence and "last month" mostly is not. Two
+    /// gigabytes because the index beside it is already larger than that, so a
+    /// store this size is not what fills the disk — and because the cap only
+    /// ever applies to snapshots already past the floor.
+    fn default() -> Self {
+        Self {
+            keep_for: std::time::Duration::from_secs(14 * 24 * 60 * 60),
+            max_bytes: 2 * 1024 * 1024 * 1024,
+        }
+    }
+}
+
+/// What a prune did, and what it declined to do.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Pruned {
+    pub removed: usize,
+    pub freed_bytes: u64,
+    /// Still over the cap after pruning, because everything left is younger
+    /// than [`Retention::keep_for`]. Reported rather than resolved.
+    pub kept_despite_cap: bool,
+    pub bytes_after: u64,
+}
+
 /// Where overwritten content is kept.
 #[derive(Clone, Debug)]
 pub struct Snapshots {
     dir: PathBuf,
+    /// Above this, a single file is not copied at all. See
+    /// [`Snapshots::with_max_capture_bytes`].
+    max_capture_bytes: u64,
 }
 
 impl Snapshots {
@@ -96,7 +155,22 @@ impl Snapshots {
         let dir = dir.as_ref().to_path_buf();
         fs::create_dir_all(&dir)
             .map_err(|e| Error::from(e).with_context(dir.display().to_string()))?;
-        Ok(Self { dir })
+        Ok(Self {
+            dir,
+            max_capture_bytes: DEFAULT_MAX_CAPTURE_BYTES,
+        })
+    }
+
+    /// The largest single file this store will copy.
+    ///
+    /// A replacement of a 4 GB file would otherwise put 4 GB here, silently,
+    /// on the way to doing something the user asked for. Above the limit the
+    /// write still happens and simply is not undoable — which
+    /// [`crate::Written::is_undoable`] and the MCP response both say, so the
+    /// caller learns it at the time rather than when the undo fails.
+    pub fn with_max_capture_bytes(mut self, bytes: u64) -> Self {
+        self.max_capture_bytes = bytes;
+        self
     }
 
     pub fn dir(&self) -> &Path {
@@ -163,6 +237,95 @@ impl Snapshots {
             .with_context(format!("snapshot {id}, found {actual}")));
         }
         Ok(bytes)
+    }
+
+    /// [`Snapshots::capture`], but `None` when the content is too large to keep.
+    ///
+    /// Not an error: nothing has gone wrong, and the write it belongs to is
+    /// still perfectly valid. It is simply final, and the caller is told so.
+    pub fn try_capture(&self, bytes: &[u8]) -> Result<Option<SnapshotId>> {
+        if bytes.len() as u64 > self.max_capture_bytes {
+            tracing::info!(
+                bytes = bytes.len(),
+                limit = self.max_capture_bytes,
+                "too large to keep a copy of; this write will not be undoable"
+            );
+            return Ok(None);
+        }
+        self.capture(bytes).map(Some)
+    }
+
+    /// Delete what is both old enough and surplus to the cap.
+    ///
+    /// Oldest first, by modification time — which for a content-addressed store
+    /// is the time it was last *captured*, and therefore a decent proxy for how
+    /// recently it mattered.
+    ///
+    /// A snapshot younger than [`Retention::keep_for`] is never deleted, even
+    /// when that leaves the store over its cap. See the note on [`Retention`].
+    pub fn prune(&self, retention: Retention) -> Result<Pruned> {
+        let now = std::time::SystemTime::now();
+        let mut entries: Vec<(std::time::Duration, u64, PathBuf)> = Vec::new();
+        let mut total: u64 = 0;
+
+        for entry in fs::read_dir(&self.dir)
+            .map_err(|e| Error::from(e).with_context(self.dir.display().to_string()))?
+            .flatten()
+        {
+            if entry.file_name().to_string_lossy().starts_with(".partial-") {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            if !meta.is_file() {
+                continue;
+            }
+            total += meta.len();
+            // An unreadable or future mtime counts as brand new, so the
+            // uncertain case keeps the file rather than deleting it.
+            let age = meta
+                .modified()
+                .ok()
+                .and_then(|m| now.duration_since(m).ok())
+                .unwrap_or_default();
+            entries.push((age, meta.len(), entry.path()));
+        }
+
+        let mut out = Pruned {
+            bytes_after: total,
+            ..Pruned::default()
+        };
+        if total <= retention.max_bytes {
+            return Ok(out);
+        }
+
+        // Oldest first: the ones least likely to be wanted go first.
+        entries.sort_by_key(|(age, _, _)| std::cmp::Reverse(*age));
+        for (age, len, path) in entries {
+            if out.bytes_after <= retention.max_bytes {
+                break;
+            }
+            if age < retention.keep_for {
+                // Everything from here on is younger still, because the list is
+                // sorted oldest first.
+                out.kept_despite_cap = true;
+                break;
+            }
+            if fs::remove_file(&path).is_ok() {
+                out.removed += 1;
+                out.freed_bytes += len;
+                out.bytes_after = out.bytes_after.saturating_sub(len);
+            }
+        }
+
+        if out.kept_despite_cap {
+            tracing::warn!(
+                bytes = out.bytes_after,
+                cap = retention.max_bytes,
+                "the snapshot store is over its cap and everything left is recent; \
+                 keeping it rather than deleting an undo somebody may want"
+            );
+        }
+        Ok(out)
     }
 
     pub fn contains(&self, id: &SnapshotId) -> bool {
@@ -263,6 +426,114 @@ mod tests {
             (4, 1),
             "a capture in flight is not part of the store"
         );
+    }
+
+    use std::time::Duration;
+
+    /// Backdate a stored snapshot so age-based rules are testable without
+    /// waiting fourteen days.
+    fn age(s: &Snapshots, id: &SnapshotId, by: Duration) {
+        let path = s.dir().join(id.to_string());
+        let when = std::time::SystemTime::now() - by;
+        filetime::set_file_mtime(&path, filetime::FileTime::from_system_time(when))
+            .expect("backdate");
+    }
+
+    #[test]
+    fn a_store_under_its_cap_is_left_alone() {
+        let (_t, s) = store();
+        s.capture(b"kept").unwrap();
+        let p = s
+            .prune(Retention {
+                keep_for: Duration::ZERO,
+                max_bytes: 1024,
+            })
+            .unwrap();
+        assert_eq!(p.removed, 0);
+        assert!(!p.kept_despite_cap);
+    }
+
+    #[test]
+    fn over_the_cap_the_oldest_go_first() {
+        let (_t, s) = store();
+        let old = s.capture(b"oldest content here").unwrap();
+        let mid = s.capture(b"middle content here").unwrap();
+        let new = s.capture(b"newest content here").unwrap();
+        age(&s, &old, Duration::from_secs(60 * 60 * 24 * 30));
+        age(&s, &mid, Duration::from_secs(60 * 60 * 24 * 20));
+        age(&s, &new, Duration::from_secs(60 * 60 * 24 * 15));
+
+        // Room for two of the three 19-byte entries.
+        let p = s
+            .prune(Retention {
+                keep_for: Duration::from_secs(60 * 60 * 24 * 14),
+                max_bytes: 40,
+            })
+            .unwrap();
+
+        assert_eq!(p.removed, 1);
+        assert!(!s.contains(&old), "the oldest went");
+        assert!(s.contains(&mid) && s.contains(&new));
+    }
+
+    /// The asymmetry that makes this type worth having. Filling a disk is
+    /// recoverable by hand; deleting the only copy of somebody's afternoon is
+    /// not.
+    #[test]
+    fn a_recent_snapshot_is_kept_even_when_that_leaves_the_store_over_its_cap() {
+        let (_t, s) = store();
+        s.capture(b"written moments ago and irreplaceable").unwrap();
+
+        let p = s
+            .prune(Retention {
+                keep_for: Duration::from_secs(60 * 60 * 24 * 14),
+                max_bytes: 1,
+            })
+            .unwrap();
+
+        assert_eq!(p.removed, 0, "nothing recent may be deleted for space");
+        assert!(p.kept_despite_cap, "and the caller is told why");
+        assert!(p.bytes_after > 1);
+        assert_eq!(s.usage().unwrap().1, 1);
+    }
+
+    #[test]
+    fn pruning_never_touches_a_capture_in_flight() {
+        let (_t, s) = store();
+        let old = s.capture(b"old enough to go").unwrap();
+        age(&s, &old, Duration::from_secs(60 * 60 * 24 * 30));
+        fs::write(s.dir().join(".partial-abc"), b"being written right now").unwrap();
+
+        s.prune(Retention {
+            keep_for: Duration::from_secs(60 * 60 * 24 * 14),
+            max_bytes: 0,
+        })
+        .unwrap();
+
+        assert!(!s.contains(&old));
+        assert!(
+            s.dir().join(".partial-abc").is_file(),
+            "a capture in flight is not the store's to delete"
+        );
+    }
+
+    /// A 4 GB replacement must not put 4 GB here on the way to doing what was
+    /// asked. The write stays valid and stops being undoable, which the caller
+    /// is told at the time.
+    #[test]
+    fn content_too_large_to_keep_is_declined_rather_than_stored_or_refused() {
+        let (t, _s) = store();
+        let s = Snapshots::open(t.path().join("small"))
+            .unwrap()
+            .with_max_capture_bytes(8);
+
+        assert_eq!(s.try_capture(b"tiny").unwrap().map(|_| ()), Some(()));
+        assert_eq!(
+            s.try_capture(b"far too long to keep").unwrap(),
+            None,
+            "declined, and not an error"
+        );
+        assert_eq!(s.usage().unwrap().1, 1);
     }
 
     #[test]

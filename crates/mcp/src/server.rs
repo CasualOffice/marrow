@@ -6,7 +6,7 @@ use marrow_core::{Code, Error, Result, TierState};
 use marrow_index::Fts5Index;
 use marrow_store::Store;
 use serde_json::{json, Value};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::protocol::{err, ok, tool_error, tool_ok, Request, RpcError, ServerDescriptor};
 use crate::tools;
@@ -46,6 +46,24 @@ pub struct Server {
 impl Server {
     pub fn new(store: Store) -> Result<Self> {
         let index = Fts5Index::open(&store)?;
+        // Prune once, here, rather than after every write. Pruning walks the
+        // directory, and paying that on each replacement would make the tool
+        // that keeps a safety net slower in proportion to how well it has been
+        // working. A failure is logged and ignored: a full undo store is not a
+        // reason to refuse to start a search server.
+        match marrow_tools::Snapshots::open(default_snapshots_dir())
+            .and_then(|s| s.prune(marrow_tools::Retention::default()))
+        {
+            Ok(p) if p.removed > 0 => {
+                info!(
+                    removed = p.removed,
+                    freed = p.freed_bytes,
+                    "pruned old undo snapshots"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => warn!(error = %e, "could not prune the undo store"),
+        }
         Ok(Self {
             store,
             index,
@@ -877,6 +895,11 @@ impl Server {
             "watcher": st.watcher_health,
             "may_be_stale": st.may_be_stale(),
             "freshness": freshness(&st),
+            // **The undo store, because a store nobody can see is the next
+            // surprise.** It grows on every replacement and is the only copy of
+            // what those replacements displaced, so both halves matter: how
+            // much disk it is holding, and whether anything can still be undone.
+            "undo_store": undo_store_status(),
         }))
     }
 
@@ -939,6 +962,11 @@ impl Server {
             "watcher": st.watcher_health,
             "may_be_stale": st.may_be_stale(),
             "freshness": freshness(&st),
+            // **The undo store, because a store nobody can see is the next
+            // surprise.** It grows on every replacement and is the only copy of
+            // what those replacements displaced, so both halves matter: how
+            // much disk it is holding, and whether anything can still be undone.
+            "undo_store": undo_store_status(),
         }))
     }
 
@@ -1534,6 +1562,24 @@ fn from_args<T: serde::de::DeserializeOwned>(args: &Value) -> Result<T> {
             format!("Those arguments did not match the tool's schema: {e}"),
         )
     })
+}
+
+/// What the undo store is holding, for `index_status`.
+///
+/// Never an error: a status call must not fail because a directory that is
+/// created on demand does not exist yet. "Nothing kept" and "cannot be read"
+/// are different answers and both are reported as answers.
+fn undo_store_status() -> Value {
+    match marrow_tools::Snapshots::open(default_snapshots_dir()).and_then(|s| s.usage()) {
+        Ok((bytes, count)) => json!({
+            "kept": count,
+            "bytes": bytes,
+            "note": "Earlier versions of files this system replaced. `undo_write` restores \
+                     from these; they are pruned once they are past a fortnight old and the \
+                     store is over its size cap.",
+        }),
+        Err(e) => json!({ "unavailable": e.message() }),
+    }
 }
 
 /// Where overwritten content is kept, so `undo_write` has something to restore.

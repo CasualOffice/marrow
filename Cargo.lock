@@ -2728,6 +2728,7 @@ dependencies = [
 name = "marrow-tools"
 version = "0.0.5"
 dependencies = [
+ "filetime",
  "marrow-core",
  "marrow-scan",
  "serde",

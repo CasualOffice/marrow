@@ -353,7 +353,11 @@ impl Workspace {
                 target.display()
             )));
         }
-        store.capture(&bytes).map(Some)
+        // `try_capture`, not `capture`: a file too large to keep leaves the
+        // write valid and simply not undoable, which `Written::is_undoable`
+        // reports. Failing the write instead would mean a size limit on a
+        // convenience could stop somebody doing what they asked for.
+        store.try_capture(&bytes)
     }
 
     /// Put back what a write displaced.
