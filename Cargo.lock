@@ -2662,6 +2662,7 @@ dependencies = [
  "calamine",
  "chardetng",
  "encoding_rs",
+ "flate2",
  "marrow-core",
  "objc2",
  "objc2-core-image",

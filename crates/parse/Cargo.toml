@@ -68,6 +68,11 @@ tree-sitter-java = "0.23"
 
 [dev-dependencies]
 tempfile = "3"
+# To synthesise a decompression bomb: a real zlib stream and a real CRC32, so
+# the fixture is a PNG the OS decoder genuinely accepts rather than one this
+# crate's own sniffer merely recognises. A hand-rolled fake would test the
+# ceiling against a file no real decoder would have opened.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # PDFKit is on every Mac. The alternative is vendoring a multi-megabyte

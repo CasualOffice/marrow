@@ -742,6 +742,136 @@ mod tests {
         );
     }
 
+    /// A PNG that declares `width x height` and holds one uniform colour.
+    ///
+    /// Bit depth 1 and greyscale, so a row is `width/8` bytes and the whole
+    /// raw image deflates to almost nothing — which is the entire point. The
+    /// file is small; what it *declares* is not. Built rather than committed
+    /// because a fixture whose interesting property is its expansion ratio is
+    /// the wrong thing to put in a repository.
+    fn declared_png(width: u32, height: u32) -> Vec<u8> {
+        use std::io::Write as _;
+
+        fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], body: &[u8]) {
+            out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+            out.extend_from_slice(kind);
+            out.extend_from_slice(body);
+            let mut crc = flate2::Crc::new();
+            crc.update(kind);
+            crc.update(body);
+            out.extend_from_slice(&crc.sum().to_be_bytes());
+        }
+
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.extend_from_slice(&[1, 0, 0, 0, 0]); // 1-bit, greyscale, no interlace
+
+        // One filter byte plus the packed row, `height` times. Never held whole:
+        // 20000x20000 is 50 MB raw and there is no reason for the test to carry
+        // it when the encoder can eat it a row at a time.
+        let row_bytes = width.div_ceil(8) as usize;
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        let row = vec![0u8; row_bytes + 1];
+        for _ in 0..height {
+            z.write_all(&row).expect("encode");
+        }
+        let idat = z.finish().expect("finish");
+
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        chunk(&mut png, b"IHDR", &ihdr);
+        chunk(&mut png, b"IDAT", &idat);
+        chunk(&mut png, b"IEND", &[]);
+        png
+    }
+
+    /// A decompression bomb is refused on its declared size, before anything
+    /// rasterises it.
+    ///
+    /// **The M5 gate named this and nothing tested it.** `MAX_PIXELS` has been
+    /// in this file since the parser was written, with a comment asserting that
+    /// `extent` is metadata rather than a decode — an invariant stated in prose
+    /// and checked by nobody, which is the shape of most of what this week
+    /// found.
+    ///
+    /// 20000x20000 is 400 megapixels: about 1.6 GB rasterised at RGBA8, from a
+    /// file of a few tens of kilobytes. If the ceiling were paid *after* the
+    /// decode rather than before it, this test would allocate that 1.6 GB to
+    /// discover a number the header had already stated.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn a_decompression_bomb_is_refused_on_its_header_not_after_the_decode() {
+        let png = declared_png(20_000, 20_000);
+        assert!(
+            png.len() < 1_000_000,
+            "the fixture must be small, or it is not a bomb: {} bytes",
+            png.len()
+        );
+
+        let probe = FileProbe::new("panorama.png", png.len() as u64);
+        let started = std::time::Instant::now();
+        let e = ImageParser
+            .parse(ParseInput {
+                bytes: &png,
+                probe: &probe,
+                budget: budget(),
+            })
+            .expect_err("400 megapixels is over the ceiling");
+        let elapsed = started.elapsed();
+
+        assert_eq!(e.code(), Code::ParBudgetExceeded);
+        // The numbers, not just the refusal: "too large" with no size in it is
+        // the generic failure text this project calls a defect.
+        let ctx = format!("{e:?}");
+        assert!(
+            ctx.contains("20000x20000"),
+            "the refusal must name what it measured: {ctx}"
+        );
+
+        // **What this bound proves, measured rather than argued.** Raising
+        // `MAX_PIXELS` so the ceiling never trips makes this same call take
+        // **43.6 seconds** — Vision really does rasterise and scan all 400
+        // megapixels, and returns `ParLowYield` because a blank image has no
+        // text in it. With the ceiling in place the same call returns in
+        // milliseconds. Two seconds sits between those by three orders of
+        // magnitude in one direction and twenty times in the other, so it is
+        // not a threshold that scheduling noise can cross.
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "refusal took {elapsed:?}; the ceiling is supposed to be paid before \
+             the image is rasterised, not after"
+        );
+    }
+
+    /// And the ceiling refuses rather than truncating.
+    ///
+    /// The file stays findable by name and metadata (T5) — a bomb is not a
+    /// corrupt file and must not be recorded as one, or the Status page grows
+    /// another false failure of exactly the kind B1 was.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn an_image_just_under_the_ceiling_is_still_attempted() {
+        // 8000x8000 is 64 MP — the ceiling is `>`, so this is the largest
+        // image that is still read. Pinning the boundary, because a ceiling
+        // nobody probes from below drifts into refusing ordinary photographs.
+        let png = declared_png(8_000, 8_000);
+        let probe = FileProbe::new("big-but-fine.png", png.len() as u64);
+        let out = ImageParser.parse(ParseInput {
+            bytes: &png,
+            probe: &probe,
+            budget: budget(),
+        });
+        // A blank image yields no text, which is a low-yield artifact or a
+        // "nothing recognised" error — never `ParBudgetExceeded`.
+        if let Err(e) = out {
+            assert_ne!(
+                e.code(),
+                Code::ParBudgetExceeded,
+                "64 MP is at the ceiling, not over it"
+            );
+        }
+    }
+
     #[test]
     fn a_placeholder_is_never_recognised() {
         // Never hydrate a placeholder. The router refuses first; this is the parser refusing
