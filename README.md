@@ -70,7 +70,7 @@ It also deliberately does **not** build an OS sandbox ([§129](docs/Part_7_Solo_
 | | |
 |---|---|
 | Current milestone | **M3 — desktop shell · PDF · tables.** Tables read from CSV, Markdown, HTML, XLSX and DOCX with a header confidence and a span per cell; PDF ruled tables, unit extraction and `table compute` are not built |
-| What works today | Desktop app — conversations that survive a quit, Ask with citations, drop a file in, first-run setup, Models, Status · CLI — `workspace add` · `index` · `search` (`--literal`, `--semantic`, `--explain`, filters) · `embed` · `status` · `watch` · `mcp` · MCP server, ten tools, over 35,404 real files |
+| What works today | Desktop app — conversations that survive a quit, Ask with citations, drop a file in, first-run setup, Models, Status · CLI — `workspace add` · `index` · `search` (`--literal`, `--semantic`, `--explain`, filters) · `embed` · `status` · `watch` · `mcp` · MCP server, thirteen tools, over 35,404 real files |
 | Not wired yet | Semantic reaches the desktop's **Ask** and `marrow search --semantic`; the desktop's **Search** view and MCP `search` are still lexical-only |
 | Measured | ~13 s to index and chunk 35,404 files · **0–3 ms** lexical queries · embedding runs at 6.4 chunks/s · a 4B model answers in 3–13 s on an M-series laptop |
 

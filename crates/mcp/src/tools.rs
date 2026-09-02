@@ -505,6 +505,38 @@ protected or excluded directory, a name the filesystem would mangle, a stale \
         },
     },
     Tool {
+        name: "undo_write",
+        description: "\
+Put a file back the way it was before one of your writes.
+
+Takes exactly what the write reported: `path`, the `digest` it left behind, \
+and the `snapshot` handle for what it displaced. A write that *created* a file \
+has no snapshot; undoing that one removes the file.
+
+**Refuses if the file changed after your write.** Somebody edited it in \
+between, and undoing would discard their work rather than yours — which is the \
+second destruction, not the repair of the first. Re-read it and decide.
+
+Also refuses when the write replaced something and no copy was kept, rather \
+than doing nothing quietly.
+
+The restored content is the user's again: it stops being excluded from \
+evidence, and a later answer may cite it.",
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "The `path` the write returned. Workspace-relative or absolute." },
+                    "digest": { "type": "string", "description": "The `digest` the write returned — what it left on disk. The file must still hash to this." },
+                    "snapshot": { "type": "string", "description": "The `snapshot` the write returned. Restores what the write replaced." },
+                    "created": { "type": "boolean", "description": "Pass `true` instead of `snapshot` when the write created the file, so undoing means removing it. One of the two is required — omitting both is refused rather than guessed, because guessing wrong deletes a file somebody wanted back." },
+                    "workspace": { "type": "string", "description": "Workspace name. Omit when there is only one." }
+                },
+                "required": ["path", "digest"]
+            })
+        },
+    },
+    Tool {
         name: "fetch_url",
         description: "\
 Fetch one HTTPS page and return its readable text.
@@ -710,8 +742,33 @@ mod tests {
             "create_page",
             &["path", "title", "body", "expect", "workspace"],
         ),
+        (
+            "undo_write",
+            &["path", "digest", "snapshot", "created", "workspace"],
+        ),
         ("fetch_url", &["url"]),
     ];
+
+    /// The number of tools, pinned — because nothing pinned it and four
+    /// documents drifted.
+    ///
+    /// On 2026-09-03 the README and `docs/README.md` said "ten tools" and four
+    /// pages of the site said "eleven", while the code exposed **twelve**. All
+    /// three numbers were being read by somebody deciding whether to trust the
+    /// thing. A count with no test is a comment.
+    ///
+    /// When this fails: update it, and update `README.md`, `docs/README.md`,
+    /// `site/index.html`, `site/guides.html`, `site/install.html` and
+    /// `site/guide-mcp.html` in the same commit. That list is the point of the
+    /// test.
+    #[test]
+    fn the_tool_count_is_what_every_document_claims_it_is() {
+        assert_eq!(
+            all().count(),
+            13,
+            "the tool list changed; the six documents named above say a number too"
+        );
+    }
 
     #[test]
     fn every_declared_parameter_is_actually_handled() {

@@ -49,5 +49,5 @@ mod name;
 pub mod snapshot;
 
 pub use create::{create_diagram, create_file, create_page, CreateDiagram, CreateFile, CreatePage};
-pub use guard::{Expect, Undone, Workspace, Written};
+pub use guard::{Expect, Undo, Undone, Workspace, Written};
 pub use snapshot::{SnapshotId, Snapshots};

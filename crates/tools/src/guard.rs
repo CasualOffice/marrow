@@ -384,6 +384,50 @@ impl Workspace {
     /// that back to `files.origin`, exactly as it owns writing `SELF` after a
     /// normal write.
     pub fn undo(&self, written: &Written) -> Result<Undone> {
+        self.undo_inner(written)
+    }
+
+    /// [`Workspace::undo`], addressed by value rather than by object.
+    ///
+    /// A caller that crossed a process boundary — MCP, the CLI — has three
+    /// strings and no `Written`. Rather than have it reconstruct one, or have
+    /// this crate grow a transaction table before the milestone asks for one,
+    /// undo takes exactly what the write reported: where it wrote, the digest
+    /// it left, and the handle for what it displaced.
+    ///
+    /// **This grants no authority the caller did not already have.** Restoring
+    /// snapshot *X* over path *Y* writes bytes the user once had to a path the
+    /// caller chose — and a caller who can reach this can reach
+    /// [`crate::create_file`], which writes arbitrary bytes to the same place
+    /// through the same guard. Binding a snapshot to its original path would be
+    /// state for its own sake. What actually constrains this is unchanged:
+    /// containment, the protected subtrees, and `wrote` having to match what is
+    /// on disk right now.
+    pub fn undo_write(&self, path: &Path, wrote: ContentHash, action: Undo) -> Result<Undone> {
+        let written = match &action {
+            Undo::Restore(id) => Written {
+                path: path.to_path_buf(),
+                digest: wrote,
+                bytes: 0,
+                origin: Origin::SelfWritten,
+                replaced: Some(*id.digest()),
+                snapshot: Some(id.clone()),
+                written_at: Timestamp::now(),
+            },
+            Undo::RemoveCreated => Written {
+                path: path.to_path_buf(),
+                digest: wrote,
+                bytes: 0,
+                origin: Origin::SelfWritten,
+                replaced: None,
+                snapshot: None,
+                written_at: Timestamp::now(),
+            },
+        };
+        self.undo_inner(&written)
+    }
+
+    fn undo_inner(&self, written: &Written) -> Result<Undone> {
         let relative = written
             .path()
             .strip_prefix(self.root.path())
@@ -670,6 +714,26 @@ impl Workspace {
             }
         }
     }
+}
+
+/// Which undo is being asked for.
+///
+/// **Stated, never inferred, and that is a bug fix rather than a preference.**
+/// The first version of `undo_write` worked out whether a write had replaced
+/// something by asking whether a snapshot handle was supplied. A replacement
+/// whose snapshot had not been kept therefore looked exactly like a creation —
+/// so undoing an *un-undoable* replacement deleted the user's file instead of
+/// refusing, which is the opposite of what the word undo promises. Across a
+/// wire the same shape is worse: a caller that simply forgets the handle
+/// deletes a file it meant to restore.
+///
+/// So the caller says which, and "neither" is a refusal rather than a default.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Undo {
+    /// Put these bytes back. The handle came from [`Written::snapshot`].
+    Restore(crate::snapshot::SnapshotId),
+    /// Remove the file, because the write created it and displaced nothing.
+    RemoveCreated,
 }
 
 /// What an undo did.
@@ -982,6 +1046,64 @@ mod tests {
 
         let e = w.undo(&replaced).expect_err("must refuse");
         assert_eq!(e.code(), Code::ActNotReversible);
+    }
+
+    /// The bug the explicit [`Undo`] exists to prevent, pinned.
+    ///
+    /// When `undo_write` worked out "was this a replacement?" from whether a
+    /// snapshot handle was supplied, a replacement whose bytes had not been
+    /// kept was indistinguishable from a creation — so undoing it **deleted the
+    /// user's file** instead of refusing. Over a wire, a caller that merely
+    /// forgot the handle would do the same.
+    #[test]
+    fn an_undo_asked_for_by_value_never_deletes_a_file_it_was_asked_to_restore() {
+        let s = sandbox();
+        let w = ws_undoable(&s);
+        let first = w
+            .write("notes.md", b"the user's work", &Expect::New)
+            .unwrap();
+        let replaced = w
+            .write(
+                "notes.md",
+                b"model output",
+                &Expect::Replacing(first.digest()),
+            )
+            .unwrap();
+        let handle = replaced.snapshot().cloned().expect("kept");
+
+        // The restore that was asked for.
+        let undone = w
+            .undo_write(replaced.path(), replaced.digest(), Undo::Restore(handle))
+            .expect("restores");
+        assert!(!undone.removed());
+        assert_eq!(
+            fs::read(s.root.join("notes.md")).unwrap(),
+            b"the user's work"
+        );
+    }
+
+    /// And the other half: removal happens only when it is what was asked for.
+    #[test]
+    fn removal_is_only_ever_what_the_caller_explicitly_asked_for() {
+        let s = sandbox();
+        let w = ws_undoable(&s);
+        let first = w
+            .write("notes.md", b"the user's work", &Expect::New)
+            .unwrap();
+        let replaced = w
+            .write(
+                "notes.md",
+                b"model output",
+                &Expect::Replacing(first.digest()),
+            )
+            .unwrap();
+
+        // A caller that asks to remove a file this write did not create gets
+        // exactly what it asked for — which is why asking has to be deliberate,
+        // and why `Undo` has no default.
+        w.undo_write(replaced.path(), replaced.digest(), Undo::RemoveCreated)
+            .expect("does what was asked");
+        assert!(!s.root.join("notes.md").exists());
     }
 
     #[test]

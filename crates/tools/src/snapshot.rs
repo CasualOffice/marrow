@@ -59,6 +59,16 @@ use serde::{Deserialize, Serialize};
 pub struct SnapshotId(ContentHash);
 
 impl SnapshotId {
+    /// Rebuild a handle from the digest a write reported.
+    ///
+    /// The handle *is* the digest, so this is a rename rather than a lookup —
+    /// it does not assert that the content is present. [`Snapshots::read`] is
+    /// where a handle for content that was never captured, or has since been
+    /// removed, produces an error a caller can act on.
+    pub fn from_digest(digest: ContentHash) -> Self {
+        Self(digest)
+    }
+
     pub fn digest(&self) -> &ContentHash {
         &self.0
     }

@@ -120,6 +120,7 @@ impl Server {
             "list_workspaces" => self.list_workspaces(),
             "index_status" => self.index_status(),
             "create_file" | "create_diagram" | "create_page" => self.create(name, &args),
+            "undo_write" => self.undo_write(&args),
             "fetch_url" => self.fetch(&args),
             _ => unreachable!("checked above"),
         };
@@ -1300,6 +1301,21 @@ impl Server {
         };
 
         let ws = marrow_tools::Workspace::open(root)?;
+        // Somewhere to keep what a replacement displaces, so `undo_write` has
+        // something to put back. Beside the index rather than in the workspace:
+        // a snapshot under the root would be indexed, cited, and eventually
+        // snapshotted itself.
+        //
+        // A store that cannot be opened does not stop the write. It makes the
+        // write final, and `written_json` says so in the response rather than
+        // letting the model discover it when the undo fails.
+        let ws = match marrow_tools::Snapshots::open(default_snapshots_dir()) {
+            Ok(store) => ws.with_snapshots(store),
+            Err(e) => {
+                warn!(error = %e, "no snapshot store; replacements will not be undoable");
+                ws
+            }
+        };
         // The model directory holds weights and scratch; a file written there
         // would be read back as though a person had written it (SUP-011).
         Ok(ws.protect(default_models_dir()))
@@ -1335,6 +1351,11 @@ impl Server {
             "bytes": w.bytes(),
             "digest": w.digest().to_hex(),
             "replaced": w.replaced().map(|h| h.to_hex()),
+            // What `undo_write` needs, handed over at the moment it is known.
+            // The alternative is a transaction table, which the milestone asks
+            // for and this does not yet need.
+            "snapshot": w.snapshot().map(|s| s.to_string()),
+            "undoable": w.is_undoable(),
             "origin": "self_written",
             "citable": w.can_support_a_claim(),
             "note": "Recorded as written by this system. It is searchable and \
@@ -1355,6 +1376,86 @@ impl Server {
         // know about is worse than a write that failed.
         self.remember_write(&written, tool)?;
         Ok(Self::written_json(&written))
+    }
+
+    /// Put a file back the way it was before one of this server's writes.
+    ///
+    /// Addressed by the values the write already reported rather than by a
+    /// transaction id, because those values are in the model's context and a
+    /// transaction table is a schema change the milestone has not reached.
+    fn undo_write(&self, args: &Value) -> Result<Value> {
+        use std::path::{Path, PathBuf};
+
+        let ws = self.write_workspace(args)?;
+
+        let path = args
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::new(Code::CfgInvalid, "`path` is required."))?;
+        // Relative or absolute: the model was handed an absolute path in the
+        // write's response, and asking it to convert would be an invitation to
+        // get it wrong.
+        let target = if Path::new(path).is_absolute() {
+            PathBuf::from(path)
+        } else {
+            ws.root().join(path)
+        };
+
+        let digest = args
+            .get("digest")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                Error::new(
+                    Code::CfgInvalid,
+                    "`digest` is required — it is what the write reported leaving on disk, \
+                     and it is how this refuses to discard somebody's later edit.",
+                )
+            })
+            .and_then(|d| {
+                marrow_core::ContentHash::from_hex(d)
+                    .ok_or_else(|| Error::new(Code::CfgInvalid, "`digest` is not a content hash."))
+            })?;
+
+        // **One or the other, and never inferred.** Working out which undo was
+        // meant from whether `snapshot` happened to be present would mean a
+        // caller that forgot the handle deleted the file it meant to restore.
+        let action = match (
+            args.get("snapshot").and_then(Value::as_str),
+            args.get("created").and_then(Value::as_bool),
+        ) {
+            (Some(s), _) => marrow_core::ContentHash::from_hex(s)
+                .map(marrow_tools::SnapshotId::from_digest)
+                .map(marrow_tools::Undo::Restore)
+                .ok_or_else(|| {
+                    Error::new(Code::CfgInvalid, "`snapshot` is not a snapshot handle.")
+                })?,
+            (None, Some(true)) => marrow_tools::Undo::RemoveCreated,
+            (None, _) => {
+                return Err(Error::new(
+                    Code::CfgInvalid,
+                    "Say which undo this is: pass `snapshot` to restore what the write \
+                     replaced, or `created: true` to remove a file the write created. \
+                     Guessing from what is missing would delete a file somebody meant to \
+                     get back.",
+                ))
+            }
+        };
+
+        let undone = ws.undo_write(&target, digest, action)?;
+
+        Ok(json!({
+            "path": undone.path().display().to_string(),
+            "removed": undone.removed(),
+            "digest": undone.digest().to_hex(),
+            "origin": "user",
+            "citable": true,
+            "note": if undone.removed() {
+                "The file this system created has been removed."
+            } else {
+                "The earlier content is back. It is the user's again, so it is no longer \
+                 excluded from evidence and a later answer may cite it."
+            },
+        }))
     }
 
     fn fetch(&self, args: &Value) -> Result<Value> {
@@ -1435,15 +1536,29 @@ fn from_args<T: serde::de::DeserializeOwned>(args: &Value) -> Result<T> {
     })
 }
 
+/// Where overwritten content is kept, so `undo_write` has something to restore.
+///
+/// Beside the index rather than in any workspace. A snapshot under a workspace
+/// root would be indexed, cited, and eventually snapshotted itself — and it has
+/// to survive the workspace being deleted, which is one of the things people
+/// want undone.
+fn default_snapshots_dir() -> std::path::PathBuf {
+    data_dir().join("snapshots")
+}
+
 /// Where model weights live, so a write cannot land in them.
 fn default_models_dir() -> std::path::PathBuf {
+    data_dir().join("models")
+}
+
+/// Per-user, shared with the CLI and the desktop (MULTI-002).
+fn data_dir() -> std::path::PathBuf {
     std::env::var_os("MARROW_DATA_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
             let home = std::env::var_os("HOME").unwrap_or_default();
             std::path::PathBuf::from(home).join(".local/share/marrow")
         })
-        .join("models")
 }
 
 #[cfg(test)]
