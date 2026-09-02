@@ -152,6 +152,13 @@ jobs:
           files: dist/*
           draft: false
           prerelease: true
+          # **The app is what "latest" means.** GitHub picks the newest
+          # non-prerelease, and failing that the newest release by date — so
+          # publishing a `runtime-vN` archive made it the Latest release, and
+          # `site/install.html` links at `releases/latest`. Anyone following
+          # that link landed on a 193 MB Python tarball instead of the app.
+          # Said explicitly here rather than left to a date comparison.
+          make_latest: true
           body: |
             **Apple Silicon macOS only.** Windows and Linux do not work yet, and
             the README says exactly why: cloud-placeholder detection is

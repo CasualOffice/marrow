@@ -93,7 +93,11 @@ jobs:
           tag_name: runtime-v${{ steps.v.outputs.version }}
           files: dist/*
           draft: false
-          prerelease: false
+          prerelease: true
+          # Never the Latest release. This is a dependency of the app, not a
+          # thing to download, and `site/install.html` points people at
+          # `releases/latest`.
+          make_latest: false
           body: |
             The MLX runtime Marrow installs on first run. **Not the app** —
             download the app from the latest `v*` release.
