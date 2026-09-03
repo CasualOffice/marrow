@@ -26,6 +26,42 @@ fn data_dir() -> std::path::PathBuf {
         })
 }
 
+/// Stop, and make sure a person finds out.
+///
+/// **`eprintln!` is not "loudly" for an app somebody double-clicked.** Both
+/// startup failures below used to print to stderr and exit, and stderr from a
+/// Finder-launched `.app` goes nowhere at all: the user sees one bounce in the
+/// Dock and no dialog, which is indistinguishable from the invalid-signature
+/// failure that killed v0.0.1 and v0.0.2 and gives them nothing to act on or
+/// report. Reported from real use — "it bounced and didn't open" — on a machine
+/// that was not the one that built it.
+///
+/// So both: the line on stderr for anybody running this from a terminal, and a
+/// dialog for everybody else. `osascript` rather than `NSAlert` because this
+/// runs *before* Tauri has started an `NSApplication`, and a separate process
+/// has no opinion about that.
+fn fatal(code: i32, title: &str, detail: &str) -> ! {
+    eprintln!("{title}: {detail}");
+
+    // AppleScript string literals take double quotes and backslashes as
+    // escapes, and a path or a SQLite message can contain both.
+    fn escape(s: &str) -> String {
+        s.replace('\\', "\\\\").replace('"', "\\\"")
+    }
+    let script = format!(
+        r#"display alert "{}" message "{}" as critical"#,
+        escape(title),
+        escape(detail)
+    );
+    // Best effort. If this cannot run we are no worse off than before it
+    // existed, and the exit code and the stderr line still stand.
+    let _ = std::process::Command::new("/usr/bin/osascript")
+        .arg("-e")
+        .arg(script)
+        .status();
+    std::process::exit(code);
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -34,16 +70,28 @@ fn main() {
 
     let dir = data_dir();
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!("cannot create {}: {e}", dir.display());
-        std::process::exit(1);
+        fatal(
+            1,
+            "Marrow cannot start",
+            &format!(
+                "It could not create the folder it keeps its index in.\n\n{}\n\n{e}",
+                dir.display()
+            ),
+        );
     }
 
     let core = match Core::open(dir.join(marrow_store::DB_FILE_NAME)) {
         Ok(c) => Arc::new(c),
         Err(e) => {
-            // Failing loudly beats a window that opens and answers nothing.
-            eprintln!("[{}] {}", e.code(), e.message());
-            std::process::exit(4);
+            // Failing loudly beats a window that opens and answers nothing —
+            // and a dialog is what "loudly" means to somebody who launched this
+            // from the Dock. The message already names a cause and an action;
+            // the code goes with it so a report can be acted on.
+            fatal(
+                4,
+                "Marrow cannot start",
+                &format!("{}\n\n[{}]", e.message(), e.code()),
+            );
         }
     };
 
