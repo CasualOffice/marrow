@@ -2513,7 +2513,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-cli"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "clap",
  "ctrlc",
@@ -2533,7 +2533,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-core"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "blake3",
  "serde",
@@ -2544,7 +2544,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-desktop"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "marrow-core",
  "marrow-hw",
@@ -2566,7 +2566,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-hw"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "libc",
  "marrow-core",
@@ -2576,7 +2576,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-index"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "marrow-core",
  "marrow-store",
@@ -2589,7 +2589,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-ingest"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "filetime",
  "marrow-core",
@@ -2604,7 +2604,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-mcp"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "marrow-core",
  "marrow-index",
@@ -2621,7 +2621,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-model"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "blake3",
  "flate2",
@@ -2645,7 +2645,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-net"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "marrow-core",
  "serde",
@@ -2657,7 +2657,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-parse"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "calamine",
  "chardetng",
@@ -2689,7 +2689,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-query"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "marrow-core",
  "marrow-index",
@@ -2702,7 +2702,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-scan"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "blake3",
  "ignore",
@@ -2715,7 +2715,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-store"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "marrow-core",
  "rusqlite",
@@ -2726,7 +2726,7 @@ dependencies = [
 
 [[package]]
 name = "marrow-tools"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "filetime",
  "marrow-core",
