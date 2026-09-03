@@ -2,12 +2,26 @@
 
 A local knowledge runtime. It indexes folders you point it at, understands their structure, answers questions with citations to the **exact page, cell or line**, and exposes all of it over MCP so the agent you already use — Claude Code, Codex, Cursor — can search everything you own.
 
-**Status:** `v0.0.1`. M0–M2 done; **M3 nearly done** (tables now read from CSV, Markdown, HTML, XLSX and DOCX; PDF *ruled* tables and `table compute` are not built). The model runtime ([Part 8](docs/Part_8_Model_Runtime.md)) answers questions locally, and cloud providers landed so a machine without a GPU still works. M4 semantic reaches the desktop's Ask **and its Search view** and `marrow search --semantic`; the MCP `search` tool is still lexical-only.
+**Status:** `v0.0.5`. M0–M2 done; **M3 done bar one gated item** (tables read from CSV, Markdown, HTML, XLSX and DOCX, and `table compute` sums, filters, groups and looks up; PDF *ruled* tables wait on a real file that has one). The model runtime ([Part 8](docs/Part_8_Model_Runtime.md)) answers locally and installs itself, and cloud providers landed so a machine without a GPU still works. M4 semantic reaches Ask, the desktop Search view and `marrow search --semantic`; the MCP `search` tool is still lexical-only. M5 write tools are underway — guarded writes, anchored patches, snapshots and undo.
 
 **Nothing before `v0.0.5` could answer a question on a machine that was not the one that built it.** Two separate faults, and fixing the first read like fixing both. `v0.0.0` left `mlx_worker.py` out of the bundle and declared no macOS folder-usage strings, so it could neither load a model nor read a granted folder — fixed in `v0.0.1`. But the *interpreter* the worker runs on was never in any bundle either: the app looked for `~/.local/share/marrow/runtime/mlx/bin/python`, which only ever existed because it had been created by hand on the author's Mac, and the printed fix began `python3.11 -m venv` — a command macOS does not ship. Every release verified "the worker script is in `Contents/Resources`", which is a check the build machine cannot fail. `v0.0.5` installs the runtime itself, from a digest-pinned archive, with no Python needed on the machine. [TRACKER.md](TRACKER.md) is the real state; [BUGS.md](BUGS.md) is what is currently wrong.
 **Platform:** macOS on Apple Silicon. Windows and Linux **do not work yet** — see [Platforms](#platforms), which says exactly why and what a port needs.
 **Scope:** Personal project, built in the open. One author. Not a product, no SLA.
 **Licence:** Apache-2.0
+
+
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/CasualOffice/marrow/main/install.sh | bash
+```
+
+Apple Silicon macOS. The script verifies the download against the published
+checksum before it installs anything, and clears the quarantine flag that makes
+Gatekeeper say *"Apple could not verify 'Marrow' is free of malware"* — this
+build is signed ad-hoc rather than notarised, because notarisation needs a paid
+Apple Developer account. [Read the script](install.sh) before piping it into a
+shell; it is short, and its header lists everything it does.
 
 ---
 

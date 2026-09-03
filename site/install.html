@@ -169,13 +169,35 @@ marrow --version</pre></div>
 <section class="section" id="quarantine">
   <div class="wrap">
     <h2>macOS will refuse to open it. Here is why, and the fix.</h2>
+
+    <div class="prose intro">
+      <p>
+        <strong>The short version.</strong> One line, which downloads the latest
+        release, <em>checks it against the published checksum</em>, installs it,
+        and clears the flag Gatekeeper is objecting to:
+      </p>
+    </div>
+    <div class="snippet"><pre>curl -fsSL https://raw.githubusercontent.com/CasualOffice/marrow/main/install.sh | bash</pre></div>
+    <div class="prose intro">
+      <p>
+        Piping a script into a shell deserves the suspicion it usually gets, so
+        <a href="https://github.com/CasualOffice/marrow/blob/main/install.sh">read
+        it first</a> — it is short on purpose, and its header lists everything it
+        does. It refuses outright on an Intel Mac, and it stops rather than
+        installing anything if the checksum does not match. The rest of this
+        section is what it is doing on your behalf, and how to do it by hand.
+      </p>
+    </div>
+
     <div class="prose intro">
       <p>
         This build is <strong>not signed and not notarised</strong>. Signing
         requires a paid Apple Developer account, and this is a personal project
         with one author. So Gatekeeper does exactly what it should with an
         unsigned binary downloaded from the internet: it refuses to run it, and
-        the dialog does not offer you a way through.
+        the dialog does not offer you a way through. On macOS 15 and later the
+        wording is <em>“Apple could not verify &lsquo;Marrow&rsquo; is free of
+        malware that may harm your Mac or compromise your privacy.”</em>
       </p>
       <p>
         Anything downloaded by a browser gets an extended attribute called

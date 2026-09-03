@@ -181,18 +181,32 @@ jobs:
 
             ### This build is not signed or notarised
 
-            macOS will refuse to open it on the first try. That is Gatekeeper
-            doing its job on an unsigned binary from the internet, and you
-            should be suspicious of anyone who tells you to ignore it.
+            macOS will refuse to open it on the first try, with **"Apple could
+            not verify 'Marrow' is free of malware that may harm your Mac or
+            compromise your privacy."** That is Gatekeeper doing its job on an
+            unsigned binary from the internet, and you should be suspicious of
+            anyone who tells you to ignore it.
+
+            The one-line install downloads this release, **verifies it against
+            the checksum below**, installs it and clears the flag:
+
+            ```sh
+            curl -fsSL https://raw.githubusercontent.com/CasualOffice/marrow/main/install.sh | bash
+            ```
+
+            [Read it first](https://github.com/CasualOffice/marrow/blob/main/install.sh) —
+            it is short, and its header lists everything it does. By hand
+            instead, after dragging the app to Applications:
 
             ```sh
             xattr -dr com.apple.quarantine /Applications/Marrow.app
             ```
 
-            Read the command before you run it: it removes the quarantine flag
-            from that one bundle. If you would rather not, build from source —
-            `cargo tauri build` — which is the honest alternative and takes a
-            few minutes.
+            Note that on macOS 15 and later, right-clicking and choosing
+            **Open** no longer works as a way through; the equivalent is
+            **System Settings → Privacy & Security → Open Anyway**. Or build
+            from source — `cargo tauri build` — which avoids the question
+            entirely, because nothing you compiled yourself is quarantined.
 
             The CLI tarball has the same caveat and the same fix.
 
