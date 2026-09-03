@@ -302,6 +302,14 @@ excludes, and a way to override it. Not urgent; not invisible either.
 
 ---
 
+## Not a bug, checked rather than assumed
+
+| What | Why it is not one |
+|---|---|
+| Dependabot: moderate unsoundness in `glib`'s `VariantStrIter` iterator impls | **`glib` is not in any artifact this project ships.** It arrives through `gtk → tauri`, and GTK is Tauri's *Linux* backend; `cargo tree --target aarch64-apple-darwin -i glib` prints nothing at all. It appears only under `--target all`. This project is macOS-only (D5), so the crate is never compiled, and the alert will keep reappearing on every scan until a Linux port exists — at which point it becomes real and should be upgraded first |
+
+---
+
 ## Open, and why each is still open
 
 Everything reported has been fixed. What remains is three items I chose not to
