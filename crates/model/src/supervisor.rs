@@ -1079,14 +1079,31 @@ mod tests {
         let handle = std::thread::spawn(move || {
             run(sup(), Sampler::new(10, Duration::from_millis(20)), crx, etx)
         });
-        // Give it long enough to tick at least once.
-        std::thread::sleep(Duration::from_millis(80));
+
+        // **Wait for the tick; do not sleep and hope for it.** This used to
+        // sleep 80 ms and then assert that a 20 ms sampler had fired, which is
+        // an assumption about scheduling rather than a fact about the code —
+        // and it failed exactly once, on a loaded CI runner, twelve minutes
+        // after the same commit passed. A test that depends on a busy machine
+        // giving a thread a slice within a fixed wall-clock window reports the
+        // load, not the behaviour.
+        //
+        // Blocking on the event instead is both stricter and faster: it
+        // returns as soon as the sampler really has ticked, usually inside the
+        // first 20 ms, and the timeout is long enough that reaching it means
+        // the tick genuinely never happened.
+        let ticked = loop {
+            match erx.recv_timeout(Duration::from_secs(5)) {
+                Ok(Event::Pressure { .. }) => break true,
+                // Other events are legitimate and not what this test is about.
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        };
+
         ctx.send(Command::Shutdown).unwrap();
         handle.join().expect("supervisor thread must not panic");
-        assert!(
-            erx.try_iter().any(|e| matches!(e, Event::Pressure { .. })),
-            "the sampler must have ticked and reported"
-        );
+        assert!(ticked, "the sampler must have ticked and reported");
     }
 
     #[test]
