@@ -1800,6 +1800,31 @@ pub fn set_file_origin(
 ///
 /// Idempotent on the hash: writing the same content twice is one fact, not
 /// two, and re-running a failed action must not double-count.
+/// One write this system made, as the table remembers it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SelfWrite {
+    pub content_hash: ContentHash,
+    pub written_path: String,
+    pub tool: String,
+    pub written_at: Timestamp,
+    /// What the write displaced, when anything was kept. `None` with
+    /// `created = false` means the earlier content is gone and the write cannot
+    /// be undone.
+    pub snapshot_id: Option<String>,
+    /// Whether the write created the file. Undoing a creation removes it.
+    pub created: bool,
+}
+
+impl SelfWrite {
+    /// Whether `undo` could put this back. The two kinds of `None` snapshot
+    /// differ, which is the whole reason `created` is stored beside it.
+    pub fn is_undoable(&self) -> bool {
+        self.created || self.snapshot_id.is_some()
+    }
+}
+
+#[allow(clippy::too_many_arguments)] // Each is a distinct fact about one write;
+                                     // a struct here would only move the list.
 pub fn record_self_written(
     conn: &Connection,
     content_hash: ContentHash,
@@ -1807,28 +1832,87 @@ pub fn record_self_written(
     txn_id: &str,
     tool: &str,
     at: Timestamp,
+    snapshot_id: Option<&str>,
+    created: bool,
 ) -> Result<()> {
     q(
         conn.execute(
-            "INSERT INTO self_written (content_hash, written_path, txn_id, tool, written_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO self_written
+                 (content_hash, written_path, txn_id, tool, written_at, snapshot_id, created)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(content_hash) DO UPDATE SET
                  written_path = excluded.written_path,
                  txn_id       = excluded.txn_id,
                  tool         = excluded.tool,
-                 written_at   = excluded.written_at",
+                 written_at   = excluded.written_at,
+                 snapshot_id  = excluded.snapshot_id,
+                 created      = excluded.created",
             params![
                 content_hash.to_hex(),
                 written_path,
                 txn_id,
                 tool,
-                at.as_millis()
+                at.as_millis(),
+                snapshot_id,
+                i64::from(created)
             ],
         ),
         "Could not record that this system wrote that file. It would then be \
          treated as your own work and cited back; the write was not recorded.",
     )?;
     Ok(())
+}
+
+/// The most recent writes, newest first.
+///
+/// **The point is that undo stops needing the caller to have kept anything.**
+/// `undo_write` takes the path, the digest and the snapshot handle; before this
+/// they came from the tool response, which is fine while it is still in front
+/// of you and useless an hour later. Now they can be looked up.
+pub fn recent_self_writes(conn: &Connection, limit: usize) -> Result<Vec<SelfWrite>> {
+    let mut stmt = q(
+        conn.prepare(
+            "SELECT content_hash, written_path, tool, written_at, snapshot_id, created
+               FROM self_written
+              ORDER BY written_at DESC
+              LIMIT ?1",
+        ),
+        "Could not read what this system has written.",
+    )?;
+    let rows = q(
+        stmt.query_map(params![limit as i64], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, Option<String>>(4)?,
+                r.get::<_, i64>(5)?,
+            ))
+        }),
+        "Could not read what this system has written.",
+    )?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        let (hash, path, tool, at, snapshot, created) =
+            q(row, "Could not read what this system has written.")?;
+        // A hash that will not parse is a corrupt row, not a reason to fail the
+        // whole listing: the rest of the history is still worth having.
+        let Some(content_hash) = ContentHash::from_hex(&hash) else {
+            tracing::warn!(%hash, "skipping a self-written row with an unreadable hash");
+            continue;
+        };
+        out.push(SelfWrite {
+            content_hash,
+            written_path: path,
+            tool,
+            written_at: Timestamp::from_millis(at),
+            snapshot_id: snapshot,
+            created: created != 0,
+        });
+    }
+    Ok(out)
 }
 
 /// Every hash this system wrote.

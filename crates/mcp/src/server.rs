@@ -140,6 +140,7 @@ impl Server {
             "create_file" | "create_diagram" | "create_page" => self.create(name, &args),
             "patch_file" => self.patch_file(&args),
             "set_config_value" => self.set_config_value(&args),
+            "list_writes" => self.list_writes(&args),
             "undo_write" => self.undo_write(&args),
             "fetch_url" => self.fetch(&args),
             _ => unreachable!("checked above"),
@@ -1363,6 +1364,14 @@ impl Server {
         let path = written.path().display().to_string();
         let txn = marrow_core::JobId::new().to_string();
         let tool = tool.to_string();
+        // **What the write displaced, recorded with it.** Without this the
+        // undo handle lives only in the tool response, which is fine while it
+        // is still in front of the caller and useless afterwards. `created` is
+        // stored beside it rather than inferred from the snapshot being absent,
+        // because those are two different situations and confusing them is what
+        // made an early `undo_write` delete a file it was asked to restore.
+        let snapshot = written.snapshot().map(|s| s.to_string());
+        let created = written.replaced().is_none();
         self.store.writer().submit(move |conn| {
             marrow_store::read::record_self_written(
                 conn,
@@ -1371,6 +1380,8 @@ impl Server {
                 &txn,
                 &tool,
                 marrow_core::Timestamp::now(),
+                snapshot.as_deref(),
+                created,
             )
         })
     }
@@ -1431,6 +1442,42 @@ impl Server {
         let written = marrow_tools::set_value(&ws, &from_args(args)?)?;
         self.remember_write(&written, "set_config_value")?;
         Ok(Self::written_json(&written))
+    }
+
+    /// What this system has written, and what each one needs to be undone.
+    fn list_writes(&self, args: &Value) -> Result<Value> {
+        let limit = args
+            .get("limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(20)
+            .clamp(1, 200) as usize;
+        let conn = self.store.reader()?;
+        let writes = marrow_store::read::recent_self_writes(&conn, limit)?;
+
+        let rows: Vec<Value> = writes
+            .iter()
+            .map(|w| {
+                json!({
+                    "path": w.written_path,
+                    "digest": w.content_hash.to_hex(),
+                    "snapshot": w.snapshot_id,
+                    "created": w.created,
+                    "tool": w.tool,
+                    "written_at_ms": w.written_at.as_millis(),
+                    // Said here rather than left to be worked out from a null
+                    // snapshot, because the two kinds of null differ and
+                    // guessing between them once deleted a file.
+                    "undoable": w.is_undoable(),
+                })
+            })
+            .collect();
+
+        Ok(json!({
+            "writes": rows,
+            "note": "Newest first, keyed on content — identical bytes written twice appear \
+                     once. Pass a row's `path`, `digest` and `snapshot` to `undo_write`, or \
+                     its `created` flag when it has no snapshot.",
+        }))
     }
 
     /// Put a file back the way it was before one of this server's writes.

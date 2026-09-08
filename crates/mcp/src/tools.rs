@@ -328,6 +328,35 @@ folder was never granted.",
         schema: || json!({ "type": "object", "properties": {} }),
     },
     Tool {
+        name: "list_writes",
+        description: "\
+What this system has written, newest first, with what each one needs to be \
+undone.
+
+Use this when you want to reverse a change and no longer have the response \
+from the write that made it — after a restart, or in a later conversation. \
+Each row carries the `path`, `digest`, `snapshot` and `created` that \
+`undo_write` takes.
+
+`undoable: false` means the write replaced a file and no copy of the earlier \
+content was kept, so it cannot be reversed. That is reported rather than \
+hidden, because the alternative is finding out at the moment you try.
+
+Rows are keyed on content, so writing identical bytes twice appears once.
+
+Refuses nothing on its own, and returns an empty list when this system has \
+written nothing — which is a real answer, not a failure. `limit` above 200 is \
+clamped rather than refused.",
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "integer", "description": "How many to return, newest first. Defaults to 20." }
+                }
+            })
+        },
+    },
+    Tool {
         name: "index_status",
         description: "\
 Index health, and specifically the gap between the two numbers people conflate.
@@ -843,6 +872,7 @@ mod tests {
             "set_config_value",
             &["path", "key", "value", "create", "expect", "workspace"],
         ),
+        ("list_writes", &["limit"]),
         (
             "undo_write",
             &["path", "digest", "snapshot", "created", "workspace"],
@@ -865,7 +895,7 @@ mod tests {
     /// documents drift again. So it now reads the files.
     #[test]
     fn the_tool_count_is_what_every_document_claims_it_is() {
-        const TOOLS: usize = 15;
+        const TOOLS: usize = 16;
         assert_eq!(all().count(), TOOLS, "the tool list changed");
 
         // Spelled out, because that is how the prose says it.

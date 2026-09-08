@@ -389,6 +389,34 @@ CREATE TABLE self_written (
 CREATE INDEX idx_self_written_at ON self_written(written_at);
 "#;
 
+/// Migration 9: the handle that makes a recorded write reversible.
+///
+/// `self_written` has said *"the action that produced it, so a forget path can
+/// undo one write"* since migration 3, and could not: it recorded the content
+/// hash, the path and the tool, and nothing about what the write **displaced**.
+/// So `undo_write` had to be handed the snapshot by whoever called it, which
+/// works while the response is still in front of you and not at all afterwards.
+///
+/// `snapshot_id` is nullable and the two nulls mean different things, which is
+/// why the column beside it exists:
+///
+/// - `created = 1`, snapshot null — the write made the file. Undoing it removes
+///   the file.
+/// - `created = 0`, snapshot null — it replaced something and nothing was kept,
+///   because the workspace had no store or the file was over the capture limit.
+///   **Not undoable**, and the row says so rather than looking like a creation.
+///
+/// Inferring one from the other is exactly the bug `Undo` was changed to
+/// prevent: a replacement whose bytes were not kept looked like a creation, and
+/// undoing it deleted the user's file.
+///
+/// Nine, not eight: `marrow-index` holds 8 for the embedding cache, by the same
+/// rule that gave it 2 and 4.
+pub const SCHEMA_V9: &str = r#"
+ALTER TABLE self_written ADD COLUMN snapshot_id TEXT;
+ALTER TABLE self_written ADD COLUMN created INTEGER NOT NULL DEFAULT 0;
+"#;
+
 /// Migration 5: conversations that survive quitting the app.
 ///
 /// Five, not four: `marrow-index` holds 4 for the vector table. See

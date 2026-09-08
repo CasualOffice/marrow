@@ -38,7 +38,7 @@ pub use model::{
 /// happens to hold the highest number. Read it from `schema_meta` when you want
 /// to know what a database actually is; this is only what `marrow-store` alone
 /// would apply.
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 9;
 
 /// Chunk bodies larger than this go to the content-addressed cache rather than
 /// inline in SQLite (Part 2 §50).

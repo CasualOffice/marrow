@@ -443,13 +443,23 @@ mod compose_tests {
         name: "index_four",
         up: "SELECT 1;",
     };
+    // Standing in for `marrow-index`'s embedding cache at 8. The fixture has to
+    // supply every number the real extension claims below this crate's highest,
+    // or `compose` refuses the chain for having a hole — which is the behaviour
+    // being relied on, not a nuisance. Adding store migration 9 is what made
+    // this one necessary.
+    const INDEX_EIGHT: migrate::Migration = migrate::Migration {
+        version: 8,
+        name: "index_eight",
+        up: "SELECT 1;",
+    };
 
     #[test]
     fn a_later_store_migration_does_not_reorder_an_earlier_extension() {
         // `[1, 3] + [2]` composes to `[1, 3, 2]` unsorted, which applies 3,
         // skips 2 as already-applied, and leaves a database missing tables it
         // reports as present. This is the case that broke.
-        let chain = compose(&[INDEX_TWO, INDEX_FOUR]).unwrap();
+        let chain = compose(&[INDEX_TWO, INDEX_FOUR, INDEX_EIGHT]).unwrap();
         let versions: Vec<i64> = chain.iter().map(|m| m.version).collect();
         // Contiguous from 1, however many this crate has since added: the
         // property is the ordering, not the length.

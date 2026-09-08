@@ -59,9 +59,13 @@ pub const MIGRATIONS: &[marrow_store::migrate::Migration] =
 ///
 /// Distinct from [`marrow_core::SCHEMA_VERSION`], which is only what
 /// `marrow-store` alone would apply. The two agree whenever the store holds the
-/// highest number in the chain. They parted again at 8, which this crate took
-/// time this crate takes one.
-pub const SCHEMA_VERSION: i64 = 8;
+/// highest number in the chain: they parted at 8, which this crate took for the
+/// embedding cache, and met again at 9, which the store took to make a recorded
+/// write undoable.
+///
+/// **This constant moves whenever either crate extends the chain** — a binary
+/// that declares a version it does not write is the defect D57 names.
+pub const SCHEMA_VERSION: i64 = 9;
 
 pub use fts5::{Fts5Index, StoreChunkSource};
 pub use literal::{

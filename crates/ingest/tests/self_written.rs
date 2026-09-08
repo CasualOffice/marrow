@@ -111,6 +111,11 @@ fn remember(f: &Fixture, bytes: &[u8], name: &str) {
                 "txn-1",
                 "create_file",
                 Timestamp::now(),
+                // A creation, so nothing was displaced and there is no
+                // snapshot. What this test is about is the origin rule, not
+                // undo.
+                None,
+                true,
             )
         })
         .unwrap();

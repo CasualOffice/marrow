@@ -73,6 +73,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "m7_chunk_source_span",
         up: schema::SCHEMA_V7,
     },
+    // **Nine, not eight.** `marrow-index` claimed 8 for the embedding cache,
+    // by the same rule that gave it 2 and 4. The next free number is the one
+    // after the highest *either* crate has taken.
+    Migration {
+        version: 9,
+        name: "m9_self_written_undo",
+        up: schema::SCHEMA_V9,
+    },
 ];
 
 /// The schema version this build writes.
@@ -459,6 +467,48 @@ mod tests {
         // defaulting it to `Whole` would be the lossy state dressed as a real
         // one — `CHUNKER_VERSION` re-cuts it instead.
         assert_eq!(span, None);
+    }
+
+    /// A write recorded before migration 9 stays recorded, and reads back as
+    /// **not undoable** rather than as a creation.
+    ///
+    /// The distinction is the reason `created` is a column instead of being
+    /// inferred from a null snapshot. Every row that predates this migration
+    /// has no snapshot, and defaulting them to `created = 1` would have said
+    /// "undoing this removes the file" about writes that in fact replaced
+    /// something — which is the bug `Undo::RemoveCreated` was introduced to
+    /// prevent, reintroduced through a schema default.
+    #[test]
+    fn a_write_recorded_before_the_undo_columns_existed_is_not_mistaken_for_a_creation() {
+        let dir = tmp();
+        let loc = Location::File(dir.path().join("marrow.sqlite"));
+        let (conn, _) = open_migrated(&loc).unwrap();
+
+        // The row shape as migration 3 wrote it: no snapshot, no `created`.
+        conn.execute_batch(
+            "INSERT INTO self_written (content_hash, written_path, txn_id, tool, written_at)
+                  VALUES ('abc', '/tmp/note.md', 'txn', 'create_file', 42);",
+        )
+        .unwrap();
+        drop(conn);
+
+        let (conn, v) = open_migrated(&loc).unwrap();
+        assert_eq!(v, target_version());
+
+        let (snapshot, created): (Option<String>, i64) = conn
+            .query_row(
+                "SELECT snapshot_id, created FROM self_written WHERE content_hash='abc'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("the row written before the columns existed is still readable");
+
+        assert_eq!(snapshot, None, "nothing was kept, and nothing is invented");
+        assert_eq!(
+            created, 0,
+            "an old row must not claim to be a creation — undoing one of those \
+             deletes a file that was replaced, not restored"
+        );
     }
 
     #[test]
