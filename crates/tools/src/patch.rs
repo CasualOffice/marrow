@@ -92,7 +92,7 @@ pub fn patch(ws: &Workspace, req: &Patch) -> Result<Written> {
         .with_context(req.path.clone()));
     }
 
-    let current = read_for_patch(ws, &req.path, expected)?;
+    let current = read_text_for_edit(ws, &req.path, expected)?;
 
     // Count every occurrence, not just enough to know there are two. The
     // refusal says how many there are, and "found 7" tells the caller how much
@@ -163,7 +163,11 @@ pub fn patch(ws: &Workspace, req: &Patch) -> Result<Written> {
 /// [`Workspace::write`] anyway, immediately before the rename, which is the
 /// check that actually protects the write. This one exists so the anchor is
 /// searched in the file the caller believes it read.
-fn read_for_patch(ws: &Workspace, relative: &str, expected: &ContentHash) -> Result<String> {
+pub(crate) fn read_text_for_edit(
+    ws: &Workspace,
+    relative: &str,
+    expected: &ContentHash,
+) -> Result<String> {
     let target = ws.resolve_existing(relative)?;
 
     // **Never hydrate a placeholder**, checked before the open rather than

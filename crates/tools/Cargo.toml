@@ -20,6 +20,10 @@ ulid.workspace = true
 # Not in `[workspace.dependencies]`: only this crate reads the corpus, and only
 # this crate folds a path component to catch a Unicode dot wearing a costume.
 toml = "0.8"
+# Format-preserving TOML editing. Already in the tree via `toml` itself, and
+# the entire value of a structural edit is that comments, key order and
+# whitespace survive it — `toml`'s own round-trip would not keep any of them.
+toml_edit = "0.20"
 unicode-normalization = "0.1"
 
 [dev-dependencies]

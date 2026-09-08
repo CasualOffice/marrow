@@ -139,6 +139,7 @@ impl Server {
             "index_status" => self.index_status(),
             "create_file" | "create_diagram" | "create_page" => self.create(name, &args),
             "patch_file" => self.patch_file(&args),
+            "set_config_value" => self.set_config_value(&args),
             "undo_write" => self.undo_write(&args),
             "fetch_url" => self.fetch(&args),
             _ => unreachable!("checked above"),
@@ -1421,6 +1422,14 @@ impl Server {
         // write the index does not know about is worse than a write that
         // failed.
         self.remember_write(&written, "patch_file")?;
+        Ok(Self::written_json(&written))
+    }
+
+    /// Set one key in a TOML file, through the parser.
+    fn set_config_value(&self, args: &Value) -> Result<Value> {
+        let ws = self.write_workspace(args)?;
+        let written = marrow_tools::set_value(&ws, &from_args(args)?)?;
+        self.remember_write(&written, "set_config_value")?;
         Ok(Self::written_json(&written))
     }
 

@@ -1,0 +1,57 @@
+# Setting a key through the parser rather than by matching text.
+#
+# The write-path rules are the same ones every other op faces, and they are here
+# because `set_value` resolves a path to *read* before it resolves one to write —
+# the same two-sided containment question `patch` introduced.
+#
+# What is new is the failure this op has and no other does: addressing a key
+# that is not the one the caller meant, and doing it silently because both
+# spellings are valid TOML.
+
+[[case]]
+id      = "set-value-refuses-a-key-that-is-not-there"
+attacks = "ambiguous edit"
+why     = "`server.prot` is a misspelling of `server.port`, and both are legal TOML. Creating it would leave a dead key beside the live one, the file would still parse, the tool would report success, and the setting would simply never take effect. Creating has to be asked for."
+setup   = [{ kind = "file", path = "app.toml", contents = "[server]\nport = 8080\n" }]
+input   = { op = "set_value", path = "app.toml", key = "server.prot", value = "9090", precondition = "current" }
+expect  = { outcome = "refused", code = "FS_NOT_FOUND" }
+
+[[case]]
+id      = "set-value-never-conjures-a-missing-table"
+attacks = "ambiguous edit"
+why     = "Even when creating is asked for. `[sever]` invented because somebody misspelled `[server]` is the same silent no-op one level up, and an explicit `create` is permission to add a key, not to invent the section holding it."
+setup   = [{ kind = "file", path = "app.toml", contents = "[server]\nport = 8080\n" }]
+input   = { op = "set_value", path = "app.toml", key = "sever.port", value = "9090", create = true, precondition = "current" }
+expect  = { outcome = "refused", code = "FS_NOT_FOUND" }
+
+[[case]]
+id      = "set-value-without-a-digest-is-refused"
+attacks = "read-before-edit"
+why     = "Same rule as the anchored patch. A caller with no digest has not read the file, and a structural edit is still an edit to something you are supposed to have read."
+setup   = [{ kind = "file", path = "app.toml", contents = "[a]\nn = 1\n" }]
+input   = { op = "set_value", path = "app.toml", key = "a.n", value = "2", precondition = "new" }
+expect  = { outcome = "refused", code = "CFG_INVALID" }
+
+[[case]]
+id      = "set-value-traversal-on-the-read-side"
+attacks = "path traversal"
+why     = "This op resolves a path to read before it resolves one to write, exactly as `patch` does, so containment has to hold on both sides."
+setup   = [{ kind = "file", path = "app.toml", contents = "[a]\nn = 1\n" }]
+input   = { op = "set_value", path = "../outside/target.toml", key = "a.n", value = "2", precondition = { digest_of = "[a]\nn = 1\n" } }
+expect  = { outcome = "refused", code = "FS_PATH_ESCAPE_BLOCKED" }
+
+[[case]]
+id      = "set-value-into-a-protected-subtree-is-refused"
+attacks = "protected directory"
+why     = "Editing one key of a file inside `.git` is the same violation as writing the whole file there, and looks smaller."
+setup   = [{ kind = "dir", path = ".git" }, { kind = "file", path = ".git/config.toml", contents = "[core]\nbare = false\n" }]
+input   = { op = "set_value", path = ".git/config.toml", key = "core.bare", value = "true", precondition = "current" }
+expect  = { outcome = "refused", code = "POL_DENIED" }
+
+[[case]]
+id      = "a-key-set-through-the-parser-is-still-self-written"
+attacks = "self-poisoning"
+why     = "A config this system edited is its output as much as one it created. If a structural edit escaped the origin rule, an agent could change a value and later cite the file as independent corroboration of it."
+setup   = [{ kind = "file", path = "app.toml", contents = "# keep me\n[server]\nport = 8080\n" }]
+input   = { op = "set_value", path = "app.toml", key = "server.port", value = "9090", precondition = "current" }
+expect  = { outcome = "written", at = "app.toml", contains = "# keep me" }

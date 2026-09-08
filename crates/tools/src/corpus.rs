@@ -155,6 +155,16 @@ pub enum Input {
         #[serde(default)]
         precondition: Precondition,
     },
+    /// A key set through the TOML parser rather than by matching text.
+    SetValue {
+        path: String,
+        key: String,
+        value: String,
+        #[serde(default)]
+        create: bool,
+        #[serde(default)]
+        precondition: Precondition,
+    },
 }
 
 /// What must happen. A refusal names its code; there is no "it errors somehow".
@@ -319,6 +329,22 @@ fn execute(case: &Case, sandbox: &Path) -> std::result::Result<(), String> {
                 expect,
             },
         ),
+        Input::SetValue {
+            path,
+            key,
+            value,
+            create,
+            ..
+        } => crate::structured::set_value(
+            &ws,
+            &crate::structured::SetValue {
+                path: path.clone(),
+                key: key.clone(),
+                value: value.clone(),
+                create: *create,
+                expect,
+            },
+        ),
         Input::CreatePage {
             path, title, body, ..
         } => create::create_page(
@@ -416,7 +442,8 @@ impl Input {
             Input::CreateFile { path, .. }
             | Input::CreateDiagram { path, .. }
             | Input::CreatePage { path, .. }
-            | Input::Patch { path, .. } => path,
+            | Input::Patch { path, .. }
+            | Input::SetValue { path, .. } => path,
         }
     }
 
@@ -425,7 +452,8 @@ impl Input {
             Input::CreateFile { precondition, .. }
             | Input::CreateDiagram { precondition, .. }
             | Input::CreatePage { precondition, .. }
-            | Input::Patch { precondition, .. } => precondition,
+            | Input::Patch { precondition, .. }
+            | Input::SetValue { precondition, .. } => precondition,
         }
     }
 }
@@ -572,7 +600,7 @@ mod tests {
         // that lowers it is deleting a defence someone found the hard way.
         let cases = corpus();
         assert!(
-            cases.len() >= 68,
+            cases.len() >= 74,
             "the corpus has shrunk to {} cases",
             cases.len()
         );

@@ -550,6 +550,54 @@ edit outright.",
         },
     },
     Tool {
+        name: "set_config_value",
+        description: "\
+Set one key in a **TOML** file, through the parser rather than by matching text.
+
+Prefer this over `patch_file` for TOML. It addresses the key by where it is \
+instead of what it looks like, so it cannot land in a comment or in a different \
+key that happens to share the value — and the result cannot be syntactically \
+broken, because it was never text in between.
+
+**Formatting survives.** Comments, key order, blank lines and the spacing \
+around the edited value are all preserved, so this produces a one-line diff.
+
+`value` is TOML, not a string: `8080`, `\"localhost\"`, `true`, `[1, 2]`. Quote \
+it if you mean a string — `port = 8080` and `port = \"8080\"` are different files.
+
+`expect` is required: read the file first and pass its digest.
+
+**A key that is not there is refused** unless you pass `create: true`, and a \
+missing intermediate table is never created at all. A misspelled key would \
+otherwise be added beside the live one, still parse, report success, and never \
+take effect.
+
+JSON is refused here on purpose — there is no format-preserving JSON editor \
+available, so this would restyle the whole file to change one key. Use \
+`patch_file` for JSON; it refuses an edit that would leave the file invalid.
+
+The result is recorded as written by this system and is therefore **excluded \
+from evidence**: `search` finds it, and a later answer cannot cite it as \
+independent corroboration. `undo_write` reverses it.",
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Workspace-relative path to an existing .toml file." },
+                    "key": { "type": "string", "description": "Dotted key path — `server.port`, or `tool.\"my crate\".version` when a segment contains a dot or a space." },
+                    "value": { "type": "string", "description": "The new value written as TOML: `8080`, `\"localhost\"`, `true`, `[1, 2]`." },
+                    "create": { "type": "boolean", "description": "Allow adding a key that is not there. Defaults to false, because a misspelled key would otherwise be created beside the one you meant to change." },
+                    "expect": {
+                        "description": EXPECT_DESCRIPTION,
+                        "oneOf": expect_shape()
+                    },
+                    "workspace": { "type": "string", "description": "Workspace name. Omit when there is only one." }
+                },
+                "required": ["path", "key", "value", "expect"]
+            })
+        },
+    },
+    Tool {
         name: "undo_write",
         description: "\
 Put a file back the way it was before one of your writes.
@@ -792,30 +840,69 @@ mod tests {
             &["path", "find", "replace", "expect", "workspace"],
         ),
         (
+            "set_config_value",
+            &["path", "key", "value", "create", "expect", "workspace"],
+        ),
+        (
             "undo_write",
             &["path", "digest", "snapshot", "created", "workspace"],
         ),
         ("fetch_url", &["url"]),
     ];
 
-    /// The number of tools, pinned — because nothing pinned it and four
-    /// documents drifted.
+    /// The number of tools, pinned — and checked against the documents that
+    /// state it, rather than merely reminding somebody to go and look.
     ///
     /// On 2026-09-03 the README and `docs/README.md` said "ten tools" and four
     /// pages of the site said "eleven", while the code exposed **twelve**. All
     /// three numbers were being read by somebody deciding whether to trust the
-    /// thing. A count with no test is a comment.
+    /// thing, and nothing was checking any of them.
     ///
-    /// When this fails: update it, and update `README.md`, `docs/README.md`,
-    /// `site/index.html`, `site/guides.html`, `site/install.html` and
-    /// `site/guide-mcp.html` in the same commit. That list is the point of the
-    /// test.
+    /// The first version of this test asserted only the count, with the six
+    /// filenames in its failure message. That is a comment with a `#[test]` on
+    /// it: adding `set_config_value` reddened it, and the fix was to change one
+    /// digit and move on — which is exactly what a tired person does, and the
+    /// documents drift again. So it now reads the files.
     #[test]
     fn the_tool_count_is_what_every_document_claims_it_is() {
-        assert_eq!(
-            all().count(),
-            14,
-            "the tool list changed; the six documents named above say a number too"
+        const TOOLS: usize = 15;
+        assert_eq!(all().count(), TOOLS, "the tool list changed");
+
+        // Spelled out, because that is how the prose says it.
+        let word = match TOOLS {
+            13 => "thirteen",
+            14 => "fourteen",
+            15 => "fifteen",
+            16 => "sixteen",
+            17 => "seventeen",
+            n => panic!("add the word for {n} to this list"),
+        };
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut stale = Vec::new();
+        for doc in [
+            "README.md",
+            "docs/README.md",
+            "site/index.html",
+            "site/guides.html",
+            "site/install.html",
+            "site/guide-mcp.html",
+        ] {
+            let path = root.join(doc);
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                // A missing file is not this test's business to invent an
+                // opinion about; the repository has other checks for that.
+                continue;
+            };
+            if text.contains(&format!("{word} tools")) {
+                continue;
+            }
+            stale.push(doc);
+        }
+
+        assert!(
+            stale.is_empty(),
+            "the code exposes {TOOLS} tools but these do not say \"{word} tools\": {stale:?}"
         );
     }
 
